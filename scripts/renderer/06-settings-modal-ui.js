@@ -465,4 +465,7 @@
     if (cardEl) renderTranslatorSettingsContent(cardEl, false);
     const paneEl = document.getElementById('agy-ko-settings-pane');
     if (paneEl && paneEl.style.display !== 'none') renderTranslatorSettingsContent(paneEl, true);
+    if (typeof refreshStatusbarTranslatorAdapter === 'function') {
+      refreshStatusbarTranslatorAdapter();
+    }
   }

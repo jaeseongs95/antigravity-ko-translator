@@ -33,7 +33,8 @@ const RENDERER_MODULE_FILES = [
   '04-translation-adapters.js',
   '05-fiber-pretranslator.js',
   '06-settings-modal-ui.js',
-  '07-dom-observer.js',
+  '07-statusbar-adapter.js',
+  '08-dom-observer.js',
 ];
 
 module.exports = {

@@ -11,7 +11,7 @@ description: Antigravity 2.0의 Thinking(추론 과정) 및 고정 UI 한글 번
 - **번역 제외(원문 유지)**: 하단 상태바(`.agy-ctx-statusbar`), 입력창 모델/권한 선택 컨트롤, 모델 드롭다운 `New` 배지, MCP/플러그인/모델 등 모든 고유명사.
 
 ## 주요 파일 경로
-- **렌더러 모듈 디렉터리**: `~/.gemini/config/plugins/ko-thought-translator/scripts/renderer/` (`01-bootstrap-and-cache.js` ~ `07-dom-observer.js`)
+- **렌더러 모듈 디렉터리**: `~/.gemini/config/plugins/ko-thought-translator/scripts/renderer/` (`01-bootstrap-and-cache.js` ~ `08-dom-observer.js`)
 - **호스트 모듈 디렉터리**: `~/.gemini/config/plugins/ko-thought-translator/scripts/host/` (`paths.js`, `local-llm-service.js`, `settings-storage.js`, `bundle-injector.js`)
 - **조립된 렌더러 번들**: `~/.gemini/config/plugins/ko-thought-translator/scripts/ko_thought_autoinject.js`
 - **패치 및 업데이트 자동 복구 런처**: `~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js`

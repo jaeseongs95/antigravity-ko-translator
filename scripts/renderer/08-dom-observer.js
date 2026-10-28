@@ -1,4 +1,4 @@
-// Module: 07-dom-observer.js
+// Module: 08-dom-observer.js
 // Responsibility: Streaming Thinking block DOM renderer, static UI DOM tree walker, MutationObserver, and cleanup lifecycle.
   function tryTranslateBlockElementSync(origEl) {
     if (origEl.tagName === 'UL' || origEl.tagName === 'OL') {
@@ -487,6 +487,7 @@
 
   function scanAll() {
     ensureStyle();
+    registerStatusbarTranslatorAdapter();
     if (document.body) {
       localizeStaticUiInRoot(document.body);
       ensureNativeSettingsModalIntegration();
@@ -503,6 +504,7 @@
       setTimeout(() => {
         scanTimerScheduled = false;
         if (disposed) return;
+        registerStatusbarTranslatorAdapter();
         if (document.body) {
           localizeStaticUiInRoot(document.body);
           ensureNativeSettingsModalIntegration();
@@ -564,9 +566,8 @@
       attributes: true,
       attributeFilter: ['style'],
     });
-    document.querySelectorAll('.agy-ctx-btn-ko-settings, #agy-ko-translator-modal').forEach((el) => el.remove());
-    delete window.__agyOpenTranslatorSettingsModal;
     loadPersistentTranslatorSettings();
+    registerStatusbarTranslatorAdapter();
     if (activeTranslationProvider === 'local-llm') {
       resolveLocalLlmEndpoint().then(() => refreshTranslatorSettingsUi());
     }
@@ -591,6 +592,7 @@
     if (settingsFeedbackTimer) clearTimeout(settingsFeedbackTimer);
     observer.disconnect();
     delete window.__agyKoLocalizerActive;
+    unregisterStatusbarTranslatorAdapter(fullRestore);
     document.querySelectorAll('.cursor-edit').forEach((el) => {
       if (el.__agyAbortCtrl) {
         try {
@@ -607,7 +609,7 @@
     });
     document
       .querySelectorAll(
-        '#agy-ko-translator-modal, #agy-ko-settings-card, #agy-ko-settings-pane, .agy-ctx-btn-ko-settings, button[data-testid="settings-nav-item-KoTranslator"]'
+        '#agy-ko-settings-card, #agy-ko-settings-pane, button[data-testid="settings-nav-item-KoTranslator"]'
       )
       .forEach((el) => {
         if (el.getAttribute('data-testid') === 'settings-nav-item-KoTranslator' && el.parentElement) {
