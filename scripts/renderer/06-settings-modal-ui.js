@@ -1,5 +1,5 @@
 // Module: 06-settings-modal-ui.js
-// Responsibility: Stylesheet injection and Native Antigravity 2.0 Settings Modal (.settings-modal-container) UI integration.
+// Responsibility: Stylesheet injection, Native Antigravity 2.0 Settings Modal (.settings-modal-container) UI integration, and standalone Quick Translator Settings Modal (#agy-ko-translator-modal).
   const STYLE_ID = 'agy-ko-thought-style';
   const STYLE_CSS = `
     .cursor-edit[data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap) {
@@ -91,6 +91,45 @@
     }
     .agy-ko-switch[aria-checked="true"] .agy-ko-switch-thumb {
       transform: translateX(24px);
+    }
+    #agy-ko-translator-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.62);
+      backdrop-filter: blur(2px);
+      z-index: 99999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .agy-ko-modal-dialog {
+      background: #18181d;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 640px;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.7);
+      overflow: hidden;
+    }
+    .agy-ko-modal-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: #202027;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+      font-size: 13.5px;
+      font-weight: 600;
+    }
+    .agy-ko-modal-body {
+      padding: 16px;
+      overflow-y: auto;
     }
   `;
 
@@ -460,11 +499,79 @@
     }
   }
 
+  let activeModalEscHandler = null;
+
+  function closeTranslatorSettingsModal() {
+    if (activeModalEscHandler) {
+      window.removeEventListener('keydown', activeModalEscHandler);
+      activeModalEscHandler = null;
+    }
+    const existing = document.getElementById('agy-ko-translator-modal');
+    if (existing) existing.remove();
+  }
+
+  function openOrToggleTranslatorSettingsModal() {
+    const existing = document.getElementById('agy-ko-translator-modal');
+    if (existing) {
+      closeTranslatorSettingsModal();
+      return { open: false };
+    }
+    ensureStyle();
+    if (!resolvedLlmEndpoint && activeTranslationProvider === 'local-llm') {
+      resolveLocalLlmEndpoint().then(() => refreshTranslatorSettingsUi());
+    }
+
+    const backdrop = document.createElement('div');
+    backdrop.id = 'agy-ko-translator-modal';
+    backdrop.className = 'agy-ko-settings-root';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'agy-ko-modal-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-label', '한글 번역 계층 설정');
+
+    const hdr = document.createElement('div');
+    hdr.className = 'agy-ko-modal-hdr';
+    const hdrTitle = document.createElement('span');
+    hdrTitle.textContent = `한글 번역 계층 설정 (${KO_LOCALIZER_VERSION})`;
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'agy-ko-action-btn';
+    closeBtn.textContent = '닫기';
+    closeBtn.title = '닫기 (ESC)';
+
+    activeModalEscHandler = (e) => {
+      if (e.key === 'Escape') closeTranslatorSettingsModal();
+    };
+    window.addEventListener('keydown', activeModalEscHandler);
+    closeBtn.onclick = closeTranslatorSettingsModal;
+    backdrop.onclick = (e) => {
+      if (e.target === backdrop) closeTranslatorSettingsModal();
+    };
+
+    hdr.appendChild(hdrTitle);
+    hdr.appendChild(closeBtn);
+
+    const body = document.createElement('div');
+    body.className = 'agy-ko-modal-body';
+    body.id = 'agy-ko-translator-modal-body';
+    renderTranslatorSettingsContent(body, false);
+
+    dialog.appendChild(hdr);
+    dialog.appendChild(body);
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+    return { open: true };
+  }
+  window.__agyOpenTranslatorSettingsModal = openOrToggleTranslatorSettingsModal;
+
   function refreshTranslatorSettingsUi() {
     const cardEl = document.getElementById('agy-ko-settings-card');
     if (cardEl) renderTranslatorSettingsContent(cardEl, false);
     const paneEl = document.getElementById('agy-ko-settings-pane');
     if (paneEl && paneEl.style.display !== 'none') renderTranslatorSettingsContent(paneEl, true);
+    const modalBody = document.getElementById('agy-ko-translator-modal-body');
+    if (modalBody) renderTranslatorSettingsContent(modalBody, false);
     if (typeof refreshStatusbarTranslatorAdapter === 'function') {
       refreshStatusbarTranslatorAdapter();
     }

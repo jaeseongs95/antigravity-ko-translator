@@ -504,7 +504,6 @@
       setTimeout(() => {
         scanTimerScheduled = false;
         if (disposed) return;
-        registerStatusbarTranslatorAdapter();
         if (document.body) {
           localizeStaticUiInRoot(document.body);
           ensureNativeSettingsModalIntegration();

@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v12.6';
+  const KO_LOCALIZER_VERSION = 'v12.7';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -30,17 +30,6 @@
           }
           el.removeAttribute('data-agy-orig-attr');
         } catch (e) {}
-      });
-
-      // Ensure statusbar (`ctx`, `cache`, `left`, `[ compact ]`, `[ context ]`) is 100% original
-      document.querySelectorAll('.agy-ctx-statusbar .agy-ctx-left').forEach((leftEl) => {
-        delete leftEl.__lastHtml;
-      });
-      document.querySelectorAll('.agy-ctx-statusbar .agy-ctx-btn-compact').forEach((btn) => {
-        if (btn.textContent !== '[ compact ]') btn.textContent = '[ compact ]';
-      });
-      document.querySelectorAll('.agy-ctx-statusbar .agy-ctx-btn-context').forEach((btn) => {
-        if (btn.textContent !== '[ context ]') btn.textContent = '[ context ]';
       });
     } catch (e) {}
   }

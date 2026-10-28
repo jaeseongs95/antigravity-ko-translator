@@ -1,7 +1,7 @@
 (() => {
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v12.6';
+  const KO_LOCALIZER_VERSION = 'v12.7';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -31,17 +31,6 @@
           }
           el.removeAttribute('data-agy-orig-attr');
         } catch (e) {}
-      });
-
-      // Ensure statusbar (`ctx`, `cache`, `left`, `[ compact ]`, `[ context ]`) is 100% original
-      document.querySelectorAll('.agy-ctx-statusbar .agy-ctx-left').forEach((leftEl) => {
-        delete leftEl.__lastHtml;
-      });
-      document.querySelectorAll('.agy-ctx-statusbar .agy-ctx-btn-compact').forEach((btn) => {
-        if (btn.textContent !== '[ compact ]') btn.textContent = '[ compact ]';
-      });
-      document.querySelectorAll('.agy-ctx-statusbar .agy-ctx-btn-context').forEach((btn) => {
-        if (btn.textContent !== '[ context ]') btn.textContent = '[ context ]';
       });
     } catch (e) {}
   }
@@ -2089,7 +2078,7 @@
   };
 
 // Module: 06-settings-modal-ui.js
-// Responsibility: Stylesheet injection and Native Antigravity 2.0 Settings Modal (.settings-modal-container) UI integration.
+// Responsibility: Stylesheet injection, Native Antigravity 2.0 Settings Modal (.settings-modal-container) UI integration, and standalone Quick Translator Settings Modal (#agy-ko-translator-modal).
   const STYLE_ID = 'agy-ko-thought-style';
   const STYLE_CSS = `
     .cursor-edit[data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap) {
@@ -2181,6 +2170,45 @@
     }
     .agy-ko-switch[aria-checked="true"] .agy-ko-switch-thumb {
       transform: translateX(24px);
+    }
+    #agy-ko-translator-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.62);
+      backdrop-filter: blur(2px);
+      z-index: 99999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .agy-ko-modal-dialog {
+      background: #18181d;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 12px;
+      width: 100%;
+      max-width: 640px;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.7);
+      overflow: hidden;
+    }
+    .agy-ko-modal-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: #202027;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+      font-size: 13.5px;
+      font-weight: 600;
+    }
+    .agy-ko-modal-body {
+      padding: 16px;
+      overflow-y: auto;
     }
   `;
 
@@ -2550,106 +2578,24 @@
     }
   }
 
-  function refreshTranslatorSettingsUi() {
-    const cardEl = document.getElementById('agy-ko-settings-card');
-    if (cardEl) renderTranslatorSettingsContent(cardEl, false);
-    const paneEl = document.getElementById('agy-ko-settings-pane');
-    if (paneEl && paneEl.style.display !== 'none') renderTranslatorSettingsContent(paneEl, true);
-    if (typeof refreshStatusbarTranslatorAdapter === 'function') {
-      refreshStatusbarTranslatorAdapter();
-    }
-  }
+  let activeModalEscHandler = null;
 
-// Module: 07-statusbar-adapter.js
-// Responsibility: Pluggable StatusBarAdapter integration with antigravity-statusbar (window.agyStatusBar.registerAdapter) and standalone quick settings modal (#agy-ko-translator-modal) without intruding into statusbar core DOM or layout regions.
-  const STATUSBAR_ADAPTER_ID = 'ko-translator';
-  const STATUSBAR_MODAL_STYLE_ID = 'agy-ko-statusbar-adapter-style';
-  const STATUSBAR_MODAL_CSS = `
-    .agy-ctx-statusbar [data-agy-adapter-id="ko-translator"] {
-      white-space: nowrap;
-      flex-shrink: 0;
+  function closeTranslatorSettingsModal() {
+    if (activeModalEscHandler) {
+      window.removeEventListener('keydown', activeModalEscHandler);
+      activeModalEscHandler = null;
     }
-    .agy-ctx-btn-ko-settings:hover {
-      color: #58d68d !important;
-      border-color: rgba(88, 214, 141, 0.45) !important;
-      background: rgba(88, 214, 141, 0.14) !important;
-    }
-    #agy-ko-translator-modal {
-      position: fixed;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.62);
-      backdrop-filter: blur(2px);
-      z-index: 99999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      color: #e2e8f0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-    .agy-ko-modal-dialog {
-      background: #18181d;
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      border-radius: 12px;
-      width: 100%;
-      max-width: 640px;
-      max-height: 85vh;
-      display: flex;
-      flex-direction: column;
-      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.7);
-      overflow: hidden;
-    }
-    .agy-ko-modal-hdr {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 16px;
-      background: #202027;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.18);
-      font-size: 13.5px;
-      font-weight: 600;
-    }
-    .agy-ko-modal-body {
-      padding: 16px;
-      overflow-y: auto;
-    }
-  `;
-
-  function ensureStatusbarAdapterStyle() {
-    let st = document.getElementById(STATUSBAR_MODAL_STYLE_ID);
-    if (!st) {
-      st = document.createElement('style');
-      st.id = STATUSBAR_MODAL_STYLE_ID;
-      st.textContent = STATUSBAR_MODAL_CSS;
-      (document.head || document.documentElement).appendChild(st);
-    } else if (st.textContent !== STATUSBAR_MODAL_CSS) {
-      st.textContent = STATUSBAR_MODAL_CSS;
-    }
-  }
-
-  function getStatusbarCompactProviderTag(id) {
-    if (id === 'local-llm') return 'LLM';
-    if (id === 'google-translate') return '구글';
-    return getProviderDisplayMeta(id).shortLabel;
-  }
-
-  function formatStatusbarAdapterLabel() {
-    return `[ 번역:${getStatusbarCompactProviderTag(activeTranslationProvider)} ]`;
-  }
-
-  function formatStatusbarAdapterTitle() {
-    const meta = getProviderDisplayMeta(activeTranslationProvider);
-    return `한글 번역 설정 (${KO_LOCALIZER_VERSION}) — 활성: ${meta.title}\n클릭: 한글 번역 계층 설정창 열기/닫기\nShift+클릭: 로컬 LLM ↔ Google 번역 빠른 전환`;
+    const existing = document.getElementById('agy-ko-translator-modal');
+    if (existing) existing.remove();
   }
 
   function openOrToggleTranslatorSettingsModal() {
     const existing = document.getElementById('agy-ko-translator-modal');
     if (existing) {
-      existing.remove();
+      closeTranslatorSettingsModal();
       return { open: false };
     }
     ensureStyle();
-    ensureStatusbarAdapterStyle();
     if (!resolvedLlmEndpoint && activeTranslationProvider === 'local-llm') {
       resolveLocalLlmEndpoint().then(() => refreshTranslatorSettingsUi());
     }
@@ -2669,21 +2615,17 @@
     hdrTitle.textContent = `한글 번역 계층 설정 (${KO_LOCALIZER_VERSION})`;
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
-    closeBtn.className = 'agy-ctx-btn';
-    closeBtn.textContent = '[ × ]';
+    closeBtn.className = 'agy-ko-action-btn';
+    closeBtn.textContent = '닫기';
     closeBtn.title = '닫기 (ESC)';
 
-    const closeModal = () => {
-      backdrop.remove();
-      window.removeEventListener('keydown', onKeyDown);
+    activeModalEscHandler = (e) => {
+      if (e.key === 'Escape') closeTranslatorSettingsModal();
     };
-    const onKeyDown = (e) => {
-      if (e.key === 'Escape') closeModal();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    closeBtn.onclick = closeModal;
+    window.addEventListener('keydown', activeModalEscHandler);
+    closeBtn.onclick = closeTranslatorSettingsModal;
     backdrop.onclick = (e) => {
-      if (e.target === backdrop) closeModal();
+      if (e.target === backdrop) closeTranslatorSettingsModal();
     };
 
     hdr.appendChild(hdrTitle);
@@ -2702,6 +2644,37 @@
   }
   window.__agyOpenTranslatorSettingsModal = openOrToggleTranslatorSettingsModal;
 
+  function refreshTranslatorSettingsUi() {
+    const cardEl = document.getElementById('agy-ko-settings-card');
+    if (cardEl) renderTranslatorSettingsContent(cardEl, false);
+    const paneEl = document.getElementById('agy-ko-settings-pane');
+    if (paneEl && paneEl.style.display !== 'none') renderTranslatorSettingsContent(paneEl, true);
+    const modalBody = document.getElementById('agy-ko-translator-modal-body');
+    if (modalBody) renderTranslatorSettingsContent(modalBody, false);
+    if (typeof refreshStatusbarTranslatorAdapter === 'function') {
+      refreshStatusbarTranslatorAdapter();
+    }
+  }
+
+// Module: 07-statusbar-adapter.js
+// Responsibility: Pure StatusBarAdapter bridge (`window.agyStatusBar.registerAdapter` / `unregisterAdapter` / `updateAll`) with zero direct DOM or CSS manipulation of statusbar regions.
+  const STATUSBAR_ADAPTER_ID = 'ko-translator';
+
+  function getStatusbarCompactProviderTag(id) {
+    if (id === 'local-llm') return 'LLM';
+    if (id === 'google-translate') return '구글';
+    return getProviderDisplayMeta(id).shortLabel;
+  }
+
+  function formatStatusbarAdapterLabel() {
+    return `[ 번역:${getStatusbarCompactProviderTag(activeTranslationProvider)} ]`;
+  }
+
+  function formatStatusbarAdapterTitle() {
+    const meta = getProviderDisplayMeta(activeTranslationProvider);
+    return `한글 번역 설정 (${KO_LOCALIZER_VERSION}) — 활성: ${meta.title}\n클릭: 한글 번역 계층 설정창 열기/닫기\nShift+클릭: 로컬 LLM ↔ Google 번역 빠른 전환`;
+  }
+
   let disposeStatusbarAdapter = null;
   let boundStatusBarRef = null;
 
@@ -2710,7 +2683,7 @@
       id: STATUSBAR_ADAPTER_ID,
       slot: 'right',
       order: 30,
-      className: 'agy-ctx-btn agy-ctx-btn-ko-settings',
+      className: 'agy-ctx-btn',
       label: () => formatStatusbarAdapterLabel(),
       title: () => formatStatusbarAdapterTitle(),
       onClick(_ctx, event) {
@@ -2722,15 +2695,13 @@
         }
       },
       unmount() {
-        const modal = document.getElementById('agy-ko-translator-modal');
-        if (modal) modal.remove();
+        closeTranslatorSettingsModal();
       },
     };
   }
 
   function registerStatusbarTranslatorAdapter() {
     if (disposed) return false;
-    ensureStatusbarAdapterStyle();
     const adapterSpec = createKoTranslatorStatusbarAdapter();
 
     if (!window.__agyCustomStatusBarAdapters || !(window.__agyCustomStatusBarAdapters instanceof Map)) {
@@ -2758,24 +2729,12 @@
   function refreshStatusbarTranslatorAdapter() {
     if (disposed) return;
     registerStatusbarTranslatorAdapter();
-    const nextLabel = formatStatusbarAdapterLabel();
-    const nextTitle = formatStatusbarAdapterTitle();
-    document
-      .querySelectorAll(`.agy-ctx-statusbar [data-agy-adapter-id="${STATUSBAR_ADAPTER_ID}"]`)
-      .forEach((btn) => {
-        if (btn.textContent !== nextLabel) btn.textContent = nextLabel;
-        if (btn.getAttribute('title') !== nextTitle) {
-          btn.setAttribute('title', nextTitle);
-          btn.title = nextTitle;
-        }
-      });
-    const modalBody = document.getElementById('agy-ko-translator-modal-body');
-    if (modalBody) {
-      renderTranslatorSettingsContent(modalBody, false);
+    if (window.agyStatusBar && typeof window.agyStatusBar.updateAll === 'function') {
+      window.agyStatusBar.updateAll();
     }
   }
 
-  function unregisterStatusbarTranslatorAdapter(fullRestore = false) {
+  function unregisterStatusbarTranslatorAdapter() {
     try {
       if (typeof disposeStatusbarAdapter === 'function') {
         disposeStatusbarAdapter();
@@ -2790,13 +2749,8 @@
         window.__agyCustomStatusBarAdapters.delete(STATUSBAR_ADAPTER_ID);
       }
     } catch (e) {}
-    const modal = document.getElementById('agy-ko-translator-modal');
-    if (modal) modal.remove();
+    closeTranslatorSettingsModal();
     delete window.__agyOpenTranslatorSettingsModal;
-    if (fullRestore) {
-      const st = document.getElementById(STATUSBAR_MODAL_STYLE_ID);
-      if (st) st.remove();
-    }
   }
 
 // Module: 08-dom-observer.js
@@ -3305,7 +3259,6 @@
       setTimeout(() => {
         scanTimerScheduled = false;
         if (disposed) return;
-        registerStatusbarTranslatorAdapter();
         if (document.body) {
           localizeStaticUiInRoot(document.body);
           ensureNativeSettingsModalIntegration();
