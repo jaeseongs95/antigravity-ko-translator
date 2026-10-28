@@ -295,8 +295,8 @@ function runStorageWatcherLoop() {
         const prevProvider = lastProvider;
         lastProvider = curProvider;
         lastPretranslate = curPre;
-        getOrSetTranslatorOptions(curPre, curProvider);
-        syncCombinedAutoinject();
+        const opts = getOrSetTranslatorOptions(curPre, curProvider);
+        syncCombinedAutoinject(opts.pretranslateEnabled, opts.translationProvider);
         if (curProvider !== prevProvider) {
           if (curProvider === 'local-llm') {
             await ensureLocalLlmServer();
@@ -429,32 +429,25 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
     }
   } catch {}
 
-  if (fs.existsSync(KO_SCRIPT_PATH)) {
-    try {
-      const rawKo = fs.readFileSync(KO_SCRIPT_PATH, 'utf8');
-      const nextKo = rawKo
-        .replace(
-          /const DEFAULT_PRETRANSLATE_ENABLED = (?:true|false);/,
-          `const DEFAULT_PRETRANSLATE_ENABLED = ${enabled ? 'true' : 'false'};`
-        )
-        .replace(
-          /const DEFAULT_TRANSLATION_PROVIDER = '[^']+';/,
-          `const DEFAULT_TRANSLATION_PROVIDER = '${provider}';`
-        );
-      if (nextKo !== rawKo) {
-        fs.writeFileSync(KO_SCRIPT_PATH, nextKo, 'utf8');
-      }
-    } catch {}
-  }
   return { pretranslateEnabled: enabled, translationProvider: provider };
 }
 
-function syncCombinedAutoinject() {
+function syncCombinedAutoinject(pretranslateEnabled = false, translationProvider = 'local-llm') {
   if (!fs.existsSync(STATUSBAR_AUTOINJECT_PATH) || !fs.existsSync(KO_SCRIPT_PATH)) {
     return false;
   }
   const rawStatusbar = fs.readFileSync(STATUSBAR_AUTOINJECT_PATH, 'utf8');
-  const koCode = fs.readFileSync(KO_SCRIPT_PATH, 'utf8').trim();
+  const koCode = fs
+    .readFileSync(KO_SCRIPT_PATH, 'utf8')
+    .trim()
+    .replace(
+      /const DEFAULT_PRETRANSLATE_ENABLED = (?:true|false);/,
+      `const DEFAULT_PRETRANSLATE_ENABLED = ${pretranslateEnabled ? 'true' : 'false'};`
+    )
+    .replace(
+      /const DEFAULT_TRANSLATION_PROVIDER = '[^']+';/,
+      `const DEFAULT_TRANSLATION_PROVIDER = '${translationProvider || 'local-llm'}';`
+    );
 
   // Strip any previous embedded block
   let baseCode = rawStatusbar;
@@ -506,7 +499,7 @@ async function main() {
     stopLocalLlmServer();
   }
 
-  const changed = syncCombinedAutoinject();
+  const changed = syncCombinedAutoinject(pretranslateEnabled, translationProvider);
 
   if (fs.existsSync(ENSURE_STATUSBAR_PATCH_PATH)) {
     if (args.includes('--status')) {
