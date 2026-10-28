@@ -1,0 +1,142 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const ROOT = path.resolve(__dirname, '..');
+const RENDERER_DIR = path.join(ROOT, 'scripts', 'renderer');
+const HOST_DIR = path.join(ROOT, 'scripts', 'host');
+const BUNDLE_INJECTOR_PATH = path.join(HOST_DIR, 'bundle-injector.js');
+
+test('modular SOLID structure and bundle assembly verification', () => {
+  const { RENDERER_MODULE_FILES } = require(path.join(HOST_DIR, 'paths.js'));
+  const { assembleRendererSourceFromModules } = require(BUNDLE_INJECTOR_PATH);
+  assert.equal(RENDERER_MODULE_FILES.length, 8);
+  for (const file of RENDERER_MODULE_FILES) {
+    const fullPath = path.join(RENDERER_DIR, file);
+    assert.ok(fs.existsSync(fullPath), `Missing renderer module: ${file}`);
+  }
+
+  for (const hostFile of ['paths.js', 'local-llm-service.js', 'settings-storage.js', 'bundle-injector.js']) {
+    const fullPath = path.join(HOST_DIR, hostFile);
+    assert.ok(fs.existsSync(fullPath), `Missing host module: ${hostFile}`);
+    require(fullPath);
+  }
+
+  const bundleCode = assembleRendererSourceFromModules();
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v12.7';"));
+  assert.doesNotThrow(() => new vm.Script(bundleCode));
+});
+
+test('non-intrusion & SRP boundary enforcement across renderer modules (01, 06, 07, 08)', () => {
+  const mod01 = fs.readFileSync(path.join(RENDERER_DIR, '01-bootstrap-and-cache.js'), 'utf8');
+  const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
+  const mod07 = fs.readFileSync(path.join(RENDERER_DIR, '07-statusbar-adapter.js'), 'utf8');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+
+  // 1. 01-bootstrap-and-cache.js must not touch .agy-ctx-statusbar or builtin statusbar buttons
+  assert.ok(!mod01.includes('.agy-ctx-statusbar'), '01-bootstrap-and-cache.js must not query .agy-ctx-statusbar');
+  assert.ok(!mod01.includes('.agy-ctx-btn'), '01-bootstrap-and-cache.js must not touch .agy-ctx-btn');
+
+  // 2. 06-settings-modal-ui.js owns #agy-ko-translator-modal and must not borrow statusbar .agy-ctx-btn or .agy-ctx-statusbar
+  assert.ok(mod06.includes('function openOrToggleTranslatorSettingsModal()'), '06-settings-modal-ui.js must own modal open/toggle');
+  assert.ok(mod06.includes('function closeTranslatorSettingsModal()'), '06-settings-modal-ui.js must own modal close');
+  assert.ok(!mod06.includes('.agy-ctx-statusbar'), '06-settings-modal-ui.js must not intrude on .agy-ctx-statusbar');
+  assert.ok(!mod06.includes('agy-ctx-btn'), '06-settings-modal-ui.js must not borrow statusbar button classes');
+
+  // 3. 07-statusbar-adapter.js must be a pure StatusBarAdapter bridge with zero DOM/CSS manipulation
+  assert.ok(!mod07.includes('.agy-ctx-statusbar'), '07-statusbar-adapter.js must not query .agy-ctx-statusbar');
+  assert.ok(!mod07.includes('document.'), '07-statusbar-adapter.js must not perform direct DOM manipulation');
+  assert.ok(!mod07.includes('agy-ctx-btn'), '07-statusbar-adapter.js must not hardcode statusbar internal class names');
+  assert.ok(mod07.includes("className: 'agy-ko-translator-status-btn'"), '07-statusbar-adapter.js must use its own button class token');
+
+  // 4. 08-dom-observer.js must not call registerStatusbarTranslatorAdapter inside the 16ms scheduleCoalescedScan loop
+  const coalescedMatch = mod08.match(/function scheduleCoalescedScan\(\)\s*\{[\s\S]*?\n  \}/);
+  assert.ok(coalescedMatch, 'scheduleCoalescedScan must exist in 08-dom-observer.js');
+  assert.ok(
+    !coalescedMatch[0].includes('registerStatusbarTranslatorAdapter'),
+    'scheduleCoalescedScan must not repeatedly call registerStatusbarTranslatorAdapter'
+  );
+});
+
+test('07-statusbar-adapter pure lifecycle and contract integration', () => {
+  const mod07 = fs.readFileSync(path.join(RENDERER_DIR, '07-statusbar-adapter.js'), 'utf8');
+
+  const registered = new Map();
+  let updateAllCount = 0;
+  let modalOpenCount = 0;
+  let modalCloseCount = 0;
+  let switchedProvider = null;
+
+  const sandbox = {
+    KO_LOCALIZER_VERSION: 'v12.7',
+    activeTranslationProvider: 'local-llm',
+    disposed: false,
+    getProviderDisplayMeta(id) {
+      return id === 'local-llm'
+        ? { shortLabel: '로컬 LLM', title: '로컬 LLM (Qwen2.5-3B GPU)' }
+        : { shortLabel: 'Google 번역', title: 'Google 번역 (웹 API)' };
+    },
+    openOrToggleTranslatorSettingsModal() {
+      modalOpenCount++;
+    },
+    closeTranslatorSettingsModal() {
+      modalCloseCount++;
+    },
+    window: {
+      __agySetTranslationProvider(next) {
+        switchedProvider = next;
+        sandbox.activeTranslationProvider = next;
+      },
+      agyStatusBar: {
+        registerAdapter(spec) {
+          registered.set(spec.id, spec);
+          return () => registered.delete(spec.id);
+        },
+        unregisterAdapter(id) {
+          return registered.delete(id);
+        },
+        updateAll() {
+          updateAllCount++;
+        },
+      },
+    },
+  };
+
+  vm.runInNewContext(
+    `${mod07}\n;globalThis.__testApi = { registerStatusbarTranslatorAdapter, refreshStatusbarTranslatorAdapter, unregisterStatusbarTranslatorAdapter };`,
+    sandbox
+  );
+
+  const api = sandbox.__testApi;
+  assert.equal(api.registerStatusbarTranslatorAdapter(), true);
+  assert.equal(registered.has('ko-translator'), true);
+
+  const spec = registered.get('ko-translator');
+  assert.equal(spec.slot, 'right');
+  assert.equal(spec.order, 30);
+  assert.equal(spec.className, 'agy-ko-translator-status-btn');
+  assert.equal(spec.label(), '[ 번역:LLM ]');
+  assert.ok(spec.title().includes('v12.7'));
+
+  // Click opens/toggles modal via 06-settings-modal-ui.js delegate
+  spec.onClick({}, { shiftKey: false });
+  assert.equal(modalOpenCount, 1);
+
+  // Shift+Click toggles translation provider
+  spec.onClick({}, { shiftKey: true });
+  assert.equal(switchedProvider, 'google-translate');
+  assert.equal(spec.label(), '[ 번역:구글 ]');
+
+  // Refresh delegates to window.agyStatusBar.updateAll()
+  api.refreshStatusbarTranslatorAdapter();
+  assert.equal(updateAllCount, 1);
+
+  // Unregister cleans up adapter and closes modal
+  api.unregisterStatusbarTranslatorAdapter();
+  assert.equal(registered.has('ko-translator'), false);
+  assert.equal(modalCloseCount, 1);
+});

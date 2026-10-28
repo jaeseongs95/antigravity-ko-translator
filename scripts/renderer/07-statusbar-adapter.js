@@ -25,7 +25,7 @@
       id: STATUSBAR_ADAPTER_ID,
       slot: 'right',
       order: 30,
-      className: 'agy-ctx-btn',
+      className: 'agy-ko-translator-status-btn',
       label: () => formatStatusbarAdapterLabel(),
       title: () => formatStatusbarAdapterTitle(),
       onClick(_ctx, event) {
@@ -44,26 +44,18 @@
 
   function registerStatusbarTranslatorAdapter() {
     if (disposed) return false;
-    const adapterSpec = createKoTranslatorStatusbarAdapter();
-
-    if (!window.__agyCustomStatusBarAdapters || !(window.__agyCustomStatusBarAdapters instanceof Map)) {
-      window.__agyCustomStatusBarAdapters = new Map();
-    }
-    if (!window.__agyCustomStatusBarAdapters.has(STATUSBAR_ADAPTER_ID)) {
-      window.__agyCustomStatusBarAdapters.set(STATUSBAR_ADAPTER_ID, adapterSpec);
-    }
-
     const sb = window.agyStatusBar;
     if (sb && typeof sb.registerAdapter === 'function') {
-      const hasAdapter =
-        typeof sb.getAdapters === 'function' &&
-        Array.isArray(sb.getAdapters()) &&
-        sb.getAdapters().some((a) => a && a.id === STATUSBAR_ADAPTER_ID);
-      if (boundStatusBarRef !== sb || !hasAdapter) {
-        boundStatusBarRef = sb;
-        disposeStatusbarAdapter = sb.registerAdapter(adapterSpec);
+      if (boundStatusBarRef === sb && typeof disposeStatusbarAdapter === 'function') {
+        return true;
       }
+      boundStatusBarRef = sb;
+      disposeStatusbarAdapter = sb.registerAdapter(createKoTranslatorStatusbarAdapter());
       return true;
+    }
+
+    if (window.__agyCustomStatusBarAdapters instanceof Map && !window.__agyCustomStatusBarAdapters.has(STATUSBAR_ADAPTER_ID)) {
+      window.__agyCustomStatusBarAdapters.set(STATUSBAR_ADAPTER_ID, createKoTranslatorStatusbarAdapter());
     }
     return false;
   }
@@ -86,11 +78,6 @@
     } catch (e) {}
     disposeStatusbarAdapter = null;
     boundStatusBarRef = null;
-    try {
-      if (window.__agyCustomStatusBarAdapters instanceof Map) {
-        window.__agyCustomStatusBarAdapters.delete(STATUSBAR_ADAPTER_ID);
-      }
-    } catch (e) {}
     closeTranslatorSettingsModal();
     delete window.__agyOpenTranslatorSettingsModal;
   }

@@ -1,0 +1,10 @@
+{
+  "name": "antigravity-ko-translator",
+  "version": "1.2.0",
+  "description": "Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI with modular SOLID architecture and pure StatusBarAdapter integration.",
+  "private": true,
+  "scripts": {
+    "test": "node --test test/ko-translator.test.js"
+  },
+  "license": "MIT"
+}
