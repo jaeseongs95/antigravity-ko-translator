@@ -54,3 +54,7 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --pretranslate off
 node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --pretranslate on
 ```
+
+## 라이선스 (License)
+
+이 프로젝트는 [MIT License](./LICENSE)를 따릅니다.
