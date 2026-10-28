@@ -20,6 +20,23 @@ Antigravity 2.0 네이티브 앱에서 영어로 스트리밍되는 **Thinking(�
 4. **앱 업데이트 시 자동 복구 및 영구 유지**
    - `SessionStart`, `PreInvocation`, `PostInvocation` 훅과 스토리지 감시자를 통해 Antigravity 앱이 업데이트되더라도 자동으로 패치와 설정을 복구·유지합니다.
 
+## 모듈 구조 (SOLID Architecture)
+
+- **렌더러 계층 (`scripts/renderer/`)**:
+  - `01-bootstrap-and-cache.js`: 버전 가드, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
+  - `02-static-ui-dict.js`: 0ms 정적 UI 한국어 사전(`STATIC_UI_MAP`) 및 동기 패턴 매처
+  - `03-text-tokenizer.js`: 코드(`⟦C0⟧`)·식별자/인용구(`⟦T0⟧`) 보호 토크나이저, 조사 교정, 마크다운 세그먼트 추출
+  - `04-translation-adapters.js`: Port & Adapter 번역 엔진(`local-llm`, `google-translate`, 커스텀 어댑터) 및 동시성/취소 큐
+  - `05-fiber-pretranslator.js`: 영구 설정 로드 및 React Fiber 백그라운드 사전 번역기
+  - `06-settings-modal-ui.js`: 스타일시트 및 Antigravity 2.0 네이티브 설정 모달(`.settings-modal-container`) UI 통합
+  - `07-dom-observer.js`: 스트리밍 Thinking 블록 렌더러, 정적 UI TreeWalker, `MutationObserver` 및 생명주기 정리
+- **호스트 계층 (`scripts/host/` & `scripts/ensure_ko_thought_patch.js`)**:
+  - `paths.js`: 호스트 경로 및 환경 상수
+  - `local-llm-service.js`: 로컬 LLM 서버 기동·헬스체크·종료(프로세스 트리 정리) 어댑터
+  - `settings-storage.js`: `config.json` 및 `app_storage.json` 동기화와 백그라운드 스토리지 감시 데몬
+  - `bundle-injector.js`: `scripts/renderer/*.js` 모듈 조립 및 `statusbar_autoinject.js` 번들 동기화
+  - `ensure_ko_thought_patch.js`: CLI / Hook 오케스트레이터 진입점
+
 ## CLI 제어 명령
 
 ```powershell
