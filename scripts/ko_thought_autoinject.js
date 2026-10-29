@@ -1,7 +1,7 @@
 (() => {
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v12.7';
+  const KO_LOCALIZER_VERSION = 'v12.8';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -129,7 +129,30 @@
     } catch (e) {}
   }
 
+  function ensureConversationHistoryMenuEnabled() {
+    try {
+      const key = 'jetski.developer.customFlagOverrides';
+      const raw = localStorage.getItem(key);
+      const flags = raw ? JSON.parse(raw) : {};
+      if (flags['remove-conversation-history'] !== false) {
+        flags['remove-conversation-history'] = false;
+        const nextVal = JSON.stringify(flags);
+        localStorage.setItem(key, nextVal);
+        if (typeof StorageEvent === 'function') {
+          window.dispatchEvent(
+            new StorageEvent('storage', {
+              key,
+              newValue: nextVal,
+              storageArea: window.localStorage,
+            })
+          );
+        }
+      }
+    } catch (e) {}
+  }
+
   function prepareBootstrapLifecycle() {
+    ensureConversationHistoryMenuEnabled();
     if (
       window.__agyKoLocalizerActive === KO_LOCALIZER_VERSION &&
       window.__agyKoThoughtCleanup &&

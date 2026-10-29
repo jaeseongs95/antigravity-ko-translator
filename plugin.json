@@ -2,7 +2,7 @@
   "name": "ko-thought-translator",
   "displayName": "Antigravity 2.0 한국어 번역기 (Thinking & 전체 UI)",
   "description": "Antigravity 2.0 네이티브 앱의 Thinking(추론 과정)과 모든 영문 UI 요소를 한국어로 자동 표시하며, 어댑터 기반 번역 계층(Local LLM / Google Translate), 커스텀 상태바 StatusBarAdapter 연동, 네이티브 설정창 통합 및 앱 업데이트 자동 복구를 지원합니다.",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "suggestedPrompts": [
     "한글 번역 플러그인 패치 상태를 확인해줘",
     "번역 어댑터를 Google 번역으로 전환해줘",

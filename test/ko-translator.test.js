@@ -27,7 +27,8 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v12.7';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v12.8';"));
+  assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
 
