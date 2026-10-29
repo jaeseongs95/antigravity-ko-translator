@@ -134,9 +134,15 @@ async function ensureLocalLlmServer(pluginEnabled = true) {
   return probe;
 }
 
-function stopLocalLlmServer() {
+async function stopLocalLlmServer(forceProcessScan = false) {
   let stoppedCount = 0;
   try {
+    if (!forceProcessScan) {
+      const probe = await probeLocalLlmServer(150);
+      if (!probe.reachable) {
+        return { stoppedCount: 0 };
+      }
+    }
     const url = new URL('/v1/models', LLM_BASE_URL);
     const port = Number(url.port) || 11434;
     if (process.platform === 'win32') {

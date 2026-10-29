@@ -140,3 +140,27 @@ test('07-statusbar-adapter pure lifecycle and contract integration', () => {
   assert.equal(registered.has('ko-translator'), false);
   assert.equal(modalCloseCount, 1);
 });
+
+test('host lifecycle, hooks.json CLI contract, and app-update auto-recovery guarantees', () => {
+  const hooksJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks.json'), 'utf8'));
+  const lifecycle = hooksJson['ko-thought-translator-lifecycle'];
+  assert.ok(lifecycle && lifecycle.enabled === true);
+
+  for (const eventName of ['SessionStart', 'PreInvocation', 'PostInvocation']) {
+    assert.ok(Array.isArray(lifecycle[eventName]) && lifecycle[eventName].length > 0, `Missing ${eventName} hook`);
+    const cmd = lifecycle[eventName][0].command;
+    assert.equal(cmd, 'node ./scripts/ensure_ko_thought_patch.js --hook');
+    assert.ok(!cmd.includes('node -e'), `${eventName} must not use fragile node -e wrapper`);
+  }
+
+  const entrySource = fs.readFileSync(path.join(ROOT, 'scripts', 'ensure_ko_thought_patch.js'), 'utf8');
+  assert.ok(entrySource.includes('runStatusbarPatchWorker()'), 'Entry script must use synchronous runStatusbarPatchWorker()');
+  assert.ok(!entrySource.includes("[ENSURE_STATUSBAR_PATCH_PATH, '--hook']"), 'Entry script must not spawn detached --hook child');
+  assert.ok(entrySource.includes('onAppRecoveryNeeded'), 'Entry script must wire onAppRecoveryNeeded for app updates');
+
+  const storageMod = require(path.join(HOST_DIR, 'settings-storage.js'));
+  assert.equal(typeof storageMod.isAsarCurrentlyPatched, 'function');
+  const storageSource = fs.readFileSync(path.join(HOST_DIR, 'settings-storage.js'), 'utf8');
+  assert.ok(storageSource.includes('Win32_Process'), 'Watcher spawn must escape Windows Job Object via Win32_Process');
+  assert.ok(storageSource.includes('asar_unpatched'), 'Watcher loop must detect unpatched app.asar after app update');
+});

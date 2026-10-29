@@ -5,12 +5,12 @@
  * Delegates responsibilities to single-purpose host modules (`scripts/host/`):
  * - `paths.js`: Environment & path constants
  * - `local-llm-service.js`: Local LLM server startup/health-probe/shutdown
- * - `settings-storage.js`: Translator option persistence & storage watcher daemon
+ * - `settings-storage.js`: Translator option persistence, storage watcher daemon & app-update recovery
  * - `bundle-injector.js`: Modular renderer source assembly (`scripts/renderer/*.js`) & statusbar bundle sync
  */
 
 const fs = require('fs');
-const { spawnSync, spawn } = require('child_process');
+const { spawnSync } = require('child_process');
 const { ENSURE_STATUSBAR_PATCH_PATH } = require('./host/paths');
 const { ensureLocalLlmServer, stopLocalLlmServer } = require('./host/local-llm-service');
 const {
@@ -23,12 +23,23 @@ const {
 } = require('./host/settings-storage');
 const { syncCombinedAutoinject } = require('./host/bundle-injector');
 
-async function applyProviderRuntimePolicy(translationProvider) {
+async function applyProviderRuntimePolicy(translationProvider, forceStopScan = false) {
   if (translationProvider === 'local-llm') {
     await ensureLocalLlmServer(isPluginEnabled());
   } else {
-    stopLocalLlmServer();
+    await stopLocalLlmServer(forceStopScan);
   }
+}
+
+function runStatusbarPatchWorker() {
+  if (!fs.existsSync(ENSURE_STATUSBAR_PATCH_PATH)) {
+    return false;
+  }
+  spawnSync(process.execPath, [ENSURE_STATUSBAR_PATCH_PATH, '--worker'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  return true;
 }
 
 async function main() {
@@ -38,9 +49,15 @@ async function main() {
       entryScriptPath: __filename,
       onSettingsChanged: async ({ pretranslateEnabled, translationProvider, prevProvider }) => {
         syncCombinedAutoinject(pretranslateEnabled, translationProvider);
+        runStatusbarPatchWorker();
         if (translationProvider !== prevProvider) {
-          await applyProviderRuntimePolicy(translationProvider);
+          await applyProviderRuntimePolicy(translationProvider, true);
         }
+      },
+      onAppRecoveryNeeded: async () => {
+        const { pretranslateEnabled, translationProvider } = getOrSetTranslatorOptions(null, null);
+        syncCombinedAutoinject(pretranslateEnabled, translationProvider);
+        runStatusbarPatchWorker();
       },
     });
     return;
@@ -59,9 +76,9 @@ async function main() {
   const cliProvider = parseProviderCliArg(args);
   const { pretranslateEnabled, translationProvider } = getOrSetTranslatorOptions(cliPretranslate, cliProvider);
 
-  await applyProviderRuntimePolicy(translationProvider);
+  await applyProviderRuntimePolicy(translationProvider, cliProvider !== null);
 
-  const changed = syncCombinedAutoinject(pretranslateEnabled, translationProvider);
+  syncCombinedAutoinject(pretranslateEnabled, translationProvider);
 
   if (fs.existsSync(ENSURE_STATUSBAR_PATCH_PATH)) {
     if (args.includes('--status')) {
@@ -80,23 +97,15 @@ async function main() {
         }
       }
       process.exit(res.status || 0);
-    } else if (args.includes('--worker') || cliPretranslate !== null || cliProvider !== null || changed) {
-      spawnSync(process.execPath, [ENSURE_STATUSBAR_PATCH_PATH, '--worker'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
+    } else {
+      // Run `--worker` synchronously so Windows Job Object cleanup on hook exit
+      // never kills an in-flight `app.asar` patch or Live CDP injection.
+      runStatusbarPatchWorker();
       if ((cliPretranslate !== null || cliProvider !== null) && !args.includes('--hook')) {
         process.stdout.write(
           JSON.stringify({ translationProvider, pretranslateEnabled }, null, 2) + '\n'
         );
       }
-    } else {
-      const child = spawn(process.execPath, [ENSURE_STATUSBAR_PATCH_PATH, '--hook'], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      child.unref();
     }
   }
 

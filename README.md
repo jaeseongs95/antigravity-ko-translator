@@ -19,7 +19,8 @@ Antigravity 2.0 네이티브 앱에서 영어로 스트리밍되는 **Thinking(�
    - 하단 상태바(`.agy-ctx-statusbar`), 입력창 모델/권한 컨트롤, 모델 선택 메뉴의 `New` 배지 및 고유명사는 원문을 그대로 보존합니다.
 
 4. **앱 업데이트 시 자동 복구 및 영구 유지**
-   - `SessionStart`, `PreInvocation`, `PostInvocation` 훅과 스토리지 감시자를 통해 Antigravity 앱이 업데이트되더라도 자동으로 패치와 설정을 복구·유지합니다.
+   - Windows Job Object 종료 영향을 받지 않는 독립 백그라운드 감시 데몬(`Win32_Process.Create`)이 2초 주기로 `app.asar` 패치 상태 및 `DevToolsActivePort` 변경을 감지하여, Antigravity 앱이 업데이트·재시작되는 즉시 `app.asar` 재패치 및 Live CDP 주입을 자동 복구합니다.
+   - `SessionStart`, `PreInvocation`, `PostInvocation` 훅(`node ./scripts/ensure_ko_thought_patch.js --hook`)이 워커를 동기(`spawnSync`) 실행하여 훅 종료 시 자식 프로세스가 중단되는 현상을 원천 차단합니다.
 
 ## 모듈 구조 (SOLID Architecture)
 

@@ -1,12 +1,20 @@
 /**
  * Module: scripts/host/settings-storage.js
  * Responsibility: Translator option persistence (`config.json` & `app_storage.json`), CLI flag parsing,
- * and background watcher process for real-time Native Settings UI synchronization.
+ * and Job-Object-safe background watcher process for real-time Native Settings UI synchronization
+ * and automatic recovery after Antigravity app updates or restarts.
  */
 
 const fs = require('fs');
-const { spawn } = require('child_process');
-const { APP_STORAGE_PATH, CONFIG_JSON_PATH, WATCHER_PID_PATH } = require('./paths');
+const { spawn, spawnSync } = require('child_process');
+const {
+  APP_STORAGE_PATH,
+  DEVTOOLS_PORT_FILE,
+  ASAR_PATH,
+  CONFIG_JSON_PATH,
+  ENSURE_STATUSBAR_PATCH_PATH,
+  WATCHER_PID_PATH,
+} = require('./paths');
 
 function isPluginEnabled() {
   try {
@@ -135,6 +143,48 @@ function isProcessAlive(pid) {
   }
 }
 
+/**
+ * Spawns the background storage & app-update watcher outside the caller's Windows Job Object
+ * via WMI `Win32_Process.Create` so hook/CLI exit never terminates the daemon.
+ */
+function spawnDetachedWatcherProcess(entryScriptPath) {
+  if (process.platform === 'win32') {
+    try {
+      const cmdLine = `"${process.execPath}" "${entryScriptPath}" --watch-storage`;
+      const escapedCmd = cmdLine.replace(/'/g, "''");
+      const psScript = [
+        '$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly',
+        '$si.ShowWindow = [uint16]0',
+        `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${escapedCmd}'; ProcessStartupInformation = $si }`,
+        'if ($r -and $r.ProcessId) { Write-Output $r.ProcessId }',
+      ].join('; ');
+      const res = spawnSync(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', psScript],
+        { encoding: 'utf8', windowsHide: true, timeout: 4000 }
+      );
+      const pid = Number(
+        String(res.stdout || '')
+          .trim()
+          .split(/\r?\n/)
+          .pop()
+      );
+      if (pid > 0) {
+        return pid;
+      }
+    } catch {}
+  }
+
+  const child = spawn(process.execPath, [entryScriptPath, '--watch-storage'], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: { ...process.env },
+  });
+  child.unref();
+  return child.pid || null;
+}
+
 function ensureStorageWatcher(entryScriptPath) {
   try {
     const mySig = String(Math.floor(fs.statSync(entryScriptPath).mtimeMs));
@@ -151,58 +201,106 @@ function ensureStorageWatcher(entryScriptPath) {
         } catch {}
       }
     }
-    const child = spawn(process.execPath, [entryScriptPath, '--watch-storage'], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-      env: { ...process.env },
-    });
-    child.unref();
-    if (child.pid) {
-      fs.writeFileSync(WATCHER_PID_PATH, `${child.pid}:${mySig}`, 'utf8');
+    const spawnedPid = spawnDetachedWatcherProcess(entryScriptPath);
+    if (spawnedPid) {
+      fs.writeFileSync(WATCHER_PID_PATH, `${spawnedPid}:${mySig}`, 'utf8');
     }
-    return child.pid;
+    return spawnedPid;
   } catch {
     return null;
   }
 }
 
-function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged }) {
+function readCurrentDevToolsPort() {
+  try {
+    if (!fs.existsSync(DEVTOOLS_PORT_FILE)) return null;
+    const lines = fs.readFileSync(DEVTOOLS_PORT_FILE, 'utf8').trim().split(/\r?\n/);
+    const port = parseInt(lines[0], 10);
+    return port && !Number.isNaN(port) ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+function isAsarCurrentlyPatched() {
+  try {
+    if (!fs.existsSync(ASAR_PATH) || !fs.existsSync(ENSURE_STATUSBAR_PATCH_PATH)) {
+      return true;
+    }
+    const patcher = require(ENSURE_STATUSBAR_PATCH_PATH);
+    if (patcher && typeof patcher.isAsarPatchedFast === 'function') {
+      return Boolean(patcher.isAsarPatchedFast(ASAR_PATH));
+    }
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecoveryNeeded }) {
   try {
     const mySig = String(Math.floor(fs.statSync(entryScriptPath).mtimeMs));
     fs.writeFileSync(WATCHER_PID_PATH, `${process.pid}:${mySig}`, 'utf8');
   } catch {}
   let lastProvider = null;
   let lastPretranslate = null;
+  let lastDevToolsPort = readCurrentDevToolsPort();
+  let tickCount = 0;
   let busy = false;
 
-  const checkStorage = async () => {
+  const triggerRecovery = async (reason) => {
+    if (typeof onAppRecoveryNeeded === 'function') {
+      try {
+        await onAppRecoveryNeeded({ reason });
+      } catch {}
+    }
+  };
+
+  const checkStorageAndAppHealth = async () => {
     if (busy) return;
     busy = true;
+    tickCount++;
     try {
-      if (!fs.existsSync(APP_STORAGE_PATH)) return;
-      const appStorage = JSON.parse(fs.readFileSync(APP_STORAGE_PATH, 'utf8'));
-      const curProvider = normalizeProviderName(appStorage['agy-ko-thought-provider']) || 'local-llm';
-      const curPre =
-        appStorage['agy-ko-thought-pretranslate'] === '1' || appStorage['agy-ko-thought-pretranslate'] === true;
+      // 1. Check Native Settings UI changes in app_storage.json every 400ms
+      if (fs.existsSync(APP_STORAGE_PATH)) {
+        const appStorage = JSON.parse(fs.readFileSync(APP_STORAGE_PATH, 'utf8'));
+        const curProvider = normalizeProviderName(appStorage['agy-ko-thought-provider']) || 'local-llm';
+        const curPre =
+          appStorage['agy-ko-thought-pretranslate'] === '1' || appStorage['agy-ko-thought-pretranslate'] === true;
 
-      if (lastProvider === null) {
-        lastProvider = curProvider;
-        lastPretranslate = curPre;
-        return;
+        if (lastProvider === null) {
+          lastProvider = curProvider;
+          lastPretranslate = curPre;
+        } else if (curProvider !== lastProvider || curPre !== lastPretranslate) {
+          const prevProvider = lastProvider;
+          lastProvider = curProvider;
+          lastPretranslate = curPre;
+          const opts = getOrSetTranslatorOptions(curPre, curProvider);
+          if (typeof onSettingsChanged === 'function') {
+            await onSettingsChanged({
+              pretranslateEnabled: opts.pretranslateEnabled,
+              translationProvider: opts.translationProvider,
+              prevProvider,
+            });
+          }
+        }
       }
 
-      if (curProvider !== lastProvider || curPre !== lastPretranslate) {
-        const prevProvider = lastProvider;
-        lastProvider = curProvider;
-        lastPretranslate = curPre;
-        const opts = getOrSetTranslatorOptions(curPre, curProvider);
-        if (typeof onSettingsChanged === 'function') {
-          await onSettingsChanged({
-            pretranslateEnabled: opts.pretranslateEnabled,
-            translationProvider: opts.translationProvider,
-            prevProvider,
-          });
+      // 2. Every ~2000ms (5 ticks), verify app.asar patch state & DevToolsActivePort for app update / restart recovery
+      if (tickCount % 5 === 0) {
+        const curPort = readCurrentDevToolsPort();
+        const portChanged = curPort !== null && curPort !== lastDevToolsPort;
+        if (curPort !== null) {
+          lastDevToolsPort = curPort;
+        }
+        const asarUnpatched = !isAsarCurrentlyPatched();
+
+        if (asarUnpatched || portChanged) {
+          await triggerRecovery(asarUnpatched ? 'asar_unpatched' : 'devtools_port_changed');
+          if (portChanged) {
+            setTimeout(() => void triggerRecovery('devtools_port_followup_2s'), 2000);
+            setTimeout(() => void triggerRecovery('devtools_port_followup_5s'), 5000);
+          }
         }
       }
     } catch {
@@ -211,8 +309,8 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged }) {
     }
   };
 
-  void checkStorage();
-  setInterval(checkStorage, 400);
+  void checkStorageAndAppHealth();
+  setInterval(checkStorageAndAppHealth, 400);
 }
 
 module.exports = {
@@ -223,4 +321,5 @@ module.exports = {
   getOrSetTranslatorOptions,
   ensureStorageWatcher,
   runStorageWatcherLoop,
+  isAsarCurrentlyPatched,
 };

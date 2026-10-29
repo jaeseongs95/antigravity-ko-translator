@@ -10,6 +10,8 @@ const HOME_DIR = process.env.USERPROFILE || process.env.HOME || os.homedir();
 const LOCAL_APPDATA = process.env.LOCALAPPDATA || path.join(HOME_DIR, 'AppData', 'Local');
 const APPDATA = process.env.APPDATA || path.join(HOME_DIR, 'AppData', 'Roaming');
 const APP_STORAGE_PATH = path.join(APPDATA, 'Antigravity', 'app_storage.json');
+const DEVTOOLS_PORT_FILE = path.join(APPDATA, 'Antigravity', 'DevToolsActivePort');
+const ASAR_PATH = path.join(LOCAL_APPDATA, 'Programs', 'antigravity', 'resources', 'app.asar');
 const AGY_DIR = path.join(HOME_DIR, '.gemini', 'antigravity');
 const CONFIG_JSON_PATH = path.join(HOME_DIR, '.gemini', 'config', 'config.json');
 
@@ -42,6 +44,8 @@ module.exports = {
   LOCAL_APPDATA,
   APPDATA,
   APP_STORAGE_PATH,
+  DEVTOOLS_PORT_FILE,
+  ASAR_PATH,
   AGY_DIR,
   CONFIG_JSON_PATH,
   PLUGIN_ROOT,

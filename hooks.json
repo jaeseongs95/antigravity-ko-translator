@@ -4,21 +4,21 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "node -e \"process.argv.push('--hook');require(require('os').homedir()+'/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js')\"",
+        "command": "node ./scripts/ensure_ko_thought_patch.js --hook",
         "timeout": 5
       }
     ],
     "PreInvocation": [
       {
         "type": "command",
-        "command": "node -e \"process.argv.push('--hook');require(require('os').homedir()+'/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js')\"",
+        "command": "node ./scripts/ensure_ko_thought_patch.js --hook",
         "timeout": 5
       }
     ],
     "PostInvocation": [
       {
         "type": "command",
-        "command": "node -e \"process.argv.push('--hook');require(require('os').homedir()+'/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js')\"",
+        "command": "node ./scripts/ensure_ko_thought_patch.js --hook",
         "timeout": 5
       }
     ]
