@@ -1,12 +1,10 @@
 /**
  * Module: scripts/host/local-llm-service.js
  * Responsibility: Local LLM server process lifecycle management (env resolution, HTTP health probe,
- * headless GPU startup, and port-based process tree termination on adapter switch).
+ * headless GPU startup via `windowsHide: true` / `CREATE_NO_WINDOW`, and port-based process tree termination).
  */
 
-const fs = require('fs');
 const http = require('http');
-const os = require('os');
 const path = require('path');
 const { spawnSync, spawn } = require('child_process');
 const { LLM_BASE_URL } = require('./paths');
@@ -22,7 +20,9 @@ function readWindowsUserEnv(varName) {
       const m = res.stdout.match(/REG_(?:EXPAND_)?SZ\s+(.+)/i);
       if (m && m[1]) return m[1].trim();
     }
-  } catch {}
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] readWindowsUserEnv(${varName}) error: ${err.message}\n`);
+  }
   return null;
 }
 
@@ -99,38 +99,16 @@ async function ensureLocalLlmServer(pluginEnabled = true) {
   const cmd = resolveLocalLlmCommand();
   if (!cmd) return probe;
   try {
-    if (process.platform === 'win32') {
-      const vbsPath = path.join(os.tmpdir(), 'agy_start_local_llm_headless.vbs');
-      const escapedBin = cmd.bin.replace(/"/g, '""');
-      const escapedArgs = cmd.args.join(' ').replace(/"/g, '""');
-      const vbsContent = [
-        'Set sh = CreateObject("WScript.Shell")',
-        `sh.Run """${escapedBin}"" ${escapedArgs}", 0, False`,
-      ].join('\r\n');
-      fs.writeFileSync(vbsPath, vbsContent, 'utf8');
-      const psScript = [
-        '$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly',
-        '$si.ShowWindow = [uint16]0',
-        '$envList = [System.Collections.Generic.List[string]]::new()',
-        'foreach ($de in [Environment]::GetEnvironmentVariables("Machine").GetEnumerator()) { $envList.Add("$($de.Key)=$($de.Value)") }',
-        'foreach ($de in [Environment]::GetEnvironmentVariables("User").GetEnumerator()) { $envList.Add("$($de.Key)=$($de.Value)") }',
-        '$si.EnvironmentVariables = $envList.ToArray()',
-        `Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'wscript.exe //B //NoLogo "${vbsPath.replace(/'/g, "''")}"'; ProcessStartupInformation = $si } | Out-Null`,
-      ].join('; ');
-      spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', psScript], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-    } else {
-      const child = spawn(cmd.bin, cmd.args, {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-        env: { ...process.env },
-      });
-      child.unref();
-    }
-  } catch {}
+    const child = spawn(cmd.bin, cmd.args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { ...process.env },
+    });
+    child.unref();
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] ensureLocalLlmServer error: ${err.message}\n`);
+  }
   return probe;
 }
 
@@ -197,7 +175,9 @@ async function stopLocalLlmServer(forceProcessScan = false) {
         }
       }
     }
-  } catch {}
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] stopLocalLlmServer error: ${err.message}\n`);
+  }
   return { stoppedCount };
 }
 

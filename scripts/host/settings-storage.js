@@ -1,12 +1,12 @@
 /**
  * Module: scripts/host/settings-storage.js
  * Responsibility: Translator option persistence (`config.json` & `app_storage.json`), CLI flag parsing,
- * and Job-Object-safe background watcher process for real-time Native Settings UI synchronization
- * and automatic recovery after Antigravity app updates or restarts.
+ * and headless background watcher process (`windowsHide: true` / `CREATE_NO_WINDOW`) for real-time
+ * Native Settings UI synchronization and automatic recovery after Antigravity app updates or restarts.
  */
 
 const fs = require('fs');
-const { spawn, spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const {
   APP_STORAGE_PATH,
   DEVTOOLS_PORT_FILE,
@@ -23,7 +23,8 @@ function isPluginEnabled() {
     const entry = cfg?.plugins?.['ko-thought-translator'];
     if (entry && entry.enabled === false) return false;
     return true;
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] isPluginEnabled read error: ${err.message}\n`);
     return true;
   }
 }
@@ -73,7 +74,9 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
     if (fs.existsSync(APP_STORAGE_PATH)) {
       appStorage = JSON.parse(fs.readFileSync(APP_STORAGE_PATH, 'utf8'));
     }
-  } catch {}
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] app_storage.json read error: ${err.message}\n`);
+  }
 
   try {
     let cfg = {};
@@ -128,7 +131,9 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
       appStorage['agy-ko-thought-provider'] = provider;
       fs.writeFileSync(APP_STORAGE_PATH, JSON.stringify(appStorage, null, 2), 'utf8');
     }
-  } catch {}
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] config sync error: ${err.message}\n`);
+  }
 
   return { pretranslateEnabled: enabled, translationProvider: provider };
 }
@@ -144,37 +149,11 @@ function isProcessAlive(pid) {
 }
 
 /**
- * Spawns the background storage & app-update watcher outside the caller's Windows Job Object
- * via WMI `Win32_Process.Create` so hook/CLI exit never terminates the daemon.
+ * Spawns the background storage & app-update watcher directly via Node/libuv with
+ * `windowsHide: true` (`CREATE_NO_WINDOW = 0x08000000`) and `stdio: 'ignore'`
+ * so Windows never allocates a console or triggers Windows Terminal (`DefTerm`).
  */
 function spawnDetachedWatcherProcess(entryScriptPath) {
-  if (process.platform === 'win32') {
-    try {
-      const cmdLine = `"${process.execPath}" "${entryScriptPath}" --watch-storage`;
-      const escapedCmd = cmdLine.replace(/'/g, "''");
-      const psScript = [
-        '$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly',
-        '$si.ShowWindow = [uint16]0',
-        `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${escapedCmd}'; ProcessStartupInformation = $si }`,
-        'if ($r -and $r.ProcessId) { Write-Output $r.ProcessId }',
-      ].join('; ');
-      const res = spawnSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', psScript],
-        { encoding: 'utf8', windowsHide: true, timeout: 4000 }
-      );
-      const pid = Number(
-        String(res.stdout || '')
-          .trim()
-          .split(/\r?\n/)
-          .pop()
-      );
-      if (pid > 0) {
-        return pid;
-      }
-    } catch {}
-  }
-
   const child = spawn(process.execPath, [entryScriptPath, '--watch-storage'], {
     detached: true,
     stdio: 'ignore',
@@ -198,7 +177,11 @@ function ensureStorageWatcher(entryScriptPath) {
         }
         try {
           process.kill(existingPid, 'SIGTERM');
-        } catch {}
+        } catch (killErr) {
+          if (killErr && killErr.code !== 'ESRCH') {
+            process.stderr.write(`[ko-thought-translator] Failed to terminate stale watcher ${existingPid}: ${killErr.message}\n`);
+          }
+        }
       }
     }
     const spawnedPid = spawnDetachedWatcherProcess(entryScriptPath);
@@ -206,7 +189,8 @@ function ensureStorageWatcher(entryScriptPath) {
       fs.writeFileSync(WATCHER_PID_PATH, `${spawnedPid}:${mySig}`, 'utf8');
     }
     return spawnedPid;
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] ensureStorageWatcher error: ${err.message}\n`);
     return null;
   }
 }
@@ -232,7 +216,8 @@ function isAsarCurrentlyPatched() {
       return Boolean(patcher.isAsarPatchedFast(ASAR_PATH));
     }
     return true;
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] isAsarCurrentlyPatched error: ${err.message}\n`);
     return true;
   }
 }
@@ -241,7 +226,9 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
   try {
     const mySig = String(Math.floor(fs.statSync(entryScriptPath).mtimeMs));
     fs.writeFileSync(WATCHER_PID_PATH, `${process.pid}:${mySig}`, 'utf8');
-  } catch {}
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] watcher pid write error: ${err.message}\n`);
+  }
   let lastProvider = null;
   let lastPretranslate = null;
   let lastDevToolsPort = readCurrentDevToolsPort();
@@ -252,7 +239,9 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
     if (typeof onAppRecoveryNeeded === 'function') {
       try {
         await onAppRecoveryNeeded({ reason });
-      } catch {}
+      } catch (err) {
+        process.stderr.write(`[ko-thought-translator] recovery error (${reason}): ${err.message}\n`);
+      }
     }
   };
 
@@ -303,7 +292,8 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
           }
         }
       }
-    } catch {
+    } catch (err) {
+      process.stderr.write(`[ko-thought-translator] watcher check error: ${err.message}\n`);
     } finally {
       busy = false;
     }

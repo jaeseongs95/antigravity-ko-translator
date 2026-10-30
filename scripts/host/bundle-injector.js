@@ -38,7 +38,7 @@ function assembleRendererSourceFromModules() {
     `// ==UserScript==\n` +
     `// @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)\n` +
     `// @namespace    https://github.com/jaeseongs95/antigravity-ko-translator\n` +
-    `// @version      1.2.4\n` +
+    `// @version      1.2.5\n` +
     `// @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.\n` +
     `// @match        https://antigravity.google.com/*\n` +
     `// @match        https://*.antigravity.google.com/*\n` +

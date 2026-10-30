@@ -166,7 +166,13 @@ test('host lifecycle, hooks.json CLI contract, and app-update auto-recovery guar
   const storageMod = require(path.join(HOST_DIR, 'settings-storage.js'));
   assert.equal(typeof storageMod.isAsarCurrentlyPatched, 'function');
   const storageSource = fs.readFileSync(path.join(HOST_DIR, 'settings-storage.js'), 'utf8');
-  assert.ok(storageSource.includes('Win32_Process'), 'Watcher spawn must escape Windows Job Object via Win32_Process');
+  const llmSource = fs.readFileSync(path.join(HOST_DIR, 'local-llm-service.js'), 'utf8');
+  assert.ok(!storageSource.includes('Win32_Process'), 'Watcher spawn must never use WMI Win32_Process (triggers Windows Terminal DefTerm)');
+  assert.ok(!storageSource.includes('powershell'), 'Watcher spawn must never invoke powershell.exe');
+  assert.ok(storageSource.includes('windowsHide: true'), 'Watcher spawn must pass windowsHide: true (CREATE_NO_WINDOW)');
+  assert.ok(!llmSource.includes('Win32_Process'), 'LLM spawn must never use WMI Win32_Process');
+  assert.ok(!llmSource.includes('powershell'), 'LLM spawn must never invoke powershell.exe');
+  assert.ok(llmSource.includes('windowsHide: true'), 'LLM spawn must pass windowsHide: true (CREATE_NO_WINDOW)');
   assert.ok(storageSource.includes('asar_unpatched'), 'Watcher loop must detect unpatched app.asar after app update');
 });
 
