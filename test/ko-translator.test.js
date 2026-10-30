@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v12.9';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.0';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
@@ -61,8 +61,9 @@ test('non-intrusion & SRP boundary enforcement across renderer modules (01, 06, 
     !coalescedMatch[0].includes('registerStatusbarTranslatorAdapter'),
     'scheduleCoalescedScan must not repeatedly call registerStatusbarTranslatorAdapter'
   );
-  assert.ok(!coalescedMatch[0].includes('}, 16)'), 'scheduleCoalescedScan must execute synchronously before first paint');
-  assert.ok(coalescedMatch[0].includes('observer.takeRecords()'), 'scheduleCoalescedScan must flush self-induced mutation records'
+  assert.ok(coalescedMatch[0].includes('runFastThoughtAndTriggerScan()'), 'scheduleCoalescedScan must run fast thought/trigger scan synchronously');
+  assert.ok(coalescedMatch[0].includes('}, 16)'), 'scheduleCoalescedScan must coalesce full-DOM localizeStaticUiInRoot via 16ms timer');
+  assert.ok(mod08.includes('observer.takeRecords()'), '08-dom-observer.js must flush self-induced mutation records'
   );
 });
 
@@ -239,4 +240,9 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     signal: null,
   });
   assert.equal(fallbackOut, '리모트 세션 추론 번역 완료', 'local-llm must fall back to google-translate when local server is unreachable');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+  assert.ok(mod08.includes('__agySuppressAutoIframeLoad'), 'must guard onIframeLoad to prevent teardownProxyPort freeze');
+  assert.ok(mod08.includes('cw.AudioWorklet.prototype.addModule'), 'must stub AudioWorklet.addModule against cross-origin CSP');
+  assert.ok(mod08.includes('runFastThoughtAndTriggerScan()'), 'must run fast thought/trigger scan without blocking on full DOM');
+  assert.ok(mod08.includes('scanTimerScheduled = true'), 'must coalesce full-DOM localizeStaticUiInRoot via 16ms timer');
 });

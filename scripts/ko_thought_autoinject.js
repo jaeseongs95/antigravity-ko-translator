@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.3
+// @version      1.2.4
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v12.9';
+  const KO_LOCALIZER_VERSION = 'v13.0';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -3488,6 +3488,25 @@
         : null;
     const spoofedSrc = `${window.location.origin}${basePath}/?iframe=true`;
 
+    // Suppress Angular's automatic (load)="onIframeLoad()" during about:blank & document.write transitions
+    // so teardownProxyPort() is NEVER called while main.js is booting or after INITIAL_CONFIG is delivered.
+    const rcProto = Object.getPrototypeOf(rcInst);
+    if (rcProto && typeof rcProto.onIframeLoad === 'function' && !rcProto.__agyOrigOnIframeLoad) {
+      rcProto.__agyOrigOnIframeLoad = rcProto.onIframeLoad;
+      rcProto.onIframeLoad = function (...args) {
+        if (this.__agySuppressAutoIframeLoad) return Promise.resolve();
+        return rcProto.__agyOrigOnIframeLoad.apply(this, args);
+      };
+    }
+    if (typeof rcInst.onIframeLoad === 'function' && !rcInst.__agyOrigOnIframeLoad) {
+      rcInst.__agyOrigOnIframeLoad = rcInst.onIframeLoad;
+      rcInst.onIframeLoad = function (...args) {
+        if (this.__agySuppressAutoIframeLoad) return Promise.resolve();
+        return this.__agyOrigOnIframeLoad.apply(this, args);
+      };
+    }
+    rcInst.__agySuppressAutoIframeLoad = true;
+
     const onBlankLoad = () => {
       try {
         const cw = iframe.contentWindow;
@@ -3528,6 +3547,9 @@
           platform,
           nextTick: (cb) => Promise.resolve().then(cb),
         };
+        if (cw.AudioWorklet && cw.AudioWorklet.prototype) {
+          cw.AudioWorklet.prototype.addModule = () => Promise.resolve();
+        }
         if (cw.customElements && !cw.customElements.__agyGuarded) {
           const origDef = cw.customElements.define.bind(cw.customElements);
           cw.customElements.define = (name, ctor, opts) => {
@@ -3538,8 +3560,6 @@
         try {
           cw.document.documentElement.style.colorScheme = 'dark';
         } catch (e) {}
-
-        window.__agyMountKoThoughtLocalizer(cw, cd);
 
         const nonce = document.querySelector('script[nonce]')?.nonce || '';
         const prismScript = cd.createElement('script');
@@ -3556,24 +3576,24 @@
 
         mainScript.onload = () => {
           if (savedChildPath) rcInst.initialChildPath = savedChildPath;
-          if (typeof rcInst.onIframeLoad === 'function') {
+          const origLoad =
+            rcInst.__agyOrigOnIframeLoad ||
+            rcProto?.__agyOrigOnIframeLoad ||
+            rcInst.onIframeLoad;
+          if (typeof origLoad === 'function' && !cw.__initialConfigReceived) {
             try {
-              rcInst.onIframeLoad();
+              origLoad.call(rcInst);
             } catch (e) {}
           }
-          window.__agyMountKoThoughtLocalizer(cw, cd);
-          setTimeout(() => {
-            if (
-              typeof rcInst.onIframeLoad === 'function' &&
-              cd.body &&
-              !cd.querySelector('[data-testid="conversation-view"], [data-testid="New Conversation"]')
-            ) {
-              try {
-                rcInst.onIframeLoad();
-              } catch (e) {}
+          try {
+            if (typeof rcInst.markIframeReady === 'function') {
+              rcInst.markIframeReady();
+            } else {
+              rcInst.iframeLoading?.set?.(false);
+              rcInst.iframeUiReady?.set?.(true);
             }
-            window.__agyMountKoThoughtLocalizer(cw, cd);
-          }, 600);
+          } catch (e) {}
+          window.__agyMountKoThoughtLocalizer(cw, cd);
         };
 
         cd.head.appendChild(prismScript);
@@ -3625,18 +3645,15 @@
     }
   }
 
-  // Execute DOM localization synchronously inside the MutationObserver microtask (before first paint)
-  // so session switches and virtual scroll chunk mounts never flash unlocalized English text (FOUC).
-  let inSyncScan = false;
+  // Fast pre-paint pass for Thinking/Worked triggers and .cursor-edit blocks (prevents session-switch FOUC)
+  // paired with a 16ms coalesced timer for full-document static UI localization (prevents main-thread starvation/freeze).
+  let inFastScan = false;
+  let scanTimerScheduled = false;
 
-  function scheduleCoalescedScan() {
-    if (disposed || inSyncScan) return;
-    inSyncScan = true;
+  function runFastThoughtAndTriggerScan() {
+    if (disposed || inFastScan) return;
+    inFastScan = true;
     try {
-      if (document.body) {
-        localizeStaticUiInRoot(document.body);
-        ensureNativeSettingsModalIntegration();
-      }
       scanTriggerButtonsSync();
       const allCursorEdits = document.querySelectorAll('.cursor-edit');
       for (const cursorEdit of allCursorEdits) {
@@ -3650,7 +3667,24 @@
         observer.takeRecords();
       }
     } finally {
-      inSyncScan = false;
+      inFastScan = false;
+    }
+  }
+
+  function scheduleCoalescedScan() {
+    if (disposed) return;
+    runFastThoughtAndTriggerScan();
+    if (!scanTimerScheduled) {
+      scanTimerScheduled = true;
+      setTimeout(() => {
+        scanTimerScheduled = false;
+        if (disposed) return;
+        if (document.body) {
+          localizeStaticUiInRoot(document.body);
+          ensureNativeSettingsModalIntegration();
+        }
+        runFastThoughtAndTriggerScan();
+      }, 16);
     }
     if (isPretranslateEnabled() && !thoughtDebounceTimer) {
       thoughtDebounceTimer = setTimeout(() => {
@@ -3670,8 +3704,10 @@
         const parent = m.target.parentElement;
         if (
           parent &&
+          (parent.closest('.cursor-edit') ||
+            parent.closest('button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"]')) &&
           !parent.classList.contains('agy-ko-trigger-label') &&
-          !parent.closest('.agy-ko-thought-wrap, .agy-ctx-statusbar, .agy-ko-settings-root')
+          !parent.closest('.agy-ko-thought-wrap')
         ) {
           scheduleCoalescedScan();
           return;
