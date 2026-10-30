@@ -54,7 +54,10 @@
       return true;
     }
 
-    if (window.__agyCustomStatusBarAdapters instanceof Map && !window.__agyCustomStatusBarAdapters.has(STATUSBAR_ADAPTER_ID)) {
+    if (!window.__agyCustomStatusBarAdapters || !(window.__agyCustomStatusBarAdapters instanceof Map)) {
+      window.__agyCustomStatusBarAdapters = new Map();
+    }
+    if (!window.__agyCustomStatusBarAdapters.has(STATUSBAR_ADAPTER_ID)) {
       window.__agyCustomStatusBarAdapters.set(STATUSBAR_ADAPTER_ID, createKoTranslatorStatusbarAdapter());
     }
     return false;
@@ -74,6 +77,9 @@
         disposeStatusbarAdapter();
       } else if (window.agyStatusBar && typeof window.agyStatusBar.unregisterAdapter === 'function') {
         window.agyStatusBar.unregisterAdapter(STATUSBAR_ADAPTER_ID);
+      }
+      if (window.__agyCustomStatusBarAdapters && typeof window.__agyCustomStatusBarAdapters.delete === 'function') {
+        window.__agyCustomStatusBarAdapters.delete(STATUSBAR_ADAPTER_ID);
       }
     } catch (e) {}
     disposeStatusbarAdapter = null;

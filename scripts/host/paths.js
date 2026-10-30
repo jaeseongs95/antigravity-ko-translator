@@ -12,7 +12,17 @@ const APPDATA = process.env.APPDATA || path.join(HOME_DIR, 'AppData', 'Roaming')
 const APP_STORAGE_PATH = path.join(APPDATA, 'Antigravity', 'app_storage.json');
 const DEVTOOLS_PORT_FILE = path.join(APPDATA, 'Antigravity', 'DevToolsActivePort');
 const ASAR_PATH = path.join(LOCAL_APPDATA, 'Programs', 'antigravity', 'resources', 'app.asar');
+const LS_BIN_PATH = path.join(
+  LOCAL_APPDATA,
+  'Programs',
+  'antigravity',
+  'resources',
+  'bin',
+  process.platform === 'win32' ? 'language_server.exe' : 'language_server'
+);
 const AGY_DIR = path.join(HOME_DIR, '.gemini', 'antigravity');
+const WEB_BUNDLE_DIR = path.join(AGY_DIR, 'web_bundle');
+const WEB_BUNDLE_META_PATH = path.join(WEB_BUNDLE_DIR, '.agy_bundle_meta.json');
 const CONFIG_JSON_PATH = path.join(HOME_DIR, '.gemini', 'config', 'config.json');
 
 const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
@@ -46,7 +56,10 @@ module.exports = {
   APP_STORAGE_PATH,
   DEVTOOLS_PORT_FILE,
   ASAR_PATH,
+  LS_BIN_PATH,
   AGY_DIR,
+  WEB_BUNDLE_DIR,
+  WEB_BUNDLE_META_PATH,
   CONFIG_JSON_PATH,
   PLUGIN_ROOT,
   SCRIPTS_DIR,
