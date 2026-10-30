@@ -1,27 +1,20 @@
 /**
  * Module: scripts/host/bundle-injector.js
  * Responsibility: Assembles modular renderer sources (`scripts/renderer/*.js`) into the distributable
- * `scripts/ko_thought_autoinject.js` bundle and synchronizes `statusbar_autoinject.js` & `web_bundle` without dirtying Git.
+ * `scripts/ko_thought_autoinject.js` bundle and synchronizes `statusbar_autoinject.js` without dirtying Git.
  */
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const {
   RENDERER_DIR,
   RENDERER_MODULE_FILES,
   KO_SCRIPT_PATH,
   STATUSBAR_AUTOINJECT_PATH,
-  WEB_BUNDLE_DIR,
-  WEB_BUNDLE_META_PATH,
   BEGIN_MARKER,
   END_MARKER,
 } = require('./paths');
 const { isPluginEnabled } = require('./settings-storage');
-
-function sha256Hex(bufferOrString) {
-  return crypto.createHash('sha256').update(bufferOrString).digest('hex');
-}
 
 function assembleRendererSourceFromModules() {
   const missing = RENDERER_MODULE_FILES.filter((f) => !fs.existsSync(path.join(RENDERER_DIR, f)));
@@ -45,7 +38,7 @@ function assembleRendererSourceFromModules() {
     `// ==UserScript==\n` +
     `// @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)\n` +
     `// @namespace    https://github.com/jaeseongs95/antigravity-ko-translator\n` +
-    `// @version      1.2.7\n` +
+    `// @version      1.2.6\n` +
     `// @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.\n` +
     `// @match        https://antigravity.google.com/*\n` +
     `// @match        https://*.antigravity.google.com/*\n` +
@@ -97,42 +90,6 @@ function buildRuntimeConfiguredBundle(pretranslateEnabled = false, translationPr
     );
 }
 
-function syncWebBundleAutoinject(combinedCode, webBundleDir = WEB_BUNDLE_DIR, metaPath = WEB_BUNDLE_META_PATH) {
-  try {
-    const origPrismPath = path.join(webBundleDir, 'prism_bundle.orig.js');
-    const origHtmlPath = path.join(webBundleDir, 'index.orig.html');
-    const outPrismPath = path.join(webBundleDir, 'prism_bundle.js');
-    const outHtmlPath = path.join(webBundleDir, 'index.html');
-    if (!fs.existsSync(origPrismPath) || !fs.existsSync(origHtmlPath)) {
-      return { synced: false, autoinjectHash: null };
-    }
-    const autoinjectHash = sha256Hex(combinedCode).slice(0, 16);
-    const origPrism = fs.readFileSync(origPrismPath, 'utf8');
-    const patchedPrism = `${origPrism}\n;\n/* AGY_STATUSBAR_AUTOINJECT_V6:${autoinjectHash} */\n${combinedCode}\n`;
-    fs.writeFileSync(outPrismPath, patchedPrism, 'utf8');
-
-    const origHtml = fs.readFileSync(origHtmlPath, 'utf8');
-    const lsHookTag = `<script>globalThis.__JETSKI_LS_CLIENT_DECORATOR__=function(c){globalThis.__agyLsClient=c;return c;};</script>`;
-    const patchedHtml = origHtml.replace(
-      '<script defer src="/prism_bundle.js"></script>',
-      `${lsHookTag}\n    <script defer src="/prism_bundle.js?agy=${autoinjectHash}"></script>`
-    );
-    fs.writeFileSync(outHtmlPath, patchedHtml, 'utf8');
-
-    if (fs.existsSync(metaPath)) {
-      try {
-        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-        meta.autoinjectHash = autoinjectHash;
-        meta.updatedAt = new Date().toISOString();
-        fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2) + '\n', 'utf8');
-      } catch {}
-    }
-    return { synced: true, autoinjectHash };
-  } catch {
-    return { synced: false, autoinjectHash: null };
-  }
-}
-
 function syncCombinedAutoinject(pretranslateEnabled = false, translationProvider = 'local-llm') {
   if (!fs.existsSync(STATUSBAR_AUTOINJECT_PATH)) {
     return false;
@@ -156,18 +113,15 @@ function syncCombinedAutoinject(pretranslateEnabled = false, translationProvider
     nextCombined += `\n${BEGIN_MARKER}\nif (window.__agyKoThoughtCleanup) { try { window.__agyKoThoughtCleanup(true); } catch (e) {} }\n${END_MARKER}\n`;
   }
 
-  let changed = false;
   if (rawStatusbar !== nextCombined) {
     fs.writeFileSync(STATUSBAR_AUTOINJECT_PATH, nextCombined, 'utf8');
-    changed = true;
+    return true;
   }
-  syncWebBundleAutoinject(nextCombined);
-  return changed;
+  return false;
 }
 
 module.exports = {
   assembleRendererSourceFromModules,
   buildRuntimeConfiguredBundle,
-  syncWebBundleAutoinject,
   syncCombinedAutoinject,
 };

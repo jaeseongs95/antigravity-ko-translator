@@ -163,7 +163,7 @@
   }
 
   window.__agyGetPretranslate = () => isPretranslateEnabled();
-  window.__agySetPretranslate = (enabled, options = {}) => {
+  window.__agySetPretranslate = (enabled) => {
     pretranslateEnabled = Boolean(enabled);
     window.__agyPretranslateStats.enabled = pretranslateEnabled;
     try {
@@ -188,45 +188,16 @@
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
-    if (!options._fromSync) {
-      const syncOpts = { _fromSync: true };
-      try {
-        document.querySelectorAll('iframe').forEach((ifr) => {
-          try {
-            const cw = ifr.contentWindow;
-            if (!cw || cw === window) return;
-            try {
-              if (typeof cw.__agySetPretranslate === 'function') {
-                cw.__agySetPretranslate(pretranslateEnabled, syncOpts);
-                return;
-              }
-            } catch (e) {}
-            cw.postMessage(
-              { __agyKoBridge: true, type: 'SET_PRETRANSLATE', pretranslate: pretranslateEnabled },
-              '*'
-            );
-          } catch (e) {}
-        });
-      } catch (e) {}
-      try {
-        if (window.parent && window.parent !== window) {
-          try {
-            if (typeof window.parent.__agySetPretranslate === 'function') {
-              window.parent.__agySetPretranslate(pretranslateEnabled, syncOpts);
-            }
-          } catch (e) {}
-          window.parent.postMessage(
-            {
-              __agyKoBridge: true,
-              type: 'SYNC_STATE',
-              provider: activeTranslationProvider,
-              pretranslate: pretranslateEnabled,
-            },
-            '*'
-          );
-        }
-      } catch (e) {}
-    }
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agySetPretranslate === 'function') {
+            cw.__agySetPretranslate(pretranslateEnabled);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
     return {
       pretranslateEnabled,
       stats: window.__agyPretranslateStats,

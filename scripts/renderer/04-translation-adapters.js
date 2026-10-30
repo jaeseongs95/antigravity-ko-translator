@@ -316,52 +316,18 @@
       refreshTranslatorSettingsUi();
     }
     if (prev !== activeTranslationProvider && options.retranslate !== false && typeof retranslateVisibleThoughts === 'function') {
-      retranslateVisibleThoughts(false, { _fromSync: Boolean(options._fromSync) });
+      retranslateVisibleThoughts(false);
     }
-    if (!options._fromSync) {
-      const syncOpts = { ...options, _fromSync: true };
-      try {
-        document.querySelectorAll('iframe').forEach((ifr) => {
-          try {
-            const cw = ifr.contentWindow;
-            if (!cw || cw === window) return;
-            try {
-              if (typeof cw.__agySetTranslationProvider === 'function') {
-                cw.__agySetTranslationProvider(activeTranslationProvider, syncOpts);
-                return;
-              }
-            } catch (e) {}
-            cw.postMessage(
-              {
-                __agyKoBridge: true,
-                type: 'SET_PROVIDER',
-                provider: activeTranslationProvider,
-                retranslate: options.retranslate !== false,
-              },
-              '*'
-            );
-          } catch (e) {}
-        });
-      } catch (e) {}
-      try {
-        if (window.parent && window.parent !== window) {
-          try {
-            if (typeof window.parent.__agySetTranslationProvider === 'function') {
-              window.parent.__agySetTranslationProvider(activeTranslationProvider, syncOpts);
-            }
-          } catch (e) {}
-          window.parent.postMessage(
-            {
-              __agyKoBridge: true,
-              type: 'SYNC_STATE',
-              provider: activeTranslationProvider,
-              pretranslate: pretranslateEnabled,
-            },
-            '*'
-          );
-        }
-      } catch (e) {}
-    }
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agySetTranslationProvider === 'function') {
+            cw.__agySetTranslationProvider(activeTranslationProvider, options);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
     return {
       translationProvider: activeTranslationProvider,
       availableProviders: Object.keys(TRANSLATION_ADAPTERS),

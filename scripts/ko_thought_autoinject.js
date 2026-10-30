@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.4
+// @version      1.2.6
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.2';
+  const KO_LOCALIZER_VERSION = 'v13.1';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -1859,52 +1859,18 @@
       refreshTranslatorSettingsUi();
     }
     if (prev !== activeTranslationProvider && options.retranslate !== false && typeof retranslateVisibleThoughts === 'function') {
-      retranslateVisibleThoughts(false, { _fromSync: Boolean(options._fromSync) });
+      retranslateVisibleThoughts(false);
     }
-    if (!options._fromSync) {
-      const syncOpts = { ...options, _fromSync: true };
-      try {
-        document.querySelectorAll('iframe').forEach((ifr) => {
-          try {
-            const cw = ifr.contentWindow;
-            if (!cw || cw === window) return;
-            try {
-              if (typeof cw.__agySetTranslationProvider === 'function') {
-                cw.__agySetTranslationProvider(activeTranslationProvider, syncOpts);
-                return;
-              }
-            } catch (e) {}
-            cw.postMessage(
-              {
-                __agyKoBridge: true,
-                type: 'SET_PROVIDER',
-                provider: activeTranslationProvider,
-                retranslate: options.retranslate !== false,
-              },
-              '*'
-            );
-          } catch (e) {}
-        });
-      } catch (e) {}
-      try {
-        if (window.parent && window.parent !== window) {
-          try {
-            if (typeof window.parent.__agySetTranslationProvider === 'function') {
-              window.parent.__agySetTranslationProvider(activeTranslationProvider, syncOpts);
-            }
-          } catch (e) {}
-          window.parent.postMessage(
-            {
-              __agyKoBridge: true,
-              type: 'SYNC_STATE',
-              provider: activeTranslationProvider,
-              pretranslate: pretranslateEnabled,
-            },
-            '*'
-          );
-        }
-      } catch (e) {}
-    }
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agySetTranslationProvider === 'function') {
+            cw.__agySetTranslationProvider(activeTranslationProvider, options);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
     return {
       translationProvider: activeTranslationProvider,
       availableProviders: Object.keys(TRANSLATION_ADAPTERS),
@@ -2181,7 +2147,7 @@
   }
 
   window.__agyGetPretranslate = () => isPretranslateEnabled();
-  window.__agySetPretranslate = (enabled, options = {}) => {
+  window.__agySetPretranslate = (enabled) => {
     pretranslateEnabled = Boolean(enabled);
     window.__agyPretranslateStats.enabled = pretranslateEnabled;
     try {
@@ -2206,45 +2172,16 @@
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
-    if (!options._fromSync) {
-      const syncOpts = { _fromSync: true };
-      try {
-        document.querySelectorAll('iframe').forEach((ifr) => {
-          try {
-            const cw = ifr.contentWindow;
-            if (!cw || cw === window) return;
-            try {
-              if (typeof cw.__agySetPretranslate === 'function') {
-                cw.__agySetPretranslate(pretranslateEnabled, syncOpts);
-                return;
-              }
-            } catch (e) {}
-            cw.postMessage(
-              { __agyKoBridge: true, type: 'SET_PRETRANSLATE', pretranslate: pretranslateEnabled },
-              '*'
-            );
-          } catch (e) {}
-        });
-      } catch (e) {}
-      try {
-        if (window.parent && window.parent !== window) {
-          try {
-            if (typeof window.parent.__agySetPretranslate === 'function') {
-              window.parent.__agySetPretranslate(pretranslateEnabled, syncOpts);
-            }
-          } catch (e) {}
-          window.parent.postMessage(
-            {
-              __agyKoBridge: true,
-              type: 'SYNC_STATE',
-              provider: activeTranslationProvider,
-              pretranslate: pretranslateEnabled,
-            },
-            '*'
-          );
-        }
-      } catch (e) {}
-    }
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agySetPretranslate === 'function') {
+            cw.__agySetPretranslate(pretranslateEnabled);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
     return {
       pretranslateEnabled,
       stats: window.__agyPretranslateStats,
@@ -2886,10 +2823,7 @@
       return true;
     }
 
-    if (!window.__agyCustomStatusBarAdapters || !(window.__agyCustomStatusBarAdapters instanceof Map)) {
-      window.__agyCustomStatusBarAdapters = new Map();
-    }
-    if (!window.__agyCustomStatusBarAdapters.has(STATUSBAR_ADAPTER_ID)) {
+    if (window.__agyCustomStatusBarAdapters instanceof Map && !window.__agyCustomStatusBarAdapters.has(STATUSBAR_ADAPTER_ID)) {
       window.__agyCustomStatusBarAdapters.set(STATUSBAR_ADAPTER_ID, createKoTranslatorStatusbarAdapter());
     }
     return false;
@@ -2909,9 +2843,6 @@
         disposeStatusbarAdapter();
       } else if (window.agyStatusBar && typeof window.agyStatusBar.unregisterAdapter === 'function') {
         window.agyStatusBar.unregisterAdapter(STATUSBAR_ADAPTER_ID);
-      }
-      if (window.__agyCustomStatusBarAdapters && typeof window.__agyCustomStatusBarAdapters.delete === 'function') {
-        window.__agyCustomStatusBarAdapters.delete(STATUSBAR_ADAPTER_ID);
       }
     } catch (e) {}
     disposeStatusbarAdapter = null;
@@ -3368,7 +3299,7 @@
     }
   }
 
-  function retranslateVisibleThoughts(clearCache = false, options = {}) {
+  function retranslateVisibleThoughts(clearCache = false) {
     if (clearCache) {
       memCache.clear();
       inflightMap.clear();
@@ -3396,27 +3327,16 @@
     });
     scanThoughtBlocks();
     refreshTranslatorSettingsUi();
-    if (!options._fromSync) {
-      const syncOpts = { _fromSync: true };
-      try {
-        document.querySelectorAll('iframe').forEach((ifr) => {
-          try {
-            const cw = ifr.contentWindow;
-            if (!cw || cw === window) return;
-            try {
-              if (typeof cw.__agyRetranslateVisibleThoughts === 'function') {
-                cw.__agyRetranslateVisibleThoughts(clearCache, syncOpts);
-                return;
-              }
-            } catch (e) {}
-            cw.postMessage(
-              { __agyKoBridge: true, type: 'RETRANSLATE', clearCache: Boolean(clearCache) },
-              '*'
-            );
-          } catch (e) {}
-        });
-      } catch (e) {}
-    }
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agyRetranslateVisibleThoughts === 'function') {
+            cw.__agyRetranslateVisibleThoughts(clearCache);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
     return {
       clearedCache: Boolean(clearCache),
       cacheSize: memCache.size,
@@ -3424,79 +3344,6 @@
     };
   }
   window.__agyRetranslateVisibleThoughts = retranslateVisibleThoughts;
-
-  let crossFrameMessageHandler = null;
-  function setupCrossFrameBridge() {
-    if (crossFrameMessageHandler) return;
-    crossFrameMessageHandler = (ev) => {
-      try {
-        const data = ev && ev.data;
-        if (!data || typeof data !== 'object' || !data.__agyKoBridge) return;
-        if (data.type === 'CHILD_READY') {
-          try {
-            document.querySelectorAll('iframe').forEach((ifr) => {
-              if (ifr.contentWindow === ev.source) {
-                ifr.__agyKoChildReady = true;
-              }
-            });
-          } catch (e) {}
-          if (ev.source && typeof ev.source.postMessage === 'function') {
-            ev.source.postMessage(
-              {
-                __agyKoBridge: true,
-                type: 'SYNC_STATE',
-                provider: activeTranslationProvider,
-                pretranslate: pretranslateEnabled,
-              },
-              '*'
-            );
-          }
-          return;
-        }
-        if (data.type === 'SET_PROVIDER' || data.type === 'SYNC_STATE') {
-          if (
-            typeof data.provider === 'string' &&
-            TRANSLATION_ADAPTERS[data.provider] &&
-            data.provider !== activeTranslationProvider &&
-            typeof window.__agySetTranslationProvider === 'function'
-          ) {
-            window.__agySetTranslationProvider(data.provider, {
-              _fromSync: true,
-              retranslate: data.retranslate !== false,
-            });
-          }
-        }
-        if (data.type === 'SET_PRETRANSLATE' || data.type === 'SYNC_STATE') {
-          if (
-            typeof data.pretranslate === 'boolean' &&
-            data.pretranslate !== pretranslateEnabled &&
-            typeof window.__agySetPretranslate === 'function'
-          ) {
-            window.__agySetPretranslate(data.pretranslate, { _fromSync: true });
-          }
-        }
-        if (data.type === 'RETRANSLATE') {
-          retranslateVisibleThoughts(Boolean(data.clearCache), { _fromSync: true });
-        }
-      } catch (e) {}
-    };
-    window.addEventListener('message', crossFrameMessageHandler);
-
-    try {
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage(
-          {
-            __agyKoBridge: true,
-            type: 'CHILD_READY',
-            version: KO_LOCALIZER_VERSION,
-            provider: activeTranslationProvider,
-            pretranslate: pretranslateEnabled,
-          },
-          '*'
-        );
-      }
-    } catch (e) {}
-  }
 
   function getTrustedPolicyForRemote() {
     if (window.__agyKoTrustedPolicy) return window.__agyKoTrustedPolicy;
@@ -3548,9 +3395,7 @@
             const origMsg = RC.prototype.handleIframeMessage;
             RC.prototype.handleIframeMessage = function (ev) {
               window.__agyRemoteControlInstance = this;
-              if (ev && (ev.data === '__agy_ko_probe__' || (typeof ev.data === 'object' && ev.data && ev.data.__agyKoBridge))) {
-                return;
-              }
+              if (ev && ev.data === '__agy_ko_probe__') return;
               return origMsg.apply(this, arguments);
             };
           }
@@ -3592,7 +3437,7 @@
     }
 
     const iframe = rcEl.querySelector('iframe');
-    if (!iframe || iframe.__agyKoChildReady) return;
+    if (!iframe) return;
 
     try {
       const cw = iframe.contentWindow;
@@ -3726,25 +3571,6 @@
         };
         if (cw.AudioWorklet && cw.AudioWorklet.prototype) {
           cw.AudioWorklet.prototype.addModule = () => Promise.resolve();
-        }
-        if (typeof cw.Worker === 'function' && !cw.Worker.__agyKoPatched) {
-          const OrigWorker = cw.Worker;
-          const PatchedWorker = function (scriptURL, options) {
-            let urlStr = String(scriptURL || '');
-            if (urlStr === '/diff_worker.js' || urlStr.endsWith('/diff_worker.js')) {
-              try {
-                const blob = new cw.Blob([`importScripts("${cdnBaseUrl}/diff_worker.js");`], {
-                  type: 'application/javascript',
-                });
-                const blobUrl = cw.URL.createObjectURL(blob);
-                return new OrigWorker(ttPolicy ? ttPolicy.createScriptURL(blobUrl) : blobUrl, options);
-              } catch (e) {}
-            }
-            return new OrigWorker(scriptURL, options);
-          };
-          PatchedWorker.prototype = OrigWorker.prototype;
-          PatchedWorker.__agyKoPatched = true;
-          cw.Worker = PatchedWorker;
         }
         if (cw.customElements && !cw.customElements.__agyGuarded) {
           const origDef = cw.customElements.define.bind(cw.customElements);
@@ -3976,7 +3802,6 @@
       attributes: true,
       attributeFilter: ['style'],
     });
-    setupCrossFrameBridge();
     loadPersistentTranslatorSettings();
     registerStatusbarTranslatorAdapter();
     if (activeTranslationProvider === 'local-llm') {
@@ -3998,12 +3823,6 @@
       } catch (e) {}
     }
     clearInterval(intervalId);
-    if (crossFrameMessageHandler) {
-      try {
-        window.removeEventListener('message', crossFrameMessageHandler);
-      } catch (e) {}
-      crossFrameMessageHandler = null;
-    }
     if (saveCacheTimer) clearTimeout(saveCacheTimer);
     if (thoughtDebounceTimer) clearTimeout(thoughtDebounceTimer);
     if (settingsFeedbackTimer) clearTimeout(settingsFeedbackTimer);

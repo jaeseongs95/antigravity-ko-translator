@@ -3,7 +3,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 
@@ -28,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.2';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.1';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
@@ -64,7 +63,8 @@ test('non-intrusion & SRP boundary enforcement across renderer modules (01, 06, 
   );
   assert.ok(coalescedMatch[0].includes('runFastThoughtAndTriggerScan()'), 'scheduleCoalescedScan must run fast thought/trigger scan synchronously');
   assert.ok(coalescedMatch[0].includes('}, 16)'), 'scheduleCoalescedScan must coalesce full-DOM localizeStaticUiInRoot via 16ms timer');
-  assert.ok(mod08.includes('observer.takeRecords()'), '08-dom-observer.js must flush self-induced mutation records');
+  assert.ok(mod08.includes('observer.takeRecords()'), '08-dom-observer.js must flush self-induced mutation records'
+  );
 });
 
 test('07-statusbar-adapter pure lifecycle and contract integration', () => {
@@ -77,7 +77,7 @@ test('07-statusbar-adapter pure lifecycle and contract integration', () => {
   let switchedProvider = null;
 
   const sandbox = {
-    KO_LOCALIZER_VERSION: 'v13.2',
+    KO_LOCALIZER_VERSION: 'v12.7',
     activeTranslationProvider: 'local-llm',
     disposed: false,
     getProviderDisplayMeta(id) {
@@ -125,7 +125,7 @@ test('07-statusbar-adapter pure lifecycle and contract integration', () => {
   assert.equal(spec.order, 30);
   assert.equal(spec.className, 'agy-ko-translator-status-btn');
   assert.equal(spec.label(), '[ 번역:LLM ]');
-  assert.ok(spec.title().includes('v13.2'));
+  assert.ok(spec.title().includes('v12.7'));
 
   // Click opens/toggles modal via 06-settings-modal-ui.js delegate
   spec.onClick({}, { shiftKey: false });
@@ -250,61 +250,6 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(mod08.includes('__agySuppressAutoIframeLoad'), 'must guard onIframeLoad to prevent teardownProxyPort freeze');
   assert.ok(mod08.includes('https://www.gstatic.com/antigravity'), 'must load remote iframe scripts from CSP-allowed gstatic mirror');
   assert.ok(mod08.includes('cw.AudioWorklet.prototype.addModule'), 'must stub AudioWorklet.addModule against cross-origin CSP');
-  assert.ok(mod08.includes('importScripts("${cdnBaseUrl}/diff_worker.js")'), 'must wrap /diff_worker.js in Blob Worker for cross-origin CSP');
-  assert.ok(mod08.includes('setupCrossFrameBridge'), 'must wire cross-frame postMessage bridge for child/parent sync');
-  assert.ok(mod08.includes('__agyKoChildReady'), 'must skip about:blank promotion when child iframe already booted with web_bundle patch');
   assert.ok(mod08.includes('runFastThoughtAndTriggerScan()'), 'must run fast thought/trigger scan without blocking on full DOM');
   assert.ok(mod08.includes('scanTimerScheduled = true'), 'must coalesce full-DOM localizeStaticUiInRoot via 16ms timer');
-});
-
-test('syncWebBundleAutoinject and pre-init __agyCustomStatusBarAdapters Map registration', () => {
-  const { syncWebBundleAutoinject } = require(BUNDLE_INJECTOR_PATH);
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-web-bundle-test-'));
-  try {
-    const metaPath = path.join(tmpDir, '.agy_bundle_meta.json');
-    fs.writeFileSync(path.join(tmpDir, 'prism_bundle.orig.js'), 'console.log("orig prism");', 'utf8');
-    fs.writeFileSync(
-      path.join(tmpDir, 'index.orig.html'),
-      '<!doctype html><html><head><script defer src="/prism_bundle.js"></script></head><body></body></html>',
-      'utf8'
-    );
-    fs.writeFileSync(metaPath, JSON.stringify({ lsSize: 123, autoinjectHash: 'oldhash' }, null, 2), 'utf8');
-
-    const res = syncWebBundleAutoinject('/* test autoinject payload */', tmpDir, metaPath);
-    assert.equal(res.synced, true);
-    assert.equal(typeof res.autoinjectHash, 'string');
-    assert.equal(res.autoinjectHash.length, 16);
-
-    const syncedPrism = fs.readFileSync(path.join(tmpDir, 'prism_bundle.js'), 'utf8');
-    assert.ok(syncedPrism.includes(`/* AGY_STATUSBAR_AUTOINJECT_V6:${res.autoinjectHash} */`));
-    assert.ok(syncedPrism.includes('/* test autoinject payload */'));
-
-    const syncedHtml = fs.readFileSync(path.join(tmpDir, 'index.html'), 'utf8');
-    assert.ok(syncedHtml.includes(`src="/prism_bundle.js?agy=${res.autoinjectHash}"`));
-    assert.ok(syncedHtml.includes('__JETSKI_LS_CLIENT_DECORATOR__'));
-
-    const updatedMeta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-    assert.equal(updatedMeta.autoinjectHash, res.autoinjectHash);
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
-
-  // Verify 07-statusbar-adapter creates window.__agyCustomStatusBarAdapters Map even before agyStatusBar initializes
-  const mod07 = fs.readFileSync(path.join(RENDERER_DIR, '07-statusbar-adapter.js'), 'utf8');
-  const preInitSandbox = {
-    KO_LOCALIZER_VERSION: 'v13.2',
-    activeTranslationProvider: 'google-translate',
-    disposed: false,
-    getProviderDisplayMeta: () => ({ shortLabel: 'Google 번역', title: 'Google 번역' }),
-    openOrToggleTranslatorSettingsModal() {},
-    closeTranslatorSettingsModal() {},
-    window: {},
-  };
-  vm.runInNewContext(
-    `${mod07}\n;globalThis.__preInitRes = registerStatusbarTranslatorAdapter();`,
-    preInitSandbox
-  );
-  assert.equal(preInitSandbox.__preInitRes, false);
-  assert.equal(typeof preInitSandbox.window.__agyCustomStatusBarAdapters.has, 'function');
-  assert.equal(preInitSandbox.window.__agyCustomStatusBarAdapters.has('ko-translator'), true);
-});
+});
