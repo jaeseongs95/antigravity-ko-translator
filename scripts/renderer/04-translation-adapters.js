@@ -109,7 +109,14 @@
       async translate({ cleanText, protectedText, savedTokens, signal }) {
         if (signal && signal.aborted) return null;
         const endpoint = await resolveLocalLlmEndpoint();
-        if (!endpoint) return null;
+        if (!endpoint) {
+          return TRANSLATION_ADAPTERS['google-translate'].translate({
+            cleanText,
+            protectedText,
+            savedTokens,
+            signal,
+          });
+        }
 
         const normalizedInput = protectedText
           .replace(/\(\s*using\s+(⟦[CT]\d+⟧)\s*\)/gi, 'using $1')
@@ -166,12 +173,26 @@
           }
         };
 
-        let restored = await requestLlmOnce(`Translate to Korean${tokenHint}:\n`);
+        let restored = null;
+        try {
+          restored = await requestLlmOnce(`Translate to Korean${tokenHint}:\n`);
+          if (signal && signal.aborted) return null;
+          if (!restored || isInvalidCachedOrTranslatedText(restored, cleanText)) {
+            restored = await requestLlmOnce(
+              `Translate every clause into pure Korean (한글) ONLY (no Japanese/Hanja) and MUST include all tokens${tokenHint}:\n`
+            );
+          }
+        } catch (e) {
+          resolvedLlmEndpoint = null;
+        }
         if (signal && signal.aborted) return null;
         if (!restored || isInvalidCachedOrTranslatedText(restored, cleanText)) {
-          restored = await requestLlmOnce(
-            `Translate every clause into pure Korean (한글) ONLY (no Japanese/Hanja) and MUST include all tokens${tokenHint}:\n`
-          );
+          return TRANSLATION_ADAPTERS['google-translate'].translate({
+            cleanText,
+            protectedText,
+            savedTokens,
+            signal,
+          });
         }
         return restored;
       },
@@ -203,11 +224,18 @@
     },
   };
 
-  let activeTranslationProvider = DEFAULT_TRANSLATION_PROVIDER;
+  const isRemoteControlEnv = Boolean(
+    window.__APP_CONFIG__?.isRemoteControl ||
+      (typeof document !== 'undefined' && document.querySelector && document.querySelector('ga-remote-control')) ||
+      /^https:\/\/.*(?:antigravity\.google\.com|usercontent\.goog)/i.test(window.location?.origin || '')
+  );
+  let activeTranslationProvider = isRemoteControlEnv ? 'google-translate' : DEFAULT_TRANSLATION_PROVIDER;
   try {
     const savedProv = localStorage.getItem(PROVIDER_STORAGE_KEY);
     if (savedProv && TRANSLATION_ADAPTERS[savedProv]) {
-      activeTranslationProvider = savedProv;
+      activeTranslationProvider = isRemoteControlEnv && savedProv === 'local-llm' && !window.__agyLocalLlmConfig
+        ? 'google-translate'
+        : savedProv;
     } else {
       localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     }
@@ -290,6 +318,16 @@
     if (prev !== activeTranslationProvider && options.retranslate !== false && typeof retranslateVisibleThoughts === 'function') {
       retranslateVisibleThoughts(false);
     }
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agySetTranslationProvider === 'function') {
+            cw.__agySetTranslationProvider(activeTranslationProvider, options);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
     return {
       translationProvider: activeTranslationProvider,
       availableProviders: Object.keys(TRANSLATION_ADAPTERS),

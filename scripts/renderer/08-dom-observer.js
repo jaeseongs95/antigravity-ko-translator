@@ -52,8 +52,12 @@
     const koText = translateStaticUiSync(rawText);
     if (!koText) return;
 
-    origSpan.setAttribute('data-agy-orig-label', '1');
-    origSpan.style.display = 'none';
+    if (origSpan.getAttribute('data-agy-orig-label') !== '1') {
+      origSpan.setAttribute('data-agy-orig-label', '1');
+    }
+    if (origSpan.style.display !== 'none') {
+      origSpan.style.display = 'none';
+    }
     let koSpan = spans.find((s) => s.classList.contains('agy-ko-trigger-label'));
     if (!koSpan) {
       koSpan = document.createElement('span');
@@ -137,21 +141,27 @@
     if (blockChildren.length > 0) {
       const nextFragment = document.createDocumentFragment();
       const slots = blockChildren.map((ch, idx) => {
+        const chSrc = (ch.textContent || '').trim();
         const syncNode = tryTranslateBlockElementSync(ch);
         let initialNode = syncNode;
         if (!initialNode) {
           const prevSlot = prevWrapChildren[idx];
-          if (prevSlot && /[가-힣]/.test(prevSlot.textContent || '')) {
+          if (
+            prevSlot &&
+            prevSlot.getAttribute('data-agy-src') === chSrc &&
+            /[가-힣]/.test(prevSlot.textContent || '')
+          ) {
             initialNode = prevSlot.cloneNode(true);
           } else {
             initialNode = ch.cloneNode(true);
           }
         }
+        initialNode.setAttribute('data-agy-src', chSrc);
         nextFragment.appendChild(initialNode);
-        return { orig: ch, slot: initialNode, alreadyDone: !!syncNode };
+        return { orig: ch, slot: initialNode, alreadyDone: !!syncNode, src: chSrc };
       });
 
-      wrap.innerHTML = '';
+      wrap.textContent = '';
       wrap.appendChild(nextFragment);
       cursorEdit.setAttribute('data-agy-ko-ready', '1');
       if (triggerBtn) processTriggerButton(triggerBtn);
@@ -173,7 +183,7 @@
 
         try {
           await Promise.all(
-            pendingSlots.map(async ({ orig, slot }) => {
+            pendingSlots.map(async ({ orig, slot, src }) => {
               if (abortCtrl.signal.aborted || cursorEdit.__agyPendingSnapshot !== rawSnapshot) {
                 allTranslated = false;
                 return;
@@ -192,6 +202,7 @@
                   if (!res.translated) allTranslated = false;
                   listClone.appendChild(res.node);
                 }
+                listClone.setAttribute('data-agy-src', src);
                 if (slot.parentNode === wrap) wrap.replaceChild(listClone, slot);
               } else {
                 const res = await translateBlockElement(orig, abortCtrl.signal);
@@ -200,6 +211,7 @@
                   return;
                 }
                 if (!res.translated) allTranslated = false;
+                res.node.setAttribute('data-agy-src', src);
                 if (slot.parentNode === wrap) wrap.replaceChild(res.node, slot);
               }
             })
@@ -227,7 +239,7 @@
       p.textContent = rawSnapshot;
       const syncNode = tryTranslateBlockElementSync(p);
       if (syncNode) {
-        wrap.innerHTML = '';
+        wrap.textContent = '';
         wrap.appendChild(syncNode);
         cursorEdit.setAttribute('data-agy-ko-ready', '1');
         cursorEdit.__agyLastSnapshot = rawSnapshot;
@@ -250,7 +262,7 @@
         try {
           const res = await translateBlockElement(p, abortCtrl.signal);
           if (abortCtrl.signal.aborted || cursorEdit.__agyPendingSnapshot !== rawSnapshot) return;
-          wrap.innerHTML = '';
+          wrap.textContent = '';
           wrap.appendChild(res.node);
           delete cursorEdit.__agyPendingSnapshot;
           if (res.translated) {
@@ -462,6 +474,16 @@
     });
     scanThoughtBlocks();
     refreshTranslatorSettingsUi();
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agyRetranslateVisibleThoughts === 'function') {
+            cw.__agyRetranslateVisibleThoughts(clearCache);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
     return {
       clearedCache: Boolean(clearCache),
       cacheSize: memCache.size,
@@ -469,6 +491,257 @@
     };
   }
   window.__agyRetranslateVisibleThoughts = retranslateVisibleThoughts;
+
+  function getTrustedPolicyForRemote() {
+    if (window.__agyKoTrustedPolicy) return window.__agyKoTrustedPolicy;
+    if (window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function') {
+      const names = [
+        'agy-ko-translator',
+        'agy-ko-translator-' + Date.now(),
+        'angular#unsafe-bypass',
+        'default',
+      ];
+      for (const name of names) {
+        try {
+          const p = window.trustedTypes.createPolicy(name, {
+            createHTML: (s) => s,
+            createScript: (s) => s,
+            createScriptURL: (s) => s,
+          });
+          window.__agyKoTrustedPolicy = p;
+          return p;
+        } catch (e) {}
+      }
+    }
+    return null;
+  }
+
+  function getRemoteControlComponentInstance(rcEl) {
+    if (window.__agyRemoteControlInstance && !window.__agyRemoteControlInstance.destroyed) {
+      return window.__agyRemoteControlInstance;
+    }
+    if (rcEl && rcEl.__ngContext__) {
+      const ctx = rcEl.__ngContext__;
+      const list = Array.isArray(ctx) ? ctx : Array.isArray(ctx.lView) ? ctx.lView : [ctx.component, ctx];
+      for (const item of list) {
+        if (item && typeof item === 'object' && typeof item.proxyCommand === 'function') {
+          window.__agyRemoteControlInstance = item;
+          return item;
+        }
+      }
+    }
+    const nsRoot = window.default_GoogleAntigravity;
+    if (nsRoot && typeof nsRoot === 'object') {
+      for (const k of Object.keys(nsRoot)) {
+        const mod = nsRoot[k];
+        if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) continue;
+        const RC = mod.RemoteControlComponent || (typeof mod.prototype?.proxyCommand === 'function' ? mod : null);
+        if (RC && RC.prototype && typeof RC.prototype.handleIframeMessage === 'function') {
+          if (!RC.prototype.__agyKoProbeHooked) {
+            RC.prototype.__agyKoProbeHooked = true;
+            const origMsg = RC.prototype.handleIframeMessage;
+            RC.prototype.handleIframeMessage = function (ev) {
+              window.__agyRemoteControlInstance = this;
+              if (ev && ev.data === '__agy_ko_probe__') return;
+              return origMsg.apply(this, arguments);
+            };
+          }
+          try {
+            if (typeof MessageEvent === 'function') {
+              window.dispatchEvent(new MessageEvent('message', { data: '__agy_ko_probe__' }));
+            }
+          } catch (e) {}
+          break;
+        }
+      }
+    }
+    return window.__agyRemoteControlInstance && !window.__agyRemoteControlInstance.destroyed
+      ? window.__agyRemoteControlInstance
+      : null;
+  }
+
+  function bridgeRemoteControlIframe() {
+    if (!document || typeof window.__agyMountKoThoughtLocalizer !== 'function') return;
+    const rcEl = document.querySelector('ga-remote-control');
+    if (!rcEl) return;
+
+    // Auto-load antigravity-statusbar in Remote Control host if not yet active
+    if (!window.agyStatusBar && !window.__agyKoFetchingStatusBar && typeof fetch === 'function') {
+      window.__agyKoFetchingStatusBar = true;
+      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js')
+        .then((r) => (r && r.ok ? r.text() : ''))
+        .then((code) => {
+          if (!code || window.agyStatusBar) return;
+          const s = document.createElement('script');
+          const nonce = document.querySelector('script[nonce]')?.nonce;
+          const p = getTrustedPolicyForRemote();
+          if (nonce) s.nonce = nonce;
+          s.text = p ? p.createScript(code) : code;
+          (document.head || document.documentElement).appendChild(s);
+          registerStatusbarTranslatorAdapter();
+        })
+        .catch(() => {});
+    }
+
+    const iframe = rcEl.querySelector('iframe');
+    if (!iframe) return;
+
+    try {
+      const cw = iframe.contentWindow;
+      const cd = iframe.contentDocument;
+      if (cw && cd && cd.body && cw.location && cw.location.origin === window.location.origin) {
+        if (cw.__agyKoLocalizerActive !== KO_LOCALIZER_VERSION) {
+          window.__agyMountKoThoughtLocalizer(cw, cd);
+        }
+        return;
+      }
+    } catch (e) {}
+
+    if (iframe.__agyKoPromoted) return;
+    const rcInst = getRemoteControlComponentInstance(rcEl);
+    if (!rcInst) return;
+
+    const rawSrc =
+      iframe.getAttribute('src') ||
+      (typeof rcInst.iframeSrc === 'function' ? String(rcInst.iframeSrc() || '') : '') ||
+      iframe.src ||
+      '';
+    if (!rawSrc || !rawSrc.includes('?iframe=true')) return;
+
+    let parsedUrl;
+    try {
+      parsedUrl = new URL(rawSrc, window.location.href);
+    } catch (e) {
+      return;
+    }
+    const staticOrigin = parsedUrl.origin;
+    const basePath = parsedUrl.pathname.replace(/\/+$/, '');
+    const verMatch = basePath.match(/\/web\/([^/]+)/);
+    const appVersion = verMatch ? verMatch[1] : '2.28.2';
+
+    iframe.__agyKoPromoted = true;
+    const savedChildPath =
+      new URLSearchParams(window.location.search || '').get('p') ||
+      rcInst.lastSyncedChildPath ||
+      rcInst.initialChildPath ||
+      '';
+    if (savedChildPath) {
+      rcInst.initialChildPath = savedChildPath;
+    }
+
+    const origSrcDesc =
+      typeof HTMLIFrameElement !== 'undefined'
+        ? Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src')
+        : null;
+    const spoofedSrc = `${window.location.origin}${basePath}/?iframe=true`;
+
+    const onBlankLoad = () => {
+      try {
+        const cw = iframe.contentWindow;
+        const cd = iframe.contentDocument;
+        if (!cw || !cd) return;
+
+        const ttPolicy = getTrustedPolicyForRemote();
+        const shellHtml =
+          `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">` +
+          `<link rel="stylesheet" href="${staticOrigin}${basePath}/jetbox.css">` +
+          `<link rel="stylesheet" href="${staticOrigin}${basePath}/compiled_tailwind.css">` +
+          `<style>html,body,#root{height:100%;margin:0;overflow:hidden;background-color:transparent;overscroll-behavior:none;}</style>` +
+          `</head><body><div id="root"></div></body></html>`;
+
+        cd.open();
+        cd.write(ttPolicy ? ttPolicy.createHTML(shellHtml) : shellHtml);
+        cd.close();
+
+        try {
+          cw.history.replaceState(null, '', `${basePath}/?iframe=true`);
+        } catch (e) {}
+
+        cw.__APP_CONFIG__ = {
+          productName: 'antigravity',
+          csrfToken: 'csrf_token',
+          appVersion,
+          isRemoteControl: true,
+        };
+        const ua = cw.navigator?.userAgent || '';
+        const platform =
+          ua.indexOf('Windows') >= 0
+            ? 'win32'
+            : ua.indexOf('Macintosh') >= 0 || ua.indexOf('Mac OS') >= 0
+            ? 'darwin'
+            : 'linux';
+        cw.process = cw.process || {
+          env: { NODE_ENV: 'production' },
+          platform,
+          nextTick: (cb) => Promise.resolve().then(cb),
+        };
+        if (cw.customElements && !cw.customElements.__agyGuarded) {
+          const origDef = cw.customElements.define.bind(cw.customElements);
+          cw.customElements.define = (name, ctor, opts) => {
+            if (!cw.customElements.get(name)) origDef(name, ctor, opts);
+          };
+          cw.customElements.__agyGuarded = true;
+        }
+        try {
+          cw.document.documentElement.style.colorScheme = 'dark';
+        } catch (e) {}
+
+        window.__agyMountKoThoughtLocalizer(cw, cd);
+
+        const nonce = document.querySelector('script[nonce]')?.nonce || '';
+        const prismScript = cd.createElement('script');
+        if (nonce) prismScript.nonce = nonce;
+        prismScript.async = false;
+        const prismUrl = `${staticOrigin}${basePath}/prism_bundle.js`;
+        prismScript.src = ttPolicy ? ttPolicy.createScriptURL(prismUrl) : prismUrl;
+
+        const mainScript = cd.createElement('script');
+        if (nonce) mainScript.nonce = nonce;
+        mainScript.async = false;
+        const mainUrl = `${staticOrigin}${basePath}/main.js`;
+        mainScript.src = ttPolicy ? ttPolicy.createScriptURL(mainUrl) : mainUrl;
+
+        mainScript.onload = () => {
+          if (savedChildPath) rcInst.initialChildPath = savedChildPath;
+          if (typeof rcInst.onIframeLoad === 'function') {
+            try {
+              rcInst.onIframeLoad();
+            } catch (e) {}
+          }
+          window.__agyMountKoThoughtLocalizer(cw, cd);
+          setTimeout(() => {
+            if (
+              typeof rcInst.onIframeLoad === 'function' &&
+              cd.body &&
+              !cd.querySelector('[data-testid="conversation-view"], [data-testid="New Conversation"]')
+            ) {
+              try {
+                rcInst.onIframeLoad();
+              } catch (e) {}
+            }
+            window.__agyMountKoThoughtLocalizer(cw, cd);
+          }, 600);
+        };
+
+        cd.head.appendChild(prismScript);
+        cd.head.appendChild(mainScript);
+      } catch (e) {}
+    };
+
+    iframe.addEventListener('load', onBlankLoad, { once: true });
+    if (origSrcDesc && typeof origSrcDesc.set === 'function') {
+      origSrcDesc.set.call(iframe, 'about:blank');
+    } else {
+      iframe.src = 'about:blank';
+    }
+    try {
+      Object.defineProperty(iframe, 'src', {
+        configurable: true,
+        get: () => spoofedSrc,
+        set: () => {},
+      });
+    } catch (e) {}
+  }
 
   function scanThoughtBlocks() {
     scanTriggerButtonsSync();
@@ -488,36 +761,43 @@
   function scanAll() {
     ensureStyle();
     registerStatusbarTranslatorAdapter();
+    bridgeRemoteControlIframe();
     if (document.body) {
       localizeStaticUiInRoot(document.body);
       ensureNativeSettingsModalIntegration();
     }
     scanThoughtBlocks();
+    if (typeof observer !== 'undefined' && observer && typeof observer.takeRecords === 'function') {
+      observer.takeRecords();
+    }
   }
 
-  // Coalesce DOM mutations into a fast 16ms pass (works even when window is in background)
-  let scanTimerScheduled = false;
+  // Execute DOM localization synchronously inside the MutationObserver microtask (before first paint)
+  // so session switches and virtual scroll chunk mounts never flash unlocalized English text (FOUC).
+  let inSyncScan = false;
 
   function scheduleCoalescedScan() {
-    if (!scanTimerScheduled) {
-      scanTimerScheduled = true;
-      setTimeout(() => {
-        scanTimerScheduled = false;
-        if (disposed) return;
-        if (document.body) {
-          localizeStaticUiInRoot(document.body);
-          ensureNativeSettingsModalIntegration();
-        }
-        scanTriggerButtonsSync();
-        const allCursorEdits = document.querySelectorAll('.cursor-edit');
-        for (const cursorEdit of allCursorEdits) {
-          const container = cursorEdit.closest('.relative') || cursorEdit.parentElement;
-          const btn = container
-            ? container.querySelector('button[data-testid="thinking-collapsible-trigger"]')
-            : null;
-          processCursorEdit(cursorEdit, btn);
-        }
-      }, 16);
+    if (disposed || inSyncScan) return;
+    inSyncScan = true;
+    try {
+      if (document.body) {
+        localizeStaticUiInRoot(document.body);
+        ensureNativeSettingsModalIntegration();
+      }
+      scanTriggerButtonsSync();
+      const allCursorEdits = document.querySelectorAll('.cursor-edit');
+      for (const cursorEdit of allCursorEdits) {
+        const container = cursorEdit.closest('.relative') || cursorEdit.parentElement;
+        const btn = container
+          ? container.querySelector('button[data-testid="thinking-collapsible-trigger"]')
+          : null;
+        processCursorEdit(cursorEdit, btn);
+      }
+      if (typeof observer !== 'undefined' && observer && typeof observer.takeRecords === 'function') {
+        observer.takeRecords();
+      }
+    } finally {
+      inSyncScan = false;
     }
     if (isPretranslateEnabled() && !thoughtDebounceTimer) {
       thoughtDebounceTimer = setTimeout(() => {
@@ -535,7 +815,11 @@
       }
       if (m.type === 'characterData' && m.target) {
         const parent = m.target.parentElement;
-        if (parent && parent.closest('.cursor-edit') && !parent.closest('.agy-ko-thought-wrap')) {
+        if (
+          parent &&
+          !parent.classList.contains('agy-ko-trigger-label') &&
+          !parent.closest('.agy-ko-thought-wrap, .agy-ctx-statusbar, .agy-ko-settings-root')
+        ) {
           scheduleCoalescedScan();
           return;
         }

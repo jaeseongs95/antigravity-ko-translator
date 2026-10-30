@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v12.8';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v12.9';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
@@ -55,11 +55,14 @@ test('non-intrusion & SRP boundary enforcement across renderer modules (01, 06, 
   assert.ok(mod07.includes("className: 'agy-ko-translator-status-btn'"), '07-statusbar-adapter.js must use its own button class token');
 
   // 4. 08-dom-observer.js must not call registerStatusbarTranslatorAdapter inside the 16ms scheduleCoalescedScan loop
-  const coalescedMatch = mod08.match(/function scheduleCoalescedScan\(\)\s*\{[\s\S]*?\n  \}/);
+  const coalescedMatch = mod08.match(/function scheduleCoalescedScan\(\)\s*\{[\s\S]*?\r?\n  \}/);
   assert.ok(coalescedMatch, 'scheduleCoalescedScan must exist in 08-dom-observer.js');
   assert.ok(
     !coalescedMatch[0].includes('registerStatusbarTranslatorAdapter'),
     'scheduleCoalescedScan must not repeatedly call registerStatusbarTranslatorAdapter'
+  );
+  assert.ok(!coalescedMatch[0].includes('}, 16)'), 'scheduleCoalescedScan must execute synchronously before first paint');
+  assert.ok(coalescedMatch[0].includes('observer.takeRecords()'), 'scheduleCoalescedScan must flush self-induced mutation records'
   );
 });
 
@@ -165,3 +168,75 @@ test('host lifecycle, hooks.json CLI contract, and app-update auto-recovery guar
   assert.ok(storageSource.includes('Win32_Process'), 'Watcher spawn must escape Windows Job Object via Win32_Process');
   assert.ok(storageSource.includes('asar_unpatched'), 'Watcher loop must detect unpatched app.asar after app update');
 });
+
+test('Remote Control web support: UserScript header, zero innerHTML (TrustedTypes), Google Translate fallback, and hubFrame bridge', async () => {
+  const { assembleRendererSourceFromModules } = require(BUNDLE_INJECTOR_PATH);
+  const bundleCode = assembleRendererSourceFromModules();
+
+  // 1. UserScript header for antigravity.google.com & antigravity.static.usercontent.goog
+  assert.ok(bundleCode.startsWith('// ==UserScript==\n'), 'Bundle must start with UserScript header');
+  assert.ok(bundleCode.includes('// @match        https://antigravity.google.com/*'));
+  assert.ok(bundleCode.includes('// @match        https://antigravity.static.usercontent.goog/*'));
+  assert.ok(bundleCode.includes('function mountKoThoughtLocalizer(__agyWin, __agyDoc)'));
+
+  // 2. Zero innerHTML/outerHTML assignments across all renderer modules (TrustedTypes compliance)
+  const { RENDERER_MODULE_FILES } = require(path.join(HOST_DIR, 'paths.js'));
+  for (const file of RENDERER_MODULE_FILES) {
+    const src = fs.readFileSync(path.join(RENDERER_DIR, file), 'utf8');
+    assert.ok(!src.includes('.innerHTML'), `${file} must not assign .innerHTML (breaks TrustedTypes on Remote Control)`);
+  }
+
+  // 3. Static UI dictionary covers Remote Control sidebar & auxiliary pane labels
+  const mod02 = fs.readFileSync(path.join(RENDERER_DIR, '02-static-ui-dict.js'), 'utf8');
+  const dictSandbox = {};
+  vm.runInNewContext(`${mod02}\n;globalThis.translateStaticUiSync = translateStaticUiSync;`, dictSandbox);
+  assert.equal(dictSandbox.translateStaticUiSync('Background Commands'), '백그라운드 명령');
+  assert.equal(dictSandbox.translateStaticUiSync('CLI Project'), 'CLI 프로젝트');
+  assert.equal(dictSandbox.translateStaticUiSync('No conversations yet'), '아직 대화가 없습니다');
+  assert.equal(dictSandbox.translateStaticUiSync('Worked for 43m'), '43분 동안 작업함');
+
+  // 4. Remote Control defaults to google-translate and local-llm falls back to google-translate when unreachable
+  const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
+  const mod04 = fs.readFileSync(path.join(RENDERER_DIR, '04-translation-adapters.js'), 'utf8');
+  const adapterSandbox = {
+    DEFAULT_TRANSLATION_PROVIDER: 'local-llm',
+    PROVIDER_STORAGE_KEY: 'agy-ko-thought-provider',
+    PRETRANSLATE_STORAGE_KEY: 'agy-ko-thought-pretranslate',
+    pretranslateEnabled: false,
+    memCache: new Map(),
+    inflightMap: new Map(),
+    scheduleSaveCache() {},
+    isInvalidCachedOrTranslatedText: () => false,
+    localStorage: { getItem: () => null, setItem() {} },
+    document: { querySelectorAll: () => [] },
+    window: {
+      location: { origin: 'https://antigravity.google.com' },
+      __APP_CONFIG__: { isRemoteControl: true },
+    },
+    fetch: async (url) => {
+      if (String(url).includes('127.0.0.1')) {
+        throw new Error('ECONNREFUSED');
+      }
+      return {
+        ok: true,
+        json: async () => [[['리모트 세션 추론 번역 완료', 'Remote session thought translation done']]],
+      };
+    },
+    AbortController,
+    setTimeout,
+    clearTimeout,
+  };
+  vm.runInNewContext(
+    `${mod03}\n${mod04}\n;globalThis.__adapterApi = { getProvider: () => activeTranslationProvider, translate: translateThoughtTextEnToKo, adapters: TRANSLATION_ADAPTERS };`,
+    adapterSandbox
+  );
+  assert.equal(adapterSandbox.__adapterApi.getProvider(), 'google-translate', 'Remote Control must default to google-translate');
+
+  const fallbackOut = await adapterSandbox.__adapterApi.adapters['local-llm'].translate({
+    cleanText: 'Checking remote session state.',
+    protectedText: 'Checking remote session state.',
+    savedTokens: [],
+    signal: null,
+  });
+  assert.equal(fallbackOut, '리모트 세션 추론 번역 완료', 'local-llm must fall back to google-translate when local server is unreachable');
+});

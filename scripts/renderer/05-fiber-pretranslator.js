@@ -188,6 +188,16 @@
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agySetPretranslate === 'function') {
+            cw.__agySetPretranslate(pretranslateEnabled);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
     return {
       pretranslateEnabled,
       stats: window.__agyPretranslateStats,

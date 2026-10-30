@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v12.8';
+  const KO_LOCALIZER_VERSION = 'v12.9';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -36,7 +36,20 @@
 
   const CACHE_STORAGE_KEY = 'agy-ko-thought-cache-v5';
   const MAX_CACHE_ENTRIES = 3000;
-  const memCache = new Map();
+  const sharedRootWin = (() => {
+    try {
+      if (
+        window.parent &&
+        window.parent !== window &&
+        window.parent.location &&
+        window.parent.location.origin === window.location.origin
+      ) {
+        return window.parent;
+      }
+    } catch (e) {}
+    return window;
+  })();
+  const memCache = sharedRootWin.__agySharedKoMemCache || (sharedRootWin.__agySharedKoMemCache = new Map());
   const inflightMap = new Map();
 
   function isInvalidCachedOrTranslatedText(translated, sourceText) {

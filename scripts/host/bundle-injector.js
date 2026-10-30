@@ -34,7 +34,34 @@ function assembleRendererSourceFromModules() {
     return chunk;
   }).join('\n\n');
 
-  const assembled = `(() => {\n${body}\n})();\n`;
+  const userscriptHeader =
+    `// ==UserScript==\n` +
+    `// @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)\n` +
+    `// @namespace    https://github.com/jaeseongs95/antigravity-ko-translator\n` +
+    `// @version      1.2.3\n` +
+    `// @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.\n` +
+    `// @match        https://antigravity.google.com/*\n` +
+    `// @match        https://*.antigravity.google.com/*\n` +
+    `// @match        https://antigravity.static.usercontent.goog/*\n` +
+    `// @run-at       document-idle\n` +
+    `// @grant        none\n` +
+    `// ==/UserScript==\n`;
+
+  const runtimePrelude =
+    `  const window = __agyWin || (typeof globalThis !== 'undefined' ? globalThis.window : undefined);\n` +
+    `  const document = __agyDoc || (window ? window.document : undefined);\n` +
+    `  if (!window || !document) return;\n` +
+    `  const localStorage = window.localStorage;\n` +
+    `  const fetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : (typeof globalThis.fetch === 'function' ? globalThis.fetch : undefined);\n` +
+    `  const MutationObserver = window.MutationObserver || (typeof globalThis !== 'undefined' ? globalThis.MutationObserver : undefined);\n` +
+    `  const Node = window.Node || (typeof globalThis !== 'undefined' ? globalThis.Node : undefined);\n` +
+    `  const NodeFilter = window.NodeFilter || (typeof globalThis !== 'undefined' ? globalThis.NodeFilter : undefined);\n` +
+    `  const StorageEvent = window.StorageEvent || (typeof globalThis !== 'undefined' ? globalThis.StorageEvent : undefined);\n` +
+    `  const MessageEvent = window.MessageEvent || (typeof globalThis !== 'undefined' ? globalThis.MessageEvent : undefined);\n` +
+    `  const HTMLIFrameElement = window.HTMLIFrameElement || (typeof globalThis !== 'undefined' ? globalThis.HTMLIFrameElement : undefined);\n` +
+    `  window.__agyMountKoThoughtLocalizer = mountKoThoughtLocalizer;`;
+
+  const assembled = `${userscriptHeader}(function mountKoThoughtLocalizer(__agyWin, __agyDoc) {\n${runtimePrelude}\n\n${body}\n})(typeof window !== 'undefined' ? window : undefined, typeof document !== 'undefined' ? document : undefined);\n`;
 
   // Keep `scripts/ko_thought_autoinject.js` in sync with canonical default constants when modular sources change
   const currentDisk = fs.existsSync(KO_SCRIPT_PATH)
