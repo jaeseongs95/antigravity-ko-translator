@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.5
+// @version      1.2.6
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.0';
+  const KO_LOCALIZER_VERSION = 'v13.1';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -3442,7 +3442,15 @@
     try {
       const cw = iframe.contentWindow;
       const cd = iframe.contentDocument;
-      if (cw && cd && cd.body && cw.location && cw.location.origin === window.location.origin) {
+      const rootEl = cd && cd.getElementById ? cd.getElementById('root') : null;
+      if (
+        cw &&
+        cd &&
+        cd.body &&
+        cw.location &&
+        cw.location.origin === window.location.origin &&
+        (cw.__agyMainBooted || (rootEl && rootEl.childElementCount > 0))
+      ) {
         if (cw.__agyKoLocalizerActive !== KO_LOCALIZER_VERSION) {
           window.__agyMountKoThoughtLocalizer(cw, cd);
         }
@@ -3450,13 +3458,13 @@
       }
     } catch (e) {}
 
-    if (iframe.__agyKoPromoted) return;
+    if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION) return;
     const rcInst = getRemoteControlComponentInstance(rcEl);
     if (!rcInst) return;
 
     const rawSrc =
-      iframe.getAttribute('src') ||
       (typeof rcInst.iframeSrc === 'function' ? String(rcInst.iframeSrc() || '') : '') ||
+      iframe.getAttribute('src') ||
       iframe.src ||
       '';
     if (!rawSrc || !rawSrc.includes('?iframe=true')) return;
@@ -3467,12 +3475,18 @@
     } catch (e) {
       return;
     }
-    const staticOrigin = parsedUrl.origin;
-    const basePath = parsedUrl.pathname.replace(/\/+$/, '');
+    const basePath = parsedUrl.pathname.replace(/^\/antigravity/, '').replace(/\/+$/, '');
     const verMatch = basePath.match(/\/web\/([^/]+)/);
     const appVersion = verMatch ? verMatch[1] : '2.28.2';
+    // Host CSP on antigravity.google.com blocks script-src from antigravity.static.usercontent.goog
+    // but explicitly allows https://www.gstatic.com, which mirrors all /antigravity/web/<ver>/ assets identically.
+    const cdnOrigin =
+      parsedUrl.hostname === 'antigravity.static.usercontent.goog' || parsedUrl.origin === window.location.origin
+        ? 'https://www.gstatic.com/antigravity'
+        : parsedUrl.origin;
+    const cdnBaseUrl = `${cdnOrigin}${basePath}`;
 
-    iframe.__agyKoPromoted = true;
+    iframe.__agyKoPromoted = KO_LOCALIZER_VERSION;
     const savedChildPath =
       new URLSearchParams(window.location.search || '').get('p') ||
       rcInst.lastSyncedChildPath ||
@@ -3513,11 +3527,13 @@
         const cd = iframe.contentDocument;
         if (!cw || !cd) return;
 
+        const nonce = document.querySelector('script[nonce]')?.nonce || '';
+        const nonceAttr = nonce ? ` nonce="${nonce}"` : '';
         const ttPolicy = getTrustedPolicyForRemote();
         const shellHtml =
           `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">` +
-          `<link rel="stylesheet" href="${staticOrigin}${basePath}/jetbox.css">` +
-          `<link rel="stylesheet" href="${staticOrigin}${basePath}/compiled_tailwind.css">` +
+          `<link rel="stylesheet" href="${cdnBaseUrl}/jetbox.css"${nonceAttr}>` +
+          `<link rel="stylesheet" href="${cdnBaseUrl}/compiled_tailwind.css"${nonceAttr}>` +
           `<style>html,body,#root{height:100%;margin:0;overflow:hidden;background-color:transparent;overscroll-behavior:none;}</style>` +
           `</head><body><div id="root"></div></body></html>`;
 
@@ -3527,6 +3543,12 @@
 
         try {
           cw.history.replaceState(null, '', `${basePath}/?iframe=true`);
+        } catch (e) {}
+        try {
+          Object.defineProperty(cd, 'referrer', {
+            configurable: true,
+            get: () => window.location.href,
+          });
         } catch (e) {}
 
         cw.__APP_CONFIG__ = {
@@ -3557,24 +3579,58 @@
           };
           cw.customElements.__agyGuarded = true;
         }
+        const imgProto = cw.HTMLImageElement && cw.HTMLImageElement.prototype;
+        const imgSrcDesc = imgProto ? Object.getOwnPropertyDescriptor(imgProto, 'src') : null;
+        if (imgProto && imgSrcDesc && typeof imgSrcDesc.set === 'function' && !imgProto.__agyImgSrcPatched) {
+          Object.defineProperty(imgProto, 'src', {
+            configurable: true,
+            enumerable: true,
+            get: imgSrcDesc.get,
+            set(val) {
+              if (typeof val === 'string' && basePath && val.startsWith(basePath + '/')) {
+                val = `${cdnBaseUrl}${val.slice(basePath.length)}`;
+              }
+              return imgSrcDesc.set.call(this, val);
+            },
+          });
+          imgProto.__agyImgSrcPatched = true;
+        }
+        const elProto = cw.Element && cw.Element.prototype;
+        if (elProto && typeof elProto.setAttribute === 'function' && !elProto.__agySetAttrPatched) {
+          const origSetAttr = elProto.setAttribute;
+          elProto.setAttribute = function (name, val) {
+            if (
+              this.tagName === 'IMG' &&
+              typeof name === 'string' &&
+              name.toLowerCase() === 'src' &&
+              typeof val === 'string' &&
+              basePath &&
+              val.startsWith(basePath + '/')
+            ) {
+              val = `${cdnBaseUrl}${val.slice(basePath.length)}`;
+            }
+            return origSetAttr.call(this, name, val);
+          };
+          elProto.__agySetAttrPatched = true;
+        }
         try {
           cw.document.documentElement.style.colorScheme = 'dark';
         } catch (e) {}
 
-        const nonce = document.querySelector('script[nonce]')?.nonce || '';
         const prismScript = cd.createElement('script');
         if (nonce) prismScript.nonce = nonce;
         prismScript.async = false;
-        const prismUrl = `${staticOrigin}${basePath}/prism_bundle.js`;
+        const prismUrl = `${cdnBaseUrl}/prism_bundle.js`;
         prismScript.src = ttPolicy ? ttPolicy.createScriptURL(prismUrl) : prismUrl;
 
         const mainScript = cd.createElement('script');
         if (nonce) mainScript.nonce = nonce;
         mainScript.async = false;
-        const mainUrl = `${staticOrigin}${basePath}/main.js`;
+        const mainUrl = `${cdnBaseUrl}/main.js`;
         mainScript.src = ttPolicy ? ttPolicy.createScriptURL(mainUrl) : mainUrl;
 
         mainScript.onload = () => {
+          cw.__agyMainBooted = true;
           if (savedChildPath) rcInst.initialChildPath = savedChildPath;
           const origLoad =
             rcInst.__agyOrigOnIframeLoad ||
@@ -3595,12 +3651,20 @@
           } catch (e) {}
           window.__agyMountKoThoughtLocalizer(cw, cd);
         };
+        mainScript.onerror = () => {
+          delete iframe.__agyKoPromoted;
+        };
 
         cd.head.appendChild(prismScript);
         cd.head.appendChild(mainScript);
-      } catch (e) {}
+      } catch (e) {
+        delete iframe.__agyKoPromoted;
+      }
     };
 
+    try {
+      delete iframe.src;
+    } catch (e) {}
     iframe.addEventListener('load', onBlankLoad, { once: true });
     if (origSrcDesc && typeof origSrcDesc.set === 'function') {
       origSrcDesc.set.call(iframe, 'about:blank');

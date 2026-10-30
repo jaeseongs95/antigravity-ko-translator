@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.0';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.1';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
@@ -248,6 +248,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(fallbackOut, '리모트 세션 추론 번역 완료', 'local-llm must fall back to google-translate when local server is unreachable');
   const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
   assert.ok(mod08.includes('__agySuppressAutoIframeLoad'), 'must guard onIframeLoad to prevent teardownProxyPort freeze');
+  assert.ok(mod08.includes('https://www.gstatic.com/antigravity'), 'must load remote iframe scripts from CSP-allowed gstatic mirror');
   assert.ok(mod08.includes('cw.AudioWorklet.prototype.addModule'), 'must stub AudioWorklet.addModule against cross-origin CSP');
   assert.ok(mod08.includes('runFastThoughtAndTriggerScan()'), 'must run fast thought/trigger scan without blocking on full DOM');
   assert.ok(mod08.includes('scanTimerScheduled = true'), 'must coalesce full-DOM localizeStaticUiInRoot via 16ms timer');
