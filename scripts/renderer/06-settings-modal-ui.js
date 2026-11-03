@@ -120,8 +120,8 @@
     #agy-ko-translator-modal {
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.62);
-      backdrop-filter: blur(2px);
+      background: rgba(0, 0, 0, 0.68);
+      backdrop-filter: blur(3px);
       z-index: 99999;
       display: flex;
       align-items: center;
@@ -134,48 +134,233 @@
     .agy-ko-modal-dialog {
       background: #18181d;
       border: 1px solid rgba(148, 163, 184, 0.25);
-      border-radius: 12px;
+      border-radius: 14px;
       width: 100%;
-      max-width: 640px;
+      max-width: 560px;
       max-height: 85vh;
       max-height: 88dvh;
       display: flex;
       flex-direction: column;
-      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.7);
+      box-shadow: 0 20px 45px rgba(0, 0, 0, 0.75);
       overflow: hidden;
+      box-sizing: border-box;
     }
     .agy-ko-modal-hdr {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 16px;
+      gap: 10px;
+      padding: 13px 16px;
       background: #202027;
       border-bottom: 1px solid rgba(148, 163, 184, 0.18);
-      font-size: 13.5px;
+      font-size: 14px;
       font-weight: 600;
+      color: #f8fafc;
+    }
+    .agy-ko-modal-hdr-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex-wrap: wrap;
     }
     .agy-ko-modal-body {
       padding: 16px;
       overflow-y: auto;
       -webkit-overflow-scrolling: touch;
+      box-sizing: border-box;
+    }
+    .agy-ko-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 100%;
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .agy-ko-wrapper.is-full-page {
+      padding: 24px;
+      gap: 20px;
+      max-width: 672px;
+      margin: 0 auto;
+    }
+    .agy-ko-page-hdr {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      width: 100%;
+      margin-bottom: 4px;
+    }
+    .agy-ko-page-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin: 0;
+      color: inherit;
+    }
+    .agy-ko-sec-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .agy-ko-sec-title {
+      margin: 0;
+      font-size: 13.5px;
+      font-weight: 600;
+      color: inherit;
+    }
+    .agy-ko-ver-badge {
+      font-size: 11.5px;
+      color: #94a3b8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      background: rgba(148, 163, 184, 0.12);
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-weight: 500;
+    }
+    .agy-ko-card {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid rgba(148, 163, 184, 0.22);
+      background: rgba(255, 255, 255, 0.02);
+      overflow: hidden;
+      box-sizing: border-box;
+    }
+    .agy-ko-row {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 14px 16px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .agy-ko-row + .agy-ko-row {
+      border-top: 1px solid rgba(148, 163, 184, 0.16);
+    }
+    .agy-ko-row-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      width: 100%;
+    }
+    .agy-ko-row-inline {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+    }
+    .agy-ko-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 1 1 200px;
+      min-width: 0;
+    }
+    .agy-ko-title {
+      display: block;
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #f1f5f9;
+      line-height: 1.35;
+    }
+    .agy-ko-desc {
+      display: block;
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.45;
+      word-break: keep-all;
+    }
+    .agy-ko-subrow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-top: 10px;
+      margin-top: 2px;
+      border-top: 1px dashed rgba(148, 163, 184, 0.16);
+      font-size: 12px;
+      color: #94a3b8;
+      flex-wrap: wrap;
+      line-height: 1.4;
+    }
+    .agy-ko-switch-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .agy-ko-switch-lbl {
+      font-size: 12px;
+      font-weight: 500;
+      color: #94a3b8;
+    }
+    .agy-ko-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    .agy-ko-feedback {
+      font-size: 12px;
+      font-weight: 500;
+      padding: 8px 12px;
+      border-radius: 8px;
+      color: #58d68d;
+      background: rgba(88, 214, 141, 0.12);
+      border: 1px solid rgba(88, 214, 141, 0.25);
+      line-height: 1.4;
     }
     @media (max-width: 640px) {
       #agy-ko-translator-modal {
-        padding: 10px;
+        padding: 12px;
       }
       .agy-ko-modal-dialog {
         max-height: 92dvh;
-        border-radius: 10px;
+        border-radius: 12px;
       }
       .agy-ko-modal-hdr {
-        padding: 10px 12px;
-        font-size: 12.5px;
+        padding: 11px 14px;
+        font-size: 13px;
       }
       .agy-ko-modal-body {
         padding: 12px;
       }
-      .agy-ko-pill-btn, .agy-ko-action-btn {
-        padding: 6px 10px;
+      .agy-ko-row {
+        padding: 12px 13px;
+        gap: 9px;
+      }
+      .agy-ko-title {
+        font-size: 13px;
+      }
+      .agy-ko-desc {
+        font-size: 11.5px;
+      }
+      .agy-ko-pill-group {
+        width: 100%;
+        display: flex;
+        box-sizing: border-box;
+      }
+      .agy-ko-pill-btn {
+        flex: 1 1 0%;
+        text-align: center;
+        padding: 7px 10px;
+        font-size: 12px;
+      }
+      .agy-ko-actions {
+        width: 100%;
+        display: flex;
+      }
+      .agy-ko-actions .agy-ko-action-btn {
+        flex: 1 1 0%;
+        text-align: center;
+        padding: 7px 10px;
         font-size: 12px;
       }
     }
@@ -235,36 +420,36 @@
     };
   }
 
-  function renderTranslatorSettingsContent(container, isFullPage = false) {
+  function renderTranslatorSettingsContent(container, isFullPage = false, isModal = false) {
     if (!container) return;
     container.textContent = '';
 
     const wrapper = document.createElement('div');
     wrapper.className = isFullPage
-      ? 'p-6 flex flex-col gap-6 w-full max-w-2xl mx-auto'
-      : 'flex flex-col gap-2 w-full';
+      ? 'agy-ko-wrapper is-full-page p-6 flex flex-col gap-6 w-full max-w-2xl mx-auto'
+      : 'agy-ko-wrapper flex flex-col gap-2 w-full';
 
     if (isFullPage) {
       const pageHdr = document.createElement('div');
-      pageHdr.className = 'flex flex-col gap-1 w-full mb-1';
+      pageHdr.className = 'agy-ko-page-hdr flex flex-col gap-1 w-full mb-1';
       const h2 = document.createElement('h2');
-      h2.className = 'text-xl m-0 font-medium text-foreground';
+      h2.className = 'agy-ko-page-title text-xl m-0 font-medium text-foreground';
       h2.textContent = '한글 번역 설정';
       const sub = document.createElement('div');
-      sub.className = 'text-sm text-muted-foreground';
+      sub.className = 'agy-ko-desc text-sm text-muted-foreground';
       sub.textContent =
         'Antigravity 2.0 추론 과정(Thinking) 및 UI 한글화에 사용할 어댑터 계층(SD-001/SD-003)과 동작 옵션을 설정합니다.';
       pageHdr.appendChild(h2);
       pageHdr.appendChild(sub);
       wrapper.appendChild(pageHdr);
-    } else {
+    } else if (!isModal) {
       const secHdr = document.createElement('div');
-      secHdr.className = 'flex items-center justify-between';
+      secHdr.className = 'agy-ko-sec-hdr flex items-center justify-between';
       const h3 = document.createElement('h3');
-      h3.className = 'm-0 text-sm font-medium text-foreground';
+      h3.className = 'agy-ko-sec-title m-0 text-sm font-medium text-foreground';
       h3.textContent = '한글 번역 계층 (Korean Thought & UI Translator)';
       const verBadge = document.createElement('span');
-      verBadge.className = 'text-xs text-muted-foreground font-mono';
+      verBadge.className = 'agy-ko-ver-badge text-xs text-muted-foreground font-mono';
       verBadge.textContent = `${KO_LOCALIZER_VERSION} · 활성: ${getProviderDisplayMeta(activeTranslationProvider).shortLabel}`;
       secHdr.appendChild(h3);
       secHdr.appendChild(verBadge);
@@ -272,21 +457,21 @@
     }
 
     const card = document.createElement('div');
-    card.className = 'bg-transparent rounded-xl border border-border overflow-hidden divide-y divide-border';
+    card.className = 'agy-ko-card bg-transparent rounded-xl border border-border overflow-hidden divide-y divide-border';
 
     // Row 1: Translation Provider Adapter Selection
     const rowProvider = document.createElement('div');
-    rowProvider.className = 'py-3 px-3.5 w-full bg-transparent flex flex-col gap-2.5';
+    rowProvider.className = 'agy-ko-row py-3 px-3.5 w-full bg-transparent flex flex-col gap-2.5';
     const rowProvTop = document.createElement('div');
-    rowProvTop.className = 'flex justify-between gap-4 items-center flex-wrap';
+    rowProvTop.className = 'agy-ko-row-top flex justify-between gap-4 items-center flex-wrap';
 
     const provInfo = document.createElement('div');
-    provInfo.className = 'flex-1 flex flex-col gap-0.5 min-w-[200px]';
+    provInfo.className = 'agy-ko-info flex-1 flex flex-col gap-0.5 min-w-[200px]';
     const provTitle = document.createElement('span');
-    provTitle.className = 'text-sm font-medium text-foreground';
+    provTitle.className = 'agy-ko-title text-sm font-medium text-foreground';
     provTitle.textContent = '번역 엔진 어댑터 (Translation Adapter)';
     const provDesc = document.createElement('span');
-    provDesc.className = 'text-xs text-muted-foreground leading-relaxed';
+    provDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
     provDesc.textContent = getProviderDisplayMeta(activeTranslationProvider).desc;
     provInfo.appendChild(provTitle);
     provInfo.appendChild(provDesc);
@@ -315,7 +500,7 @@
 
     // Local LLM Endpoint Status Sub-bar
     const llmStatusRow = document.createElement('div');
-    llmStatusRow.className = 'flex items-center justify-between gap-2 pt-1 text-xs text-muted-foreground flex-wrap';
+    llmStatusRow.className = 'agy-ko-subrow flex items-center justify-between gap-2 pt-1 text-xs text-muted-foreground flex-wrap';
     const llmStatusText = document.createElement('span');
     if (activeTranslationProvider !== 'local-llm') {
       llmStatusText.textContent =
@@ -350,23 +535,23 @@
 
     // Row 2: Pre-translate Toggle Switch
     const rowPre = document.createElement('div');
-    rowPre.className = 'py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center';
+    rowPre.className = 'agy-ko-row agy-ko-row-inline py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center';
     const preInfo = document.createElement('div');
-    preInfo.className = 'flex-1 flex flex-col gap-0.5';
+    preInfo.className = 'agy-ko-info flex-1 flex flex-col gap-0.5';
     const preTitle = document.createElement('span');
-    preTitle.className = 'text-sm font-medium text-foreground';
+    preTitle.className = 'agy-ko-title text-sm font-medium text-foreground';
     preTitle.textContent = 'Thinking 백그라운드 사전 번역 (Pre-translation)';
     const preDesc = document.createElement('span');
-    preDesc.className = 'text-xs text-muted-foreground leading-relaxed';
+    preDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
     preDesc.textContent =
       '접혀 있는 Thinking 블록을 펼치기 전에 백그라운드에서 미리 번역합니다. (기본값: 꺼짐)';
     preInfo.appendChild(preTitle);
     preInfo.appendChild(preDesc);
 
     const switchWrap = document.createElement('div');
-    switchWrap.className = 'shrink-0 flex items-center gap-2';
+    switchWrap.className = 'agy-ko-switch-wrap shrink-0 flex items-center gap-2';
     const switchStateLbl = document.createElement('span');
-    switchStateLbl.className = 'text-xs font-medium text-muted-foreground';
+    switchStateLbl.className = 'agy-ko-switch-lbl text-xs font-medium text-muted-foreground';
     switchStateLbl.textContent = pretranslateEnabled ? '켜짐' : '꺼짐';
     const switchBtn = document.createElement('button');
     switchBtn.type = 'button';
@@ -392,20 +577,20 @@
 
     // Row 3: Cache & Immediate Retranslate Controls
     const rowCache = document.createElement('div');
-    rowCache.className = 'py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center flex-wrap';
+    rowCache.className = 'agy-ko-row agy-ko-row-top py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center flex-wrap';
     const cacheInfo = document.createElement('div');
-    cacheInfo.className = 'flex-1 flex flex-col gap-0.5 min-w-[180px]';
+    cacheInfo.className = 'agy-ko-info flex-1 flex flex-col gap-0.5 min-w-[180px]';
     const cacheTitle = document.createElement('span');
-    cacheTitle.className = 'text-sm font-medium text-foreground';
+    cacheTitle.className = 'agy-ko-title text-sm font-medium text-foreground';
     cacheTitle.textContent = '번역 캐시 및 현재 화면 즉시 재번역';
     const cacheDesc = document.createElement('span');
-    cacheDesc.className = 'text-xs text-muted-foreground';
+    cacheDesc.className = 'agy-ko-desc text-xs text-muted-foreground';
     cacheDesc.textContent = `저장된 번역 캐시: ${memCache.size.toLocaleString('en-US')}개 문단`;
     cacheInfo.appendChild(cacheTitle);
     cacheInfo.appendChild(cacheDesc);
 
     const actionWrap = document.createElement('div');
-    actionWrap.className = 'shrink-0 flex items-center gap-2';
+    actionWrap.className = 'agy-ko-actions shrink-0 flex items-center gap-2';
     const retranslateBtn = document.createElement('button');
     retranslateBtn.type = 'button';
     retranslateBtn.className = 'agy-ko-action-btn';
@@ -442,9 +627,7 @@
 
     if (settingsFeedbackMsg) {
       const fb = document.createElement('div');
-      fb.className = 'text-xs font-medium px-2 py-1 rounded';
-      fb.style.color = '#58d68d';
-      fb.style.background = 'rgba(88, 214, 141, 0.1)';
+      fb.className = 'agy-ko-feedback text-xs font-medium px-2 py-1 rounded';
       fb.textContent = settingsFeedbackMsg;
       wrapper.appendChild(fb);
     }
@@ -580,8 +763,16 @@
 
     const hdr = document.createElement('div');
     hdr.className = 'agy-ko-modal-hdr';
+    const hdrLeft = document.createElement('div');
+    hdrLeft.className = 'agy-ko-modal-hdr-left';
     const hdrTitle = document.createElement('span');
-    hdrTitle.textContent = `한글 번역 계층 설정 (${KO_LOCALIZER_VERSION})`;
+    hdrTitle.textContent = '한글 번역 계층 설정';
+    const hdrBadge = document.createElement('span');
+    hdrBadge.id = 'agy-ko-translator-modal-badge';
+    hdrBadge.className = 'agy-ko-ver-badge';
+    hdrBadge.textContent = `${KO_LOCALIZER_VERSION} · ${getProviderDisplayMeta(activeTranslationProvider).shortLabel}`;
+    hdrLeft.appendChild(hdrTitle);
+    hdrLeft.appendChild(hdrBadge);
     const closeBtn = document.createElement('button');
     closeBtn.type = 'button';
     closeBtn.className = 'agy-ko-action-btn';
@@ -597,13 +788,13 @@
       if (e.target === backdrop) closeTranslatorSettingsModal();
     };
 
-    hdr.appendChild(hdrTitle);
+    hdr.appendChild(hdrLeft);
     hdr.appendChild(closeBtn);
 
     const body = document.createElement('div');
     body.className = 'agy-ko-modal-body';
     body.id = 'agy-ko-translator-modal-body';
-    renderTranslatorSettingsContent(body, false);
+    renderTranslatorSettingsContent(body, false, true);
 
     dialog.appendChild(hdr);
     dialog.appendChild(body);
@@ -618,8 +809,12 @@
     if (cardEl) renderTranslatorSettingsContent(cardEl, false);
     const paneEl = document.getElementById('agy-ko-settings-pane');
     if (paneEl && paneEl.style.display !== 'none') renderTranslatorSettingsContent(paneEl, true);
+    const modalBadge = document.getElementById('agy-ko-translator-modal-badge');
+    if (modalBadge) {
+      modalBadge.textContent = `${KO_LOCALIZER_VERSION} · ${getProviderDisplayMeta(activeTranslationProvider).shortLabel}`;
+    }
     const modalBody = document.getElementById('agy-ko-translator-modal-body');
-    if (modalBody) renderTranslatorSettingsContent(modalBody, false);
+    if (modalBody) renderTranslatorSettingsContent(modalBody, false, true);
     if (typeof refreshStatusbarTranslatorAdapter === 'function') {
       refreshStatusbarTranslatorAdapter();
     }
