@@ -446,7 +446,7 @@
     }
   }
 
-  function retranslateVisibleThoughts(clearCache = false) {
+  function retranslateVisibleThoughts(clearCache = false, _fromCrossFrame = false) {
     if (clearCache) {
       memCache.clear();
       inflightMap.clear();
@@ -479,7 +479,10 @@
         try {
           const cw = ifr.contentWindow;
           if (cw && cw !== window && typeof cw.__agyRetranslateVisibleThoughts === 'function') {
-            cw.__agyRetranslateVisibleThoughts(clearCache);
+            if (!_fromCrossFrame) cw.__agyRetranslateVisibleThoughts(clearCache, true);
+            if (!_fromCrossFrame && window.parent && window.parent !== window && typeof window.parent.__agyRetranslateVisibleThoughts === 'function') {
+              window.parent.__agyRetranslateVisibleThoughts(clearCache, true);
+            }
           }
         } catch (e) {}
       });
@@ -568,7 +571,7 @@
     // Auto-load antigravity-statusbar in Remote Control host if not yet active
     if (!window.agyStatusBar && !window.__agyKoFetchingStatusBar && typeof fetch === 'function') {
       window.__agyKoFetchingStatusBar = true;
-      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js')
+      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' + Date.now())
         .then((r) => (r && r.ok ? r.text() : ''))
         .then((code) => {
           if (!code || window.agyStatusBar) return;
@@ -578,7 +581,7 @@
           if (nonce) s.nonce = nonce;
           s.text = p ? p.createScript(code) : code;
           (document.head || document.documentElement).appendChild(s);
-          registerStatusbarTranslatorAdapter();
+          refreshStatusbarTranslatorAdapter();
         })
         .catch(() => {});
     }
@@ -678,15 +681,27 @@
         const nonceAttr = nonce ? ` nonce="${nonce}"` : '';
         const ttPolicy = getTrustedPolicyForRemote();
         const shellHtml =
-          `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">` +
+          `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">` +
           `<link rel="stylesheet" href="${cdnBaseUrl}/jetbox.css"${nonceAttr}>` +
           `<link rel="stylesheet" href="${cdnBaseUrl}/compiled_tailwind.css"${nonceAttr}>` +
-          `<style>html,body,#root{height:100%;margin:0;overflow:hidden;background-color:transparent;overscroll-behavior:none;}</style>` +
+          `<style>html,body,#root{height:100%;height:100dvh;max-height:100dvh;margin:0;overflow:hidden;background-color:transparent;overscroll-behavior:none;-webkit-text-size-adjust:100%;}</style>` +
           `</head><body><div id="root"></div></body></html>`;
 
         cd.open();
         cd.write(ttPolicy ? ttPolicy.createHTML(shellHtml) : shellHtml);
         cd.close();
+
+        try {
+          const prevDec = cw.__JETSKI_LS_CLIENT_DECORATOR__;
+          cw.__JETSKI_LS_CLIENT_DECORATOR__ = function (client) {
+            const decorated = typeof prevDec === 'function' ? prevDec(client) || client : client;
+            if (decorated && typeof decorated === 'object') {
+              cw.__agyCapturedLsClient = decorated;
+              window.__agyCapturedLsClient = decorated;
+            }
+            return decorated;
+          };
+        } catch (e) {}
 
         try {
           cw.history.replaceState(null, '', `${basePath}/?iframe=true`);

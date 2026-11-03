@@ -34,6 +34,8 @@
       cursor: pointer;
       transition: all 0.15s ease;
       white-space: nowrap;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     .agy-ko-pill-btn:hover {
       opacity: 1;
@@ -58,6 +60,8 @@
       cursor: pointer;
       transition: all 0.15s ease;
       white-space: nowrap;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     .agy-ko-action-btn:hover {
       background: rgba(128, 128, 128, 0.28);
@@ -75,6 +79,8 @@
       transition: background-color 0.2s ease;
       padding: 0;
       background: rgba(128, 128, 128, 0.35);
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     .agy-ko-switch[aria-checked="true"] {
       background: #10b981;
@@ -92,6 +98,25 @@
     .agy-ko-switch[aria-checked="true"] .agy-ko-switch-thumb {
       transform: translateX(24px);
     }
+    ga-remote-control {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    ga-remote-control .app-container {
+      display: flex !important;
+      flex-direction: column !important;
+      height: 100vh !important;
+      height: 100dvh !important;
+      max-height: 100dvh !important;
+      overflow: hidden !important;
+      box-sizing: border-box !important;
+    }
+    ga-remote-control .iframe-panel {
+      min-height: 0 !important;
+      flex: 1 1 0% !important;
+      overflow: hidden !important;
+    }
     #agy-ko-translator-modal {
       position: fixed;
       inset: 0;
@@ -104,6 +129,7 @@
       padding: 20px;
       color: #e2e8f0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      box-sizing: border-box;
     }
     .agy-ko-modal-dialog {
       background: #18181d;
@@ -112,6 +138,7 @@
       width: 100%;
       max-width: 640px;
       max-height: 85vh;
+      max-height: 88dvh;
       display: flex;
       flex-direction: column;
       box-shadow: 0 20px 45px rgba(0, 0, 0, 0.7);
@@ -130,6 +157,27 @@
     .agy-ko-modal-body {
       padding: 16px;
       overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    @media (max-width: 640px) {
+      #agy-ko-translator-modal {
+        padding: 10px;
+      }
+      .agy-ko-modal-dialog {
+        max-height: 92dvh;
+        border-radius: 10px;
+      }
+      .agy-ko-modal-hdr {
+        padding: 10px 12px;
+        font-size: 12.5px;
+      }
+      .agy-ko-modal-body {
+        padding: 12px;
+      }
+      .agy-ko-pill-btn, .agy-ko-action-btn {
+        padding: 6px 10px;
+        font-size: 12px;
+      }
     }
   `;
 

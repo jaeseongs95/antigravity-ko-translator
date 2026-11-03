@@ -1,6 +1,6 @@
 {
   "name": "antigravity-ko-translator",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "description": "Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI with modular SOLID architecture and pure StatusBarAdapter integration.",
   "private": true,
   "scripts": {

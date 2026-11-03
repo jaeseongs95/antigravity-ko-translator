@@ -21,7 +21,7 @@ Antigravity 2.0 네이티브 앱에서 영어로 스트리밍되는 **Thinking(�
 4. **원격 제어(Remote Control) 웹 및 모바일 브라우저 완벽 지원 (`https://antigravity.google.com/r/...`)**
    - 최상위 `<ga-remote-control>` Angular 호스트 셸과 내부 워크벤치 `iframe`(`hubFrame`)을 자동 브릿지하여, 데스크톱 및 모바일 웹 브라우저 원격 세션에서도 `Worked for 43m` → `43분 동안 작업함`, `.cursor-edit` 추론 블록, 사이드바(`새 대화`, `맞춤 설정`, `CLI 프로젝트`), 우측 패널(`개요`, `서브에이전트`, `백그라운드 명령`) 한글 번역과 하단 상태바의 `[ 번역:구글 ]` 어댑터 버튼이 동일하게 동작합니다.
    - 리모트 세션에서는 자동으로 `google-translate` 어댑터를 기본 선택하며, `local-llm`이 선택된 상태에서도 로컬 LLM 서버가 응답하지 않으면 자동으로 `google-translate`로 폴백합니다.
-   - `scripts/ko_thought_autoinject.js` 상단에 Tampermonkey/AdGuard용 `// ==UserScript==` 헤더가 포함되어 있으며, 브라우저 북마클릿(CSP `nonce` 및 `TrustedTypes` 정책 완벽 대응, 상태바 미실행 시 `antigravity-statusbar` 자동 로드 포함)으로 즉시 실행할 수 있습니다:
+   - `scripts/ko_thought_autoinject.js` 상단에 Tampermonkey/AdGuard용 `// ==UserScript==` 헤더가 포함되어 있으며, 확장프로그램을 지원하지 않는 **모바일 크롬(Mobile Chrome)**에서도 아래 주소창 북마클릿(CSP `nonce`·`TrustedTypes` 정책 대응, `100dvh` 뷰포트 보정, `__JETSKI_LS_CLIENT_DECORATOR__` RPC 클라이언트 브릿지 및 상태바 미실행 시 `antigravity-statusbar` `v1.3.4+` 자동 로드 포함)으로 즉시 실행할 수 있습니다:
      ```javascript
      javascript:(()=>{fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-ko-translator/main/scripts/ko_thought_autoinject.js?t='+Date.now()).then(r=>r.text()).then(c=>{const s=document.createElement('script'),n=document.querySelector('script[nonce]')?.nonce,p=window.trustedTypes?.createPolicy('agy-ko-'+Date.now(),{createScript:x=>x});if(n)s.nonce=n;s.text=p?p.createScript(c):c;document.head.appendChild(s)})})();
      ```
@@ -33,7 +33,7 @@ Antigravity 2.0 네이티브 앱에서 영어로 스트리밍되는 **Thinking(�
 ## 모듈 구조 (SOLID Architecture)
 
 - **렌더러 계층 (`scripts/renderer/`)**:
-  - `01-bootstrap-and-cache.js`: 버전 가드(`v12.9`), `remove-conversation-history: false`(`대화 기록` 메뉴) 상시 활성화, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
+  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.2`), `remove-conversation-history: false`(`대화 기록` 메뉴) 상시 활성화, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
   - `02-static-ui-dict.js`: 0ms 정적 UI 한국어 사전(`STATIC_UI_MAP`) 및 동기 패턴 매처
   - `03-text-tokenizer.js`: 코드(`⟦C0⟧`)·식별자/인용구(`⟦T0⟧`) 보호 토크나이저, 조사 교정, 마크다운 세그먼트 추출
   - `04-translation-adapters.js`: Port & Adapter 번역 엔진(`local-llm`, `google-translate`, 커스텀 어댑터) 및 동시성/취소 큐

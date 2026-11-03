@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.6
+// @version      1.2.7
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.1';
+  const KO_LOCALIZER_VERSION = 'v13.2';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -2224,6 +2224,8 @@
       cursor: pointer;
       transition: all 0.15s ease;
       white-space: nowrap;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     .agy-ko-pill-btn:hover {
       opacity: 1;
@@ -2248,6 +2250,8 @@
       cursor: pointer;
       transition: all 0.15s ease;
       white-space: nowrap;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     .agy-ko-action-btn:hover {
       background: rgba(128, 128, 128, 0.28);
@@ -2265,6 +2269,8 @@
       transition: background-color 0.2s ease;
       padding: 0;
       background: rgba(128, 128, 128, 0.35);
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     .agy-ko-switch[aria-checked="true"] {
       background: #10b981;
@@ -2282,6 +2288,25 @@
     .agy-ko-switch[aria-checked="true"] .agy-ko-switch-thumb {
       transform: translateX(24px);
     }
+    ga-remote-control {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    ga-remote-control .app-container {
+      display: flex !important;
+      flex-direction: column !important;
+      height: 100vh !important;
+      height: 100dvh !important;
+      max-height: 100dvh !important;
+      overflow: hidden !important;
+      box-sizing: border-box !important;
+    }
+    ga-remote-control .iframe-panel {
+      min-height: 0 !important;
+      flex: 1 1 0% !important;
+      overflow: hidden !important;
+    }
     #agy-ko-translator-modal {
       position: fixed;
       inset: 0;
@@ -2294,6 +2319,7 @@
       padding: 20px;
       color: #e2e8f0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      box-sizing: border-box;
     }
     .agy-ko-modal-dialog {
       background: #18181d;
@@ -2302,6 +2328,7 @@
       width: 100%;
       max-width: 640px;
       max-height: 85vh;
+      max-height: 88dvh;
       display: flex;
       flex-direction: column;
       box-shadow: 0 20px 45px rgba(0, 0, 0, 0.7);
@@ -2320,6 +2347,27 @@
     .agy-ko-modal-body {
       padding: 16px;
       overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    @media (max-width: 640px) {
+      #agy-ko-translator-modal {
+        padding: 10px;
+      }
+      .agy-ko-modal-dialog {
+        max-height: 92dvh;
+        border-radius: 10px;
+      }
+      .agy-ko-modal-hdr {
+        padding: 10px 12px;
+        font-size: 12.5px;
+      }
+      .agy-ko-modal-body {
+        padding: 12px;
+      }
+      .agy-ko-pill-btn, .agy-ko-action-btn {
+        padding: 6px 10px;
+        font-size: 12px;
+      }
     }
   `;
 
@@ -3299,7 +3347,7 @@
     }
   }
 
-  function retranslateVisibleThoughts(clearCache = false) {
+  function retranslateVisibleThoughts(clearCache = false, _fromCrossFrame = false) {
     if (clearCache) {
       memCache.clear();
       inflightMap.clear();
@@ -3332,7 +3380,10 @@
         try {
           const cw = ifr.contentWindow;
           if (cw && cw !== window && typeof cw.__agyRetranslateVisibleThoughts === 'function') {
-            cw.__agyRetranslateVisibleThoughts(clearCache);
+            if (!_fromCrossFrame) cw.__agyRetranslateVisibleThoughts(clearCache, true);
+            if (!_fromCrossFrame && window.parent && window.parent !== window && typeof window.parent.__agyRetranslateVisibleThoughts === 'function') {
+              window.parent.__agyRetranslateVisibleThoughts(clearCache, true);
+            }
           }
         } catch (e) {}
       });
@@ -3421,7 +3472,7 @@
     // Auto-load antigravity-statusbar in Remote Control host if not yet active
     if (!window.agyStatusBar && !window.__agyKoFetchingStatusBar && typeof fetch === 'function') {
       window.__agyKoFetchingStatusBar = true;
-      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js')
+      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' + Date.now())
         .then((r) => (r && r.ok ? r.text() : ''))
         .then((code) => {
           if (!code || window.agyStatusBar) return;
@@ -3431,7 +3482,7 @@
           if (nonce) s.nonce = nonce;
           s.text = p ? p.createScript(code) : code;
           (document.head || document.documentElement).appendChild(s);
-          registerStatusbarTranslatorAdapter();
+          refreshStatusbarTranslatorAdapter();
         })
         .catch(() => {});
     }
@@ -3531,15 +3582,27 @@
         const nonceAttr = nonce ? ` nonce="${nonce}"` : '';
         const ttPolicy = getTrustedPolicyForRemote();
         const shellHtml =
-          `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">` +
+          `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">` +
           `<link rel="stylesheet" href="${cdnBaseUrl}/jetbox.css"${nonceAttr}>` +
           `<link rel="stylesheet" href="${cdnBaseUrl}/compiled_tailwind.css"${nonceAttr}>` +
-          `<style>html,body,#root{height:100%;margin:0;overflow:hidden;background-color:transparent;overscroll-behavior:none;}</style>` +
+          `<style>html,body,#root{height:100%;height:100dvh;max-height:100dvh;margin:0;overflow:hidden;background-color:transparent;overscroll-behavior:none;-webkit-text-size-adjust:100%;}</style>` +
           `</head><body><div id="root"></div></body></html>`;
 
         cd.open();
         cd.write(ttPolicy ? ttPolicy.createHTML(shellHtml) : shellHtml);
         cd.close();
+
+        try {
+          const prevDec = cw.__JETSKI_LS_CLIENT_DECORATOR__;
+          cw.__JETSKI_LS_CLIENT_DECORATOR__ = function (client) {
+            const decorated = typeof prevDec === 'function' ? prevDec(client) || client : client;
+            if (decorated && typeof decorated === 'object') {
+              cw.__agyCapturedLsClient = decorated;
+              window.__agyCapturedLsClient = decorated;
+            }
+            return decorated;
+          };
+        } catch (e) {}
 
         try {
           cw.history.replaceState(null, '', `${basePath}/?iframe=true`);

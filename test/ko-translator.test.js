@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.1';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.2';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
@@ -252,4 +252,9 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(mod08.includes('cw.AudioWorklet.prototype.addModule'), 'must stub AudioWorklet.addModule against cross-origin CSP');
   assert.ok(mod08.includes('runFastThoughtAndTriggerScan()'), 'must run fast thought/trigger scan without blocking on full DOM');
   assert.ok(mod08.includes('scanTimerScheduled = true'), 'must coalesce full-DOM localizeStaticUiInRoot via 16ms timer');
+  assert.ok(mod08.includes('__JETSKI_LS_CLIENT_DECORATOR__'), 'must pre-hook __JETSKI_LS_CLIENT_DECORATOR__ on promoted Mobile Chrome iframe');
+  assert.ok(mod08.includes('height:100dvh'), 'must enforce 100dvh viewport on Mobile Chrome remote iframe');
+  const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
+  assert.ok(mod06.includes('@media (max-width: 640px)'), 'must include mobile responsive rules for translator modal');
+  assert.ok(mod06.includes('height: 100dvh !important'), 'must enforce 100dvh on ga-remote-control .app-container');
 });
