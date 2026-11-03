@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.3';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.4';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
@@ -257,6 +257,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
   assert.ok(mod06.includes('@media (max-width: 640px)'), 'must include mobile responsive rules for translator modal');
   assert.ok(mod06.includes('.agy-ko-card') && mod06.includes('.agy-ko-title') && mod06.includes('.agy-ko-desc'), 'must use self-contained CSS layout classes for Tailwind-less Remote Control host');
+  assert.ok(mod06.includes('.agy-ko-row.agy-ko-row-inline') && mod06.includes('.agy-ko-row.agy-ko-row-top'), 'must override .agy-ko-row column direction with flex-direction: row on inline/top rows');
+  assert.ok(!mod06.includes('flex: 1 1 200px'), 'must not use flex-basis: 200px on .agy-ko-info (causes 200px vertical gap if parent is column)');
   assert.ok(mod06.includes('renderTranslatorSettingsContent(body, false, true)'), 'modal must pass isModal=true to omit duplicate section heading');
   assert.ok(mod06.includes('height: 100dvh !important'), 'must enforce 100dvh on ga-remote-control .app-container');
 });

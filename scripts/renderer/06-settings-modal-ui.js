@@ -240,16 +240,20 @@
     .agy-ko-row + .agy-ko-row {
       border-top: 1px solid rgba(148, 163, 184, 0.16);
     }
-    .agy-ko-row-top {
+    .agy-ko-row-top,
+    .agy-ko-row.agy-ko-row-top {
       display: flex;
+      flex-direction: row;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
       width: 100%;
     }
-    .agy-ko-row-inline {
+    .agy-ko-row-inline,
+    .agy-ko-row.agy-ko-row-inline {
       display: flex;
+      flex-direction: row;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
@@ -258,8 +262,13 @@
     .agy-ko-info {
       display: flex;
       flex-direction: column;
-      gap: 4px;
-      flex: 1 1 200px;
+      align-items: flex-start;
+      text-align: left;
+      gap: 3px;
+      flex: 1 1 0%;
+      min-width: 180px;
+    }
+    .agy-ko-row-inline .agy-ko-info {
       min-width: 0;
     }
     .agy-ko-title {
@@ -422,6 +431,7 @@
 
   function renderTranslatorSettingsContent(container, isFullPage = false, isModal = false) {
     if (!container) return;
+    ensureStyle();
     container.textContent = '';
 
     const wrapper = document.createElement('div');
@@ -648,6 +658,9 @@
         cardEl.id = 'agy-ko-settings-card';
         cardEl.className = 'agy-ko-settings-root mb-6';
         permEl.parentElement.insertBefore(cardEl, permEl);
+      }
+      if (cardEl.getAttribute('data-agy-ko-ver') !== KO_LOCALIZER_VERSION) {
+        cardEl.setAttribute('data-agy-ko-ver', KO_LOCALIZER_VERSION);
         renderTranslatorSettingsContent(cardEl, false);
       }
     }

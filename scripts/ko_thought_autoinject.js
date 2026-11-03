@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.8
+// @version      1.2.9
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.3';
+  const KO_LOCALIZER_VERSION = 'v13.4';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -2430,16 +2430,20 @@
     .agy-ko-row + .agy-ko-row {
       border-top: 1px solid rgba(148, 163, 184, 0.16);
     }
-    .agy-ko-row-top {
+    .agy-ko-row-top,
+    .agy-ko-row.agy-ko-row-top {
       display: flex;
+      flex-direction: row;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
       width: 100%;
     }
-    .agy-ko-row-inline {
+    .agy-ko-row-inline,
+    .agy-ko-row.agy-ko-row-inline {
       display: flex;
+      flex-direction: row;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
@@ -2448,8 +2452,13 @@
     .agy-ko-info {
       display: flex;
       flex-direction: column;
-      gap: 4px;
-      flex: 1 1 200px;
+      align-items: flex-start;
+      text-align: left;
+      gap: 3px;
+      flex: 1 1 0%;
+      min-width: 180px;
+    }
+    .agy-ko-row-inline .agy-ko-info {
       min-width: 0;
     }
     .agy-ko-title {
@@ -2612,6 +2621,7 @@
 
   function renderTranslatorSettingsContent(container, isFullPage = false, isModal = false) {
     if (!container) return;
+    ensureStyle();
     container.textContent = '';
 
     const wrapper = document.createElement('div');
@@ -2838,6 +2848,9 @@
         cardEl.id = 'agy-ko-settings-card';
         cardEl.className = 'agy-ko-settings-root mb-6';
         permEl.parentElement.insertBefore(cardEl, permEl);
+      }
+      if (cardEl.getAttribute('data-agy-ko-ver') !== KO_LOCALIZER_VERSION) {
+        cardEl.setAttribute('data-agy-ko-ver', KO_LOCALIZER_VERSION);
         renderTranslatorSettingsContent(cardEl, false);
       }
     }
