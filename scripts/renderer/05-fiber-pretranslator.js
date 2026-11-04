@@ -26,6 +26,19 @@
           } catch (e) {}
           changed = true;
         }
+        const savedShow = items[SHOW_THINKING_STORAGE_KEY];
+        if (savedShow !== undefined) {
+          const nextShow = savedShow === '1' || savedShow === 'true' || savedShow === true;
+          if (nextShow !== showThinkingEnabled) {
+            showThinkingEnabled = nextShow;
+            verboseStepsEnsured = false;
+            try {
+              localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
+            } catch (e) {}
+            ensureVerboseConversationStepsEnabled();
+            changed = true;
+          }
+        }
         const savedPre = items[PRETRANSLATE_STORAGE_KEY];
         if (savedPre !== undefined) {
           const nextPre = savedPre === '1' || savedPre === 'true' || savedPre === true;
@@ -161,6 +174,53 @@
       pretranslateRunning = false;
     }
   }
+
+  window.__agyGetShowThinking = () => isShowThinkingEnabled();
+  window.__agySetShowThinking = (enabled) => {
+    showThinkingEnabled = Boolean(enabled);
+    verboseStepsEnsured = false;
+    try {
+      localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
+    } catch (e) {}
+    if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
+      try {
+        window.nativeStorage.updateItems({
+          [PROVIDER_STORAGE_KEY]: activeTranslationProvider,
+          [PRETRANSLATE_STORAGE_KEY]: pretranslateEnabled ? '1' : '0',
+          [SHOW_THINKING_STORAGE_KEY]: showThinkingEnabled ? '1' : '0',
+        });
+      } catch (e) {}
+    }
+    const st = resolveUserSettingsStore();
+    if (st && typeof st.setPrefValue === 'function') {
+      verboseStepsEnsured = true;
+      Promise.resolve(st.setPrefValue('verboseConversationSteps', showThinkingEnabled))
+        .then(() => {
+          if (typeof refreshTranslatorSettingsUi === 'function') {
+            refreshTranslatorSettingsUi();
+          }
+        })
+        .catch(() => {
+          verboseStepsEnsured = false;
+        });
+    }
+    if (typeof refreshTranslatorSettingsUi === 'function') {
+      refreshTranslatorSettingsUi();
+    }
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agySetShowThinking === 'function') {
+            cw.__agySetShowThinking(showThinkingEnabled);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
+    return {
+      showThinkingEnabled,
+    };
+  };
 
   window.__agyGetPretranslate = () => isPretranslateEnabled();
   window.__agySetPretranslate = (enabled) => {

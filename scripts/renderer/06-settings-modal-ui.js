@@ -543,7 +543,55 @@
     rowProvider.appendChild(llmStatusRow);
     card.appendChild(rowProvider);
 
-    // Row 2: Pre-translate Toggle Switch
+    // Row 2: Show Thinking (verboseConversationSteps) Toggle Switch
+    const thinkingVisible = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
+    const rowShowThinking = document.createElement('div');
+    rowShowThinking.className =
+      'agy-ko-row agy-ko-row-inline py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center';
+    const showThinkingInfo = document.createElement('div');
+    showThinkingInfo.className = 'agy-ko-info flex-1 flex flex-col gap-0.5';
+    const showThinkingTitle = document.createElement('span');
+    showThinkingTitle.className = 'agy-ko-title text-sm font-medium text-foreground';
+    showThinkingTitle.textContent = 'Thinking (추론 과정) 표시';
+    const showThinkingDesc = document.createElement('span');
+    showThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
+    showThinkingDesc.textContent =
+      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계를 숨기지 않고 화면에 상시 표시합니다. (기본값: 켜짐)';
+    showThinkingInfo.appendChild(showThinkingTitle);
+    showThinkingInfo.appendChild(showThinkingDesc);
+
+    const showThinkingSwitchWrap = document.createElement('div');
+    showThinkingSwitchWrap.className = 'agy-ko-switch-wrap shrink-0 flex items-center gap-2';
+    const showThinkingSwitchLbl = document.createElement('span');
+    showThinkingSwitchLbl.className = 'agy-ko-switch-lbl text-xs font-medium text-muted-foreground';
+    showThinkingSwitchLbl.textContent = thinkingVisible ? '켜짐' : '꺼짐';
+    const showThinkingSwitchBtn = document.createElement('button');
+    showThinkingSwitchBtn.type = 'button';
+    showThinkingSwitchBtn.setAttribute('role', 'switch');
+    showThinkingSwitchBtn.setAttribute('data-testid', 'agy-ko-show-thinking-switch');
+    showThinkingSwitchBtn.setAttribute('aria-checked', thinkingVisible ? 'true' : 'false');
+    showThinkingSwitchBtn.className = 'agy-ko-switch';
+    const showThinkingThumb = document.createElement('span');
+    showThinkingThumb.className = 'agy-ko-switch-thumb';
+    showThinkingSwitchBtn.appendChild(showThinkingThumb);
+    showThinkingSwitchBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = !(typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true);
+      if (typeof window.__agySetShowThinking === 'function') {
+        window.__agySetShowThinking(next);
+      }
+      showSettingsFeedback(
+        `✓ Thinking(추론 과정) 표시가 '${next ? '켜짐 (ON)' : '꺼짐 (OFF)'}'(으)로 설정되었습니다.`
+      );
+    };
+    showThinkingSwitchWrap.appendChild(showThinkingSwitchLbl);
+    showThinkingSwitchWrap.appendChild(showThinkingSwitchBtn);
+    rowShowThinking.appendChild(showThinkingInfo);
+    rowShowThinking.appendChild(showThinkingSwitchWrap);
+    card.appendChild(rowShowThinking);
+
+    // Row 3: Pre-translate Toggle Switch
     const rowPre = document.createElement('div');
     rowPre.className = 'agy-ko-row agy-ko-row-inline py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center';
     const preInfo = document.createElement('div');
@@ -649,21 +697,9 @@
     const modal = document.querySelector('.settings-modal-container');
     if (!modal) return;
 
-    // 1. Inject inline card at top of General tab (#agent-permissions)
-    const permEl = modal.querySelector('#agent-permissions');
-    if (permEl && permEl.parentElement) {
-      let cardEl = modal.querySelector('#agy-ko-settings-card');
-      if (!cardEl) {
-        cardEl = document.createElement('div');
-        cardEl.id = 'agy-ko-settings-card';
-        cardEl.className = 'agy-ko-settings-root mb-6';
-        permEl.parentElement.insertBefore(cardEl, permEl);
-      }
-      if (cardEl.getAttribute('data-agy-ko-ver') !== KO_LOCALIZER_VERSION) {
-        cardEl.setAttribute('data-agy-ko-ver', KO_LOCALIZER_VERSION);
-        renderTranslatorSettingsContent(cardEl, false);
-      }
-    }
+    // 1. Ensure any legacy inline card on General tab (#agy-ko-settings-card) is removed
+    const legacyCard = modal.querySelector('#agy-ko-settings-card');
+    if (legacyCard) legacyCard.remove();
 
     // 2. Inject dedicated '한글 번역' nav tab in left sidebar of Settings modal
     const modelsNavBtn = modal.querySelector('button[data-testid="settings-nav-item-Models"]');
@@ -818,8 +854,8 @@
   window.__agyOpenTranslatorSettingsModal = openOrToggleTranslatorSettingsModal;
 
   function refreshTranslatorSettingsUi() {
-    const cardEl = document.getElementById('agy-ko-settings-card');
-    if (cardEl) renderTranslatorSettingsContent(cardEl, false);
+    const legacyCard = document.getElementById('agy-ko-settings-card');
+    if (legacyCard) legacyCard.remove();
     const paneEl = document.getElementById('agy-ko-settings-pane');
     if (paneEl && paneEl.style.display !== 'none') renderTranslatorSettingsContent(paneEl, true);
     const modalBadge = document.getElementById('agy-ko-translator-modal-badge');

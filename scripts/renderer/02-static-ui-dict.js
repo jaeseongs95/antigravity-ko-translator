@@ -335,6 +335,8 @@
 
     // Settings -> Execution & Queued Messages & Sandbox
     'Queued Messages': '대기열 메시지',
+    'Configure what the agent can do in local and remote conversations.':
+      '로컬 및 원격 대화에서 에이전트가 수행할 수 있는 작업 권한을 설정합니다.',
     'Configure when follow-up messages are sent.': '후속 메시지를 전송하는 시점을 설정합니다.',
     'Queue': '대기열 추가',
     'Send Immediately': '즉시 보내기',
@@ -410,6 +412,11 @@
       '사용자 확인이 필요하거나 에이전트 작업이 완료되었을 때 시스템 알림을 표시합니다.',
     'Verbose Agent Chat': '상세 에이전트 채팅 표시',
     'Display and preserve intermediate thinking steps.': '중간 추론 단계를 화면에 표시하고 보존합니다.',
+    'Conversation Steps': '대화 단계 표시',
+    'Choose how much detail is shown during a conversation.':
+      '대화 중 표시할 중간 과정의 상세 수준을 선택합니다.',
+    'Verbose': '상세히',
+    'Waiting for your approval': '사용자 승인 대기 중',
     'Custom Context Menus': '맞춤 컨텍스트 메뉴',
     'Replace the default browser right-click menu with quick actions.':
       '기본 우클릭 메뉴를 빠른 작업 메뉴로 대체합니다.',

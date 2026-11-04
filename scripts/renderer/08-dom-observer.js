@@ -843,6 +843,7 @@
   }
 
   function scanThoughtBlocks() {
+    ensureVerboseConversationStepsEnabled();
     scanTriggerButtonsSync();
     const allCursorEdits = document.querySelectorAll('.cursor-edit');
     for (const cursorEdit of allCursorEdits) {
@@ -864,6 +865,13 @@
     if (document.body) {
       localizeStaticUiInRoot(document.body);
       ensureNativeSettingsModalIntegration();
+      if (
+        document.getElementById('agy-ko-translator-modal') &&
+        !document.querySelector('[data-testid="agy-ko-show-thinking-switch"]') &&
+        typeof refreshTranslatorSettingsUi === 'function'
+      ) {
+        refreshTranslatorSettingsUi();
+      }
     }
     scanThoughtBlocks();
     if (typeof observer !== 'undefined' && observer && typeof observer.takeRecords === 'function') {
@@ -877,6 +885,7 @@
   let scanTimerScheduled = false;
 
   function runFastThoughtAndTriggerScan() {
+    ensureVerboseConversationStepsEnabled();
     if (disposed || inFastScan) return;
     inFastScan = true;
     try {
@@ -908,6 +917,13 @@
         if (document.body) {
           localizeStaticUiInRoot(document.body);
           ensureNativeSettingsModalIntegration();
+      if (
+        document.getElementById('agy-ko-translator-modal') &&
+        !document.querySelector('[data-testid="agy-ko-show-thinking-switch"]') &&
+        typeof refreshTranslatorSettingsUi === 'function'
+      ) {
+        refreshTranslatorSettingsUi();
+      }
         }
         runFastThoughtAndTriggerScan();
       }, 16);

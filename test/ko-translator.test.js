@@ -27,7 +27,10 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.4';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.5';"));
+  assert.ok(bundleCode.includes("'remove-conversation-history'"));
+  assert.ok(bundleCode.includes("ensureVerboseConversationStepsEnabled"));
+  assert.ok(bundleCode.includes("'verboseConversationSteps'"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
@@ -201,6 +204,9 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(dictSandbox.translateStaticUiSync('CLI Project'), 'CLI 프로젝트');
   assert.equal(dictSandbox.translateStaticUiSync('No conversations yet'), '아직 대화가 없습니다');
   assert.equal(dictSandbox.translateStaticUiSync('Worked for 43m'), '43분 동안 작업함');
+  assert.equal(dictSandbox.translateStaticUiSync('Conversation Steps'), '대화 단계 표시');
+  assert.equal(dictSandbox.translateStaticUiSync('Verbose'), '상세히');
+  assert.equal(dictSandbox.translateStaticUiSync('Waiting for your approval'), '사용자 승인 대기 중');
 
   // 4. Remote Control defaults to google-translate and local-llm falls back to google-translate when unreachable
   const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
@@ -260,5 +266,50 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(mod06.includes('.agy-ko-row.agy-ko-row-inline') && mod06.includes('.agy-ko-row.agy-ko-row-top'), 'must override .agy-ko-row column direction with flex-direction: row on inline/top rows');
   assert.ok(!mod06.includes('flex: 1 1 200px'), 'must not use flex-basis: 200px on .agy-ko-info (causes 200px vertical gap if parent is column)');
   assert.ok(mod06.includes('renderTranslatorSettingsContent(body, false, true)'), 'modal must pass isModal=true to omit duplicate section heading');
+  assert.ok(mod06.includes('agy-ko-show-thinking-switch'), 'modal must include Thinking display ON/OFF toggle switch');
+  assert.ok(mod06.includes('window.__agySetShowThinking'), 'modal Thinking toggle must invoke window.__agySetShowThinking');
+  assert.ok(!mod06.includes("insertBefore(cardEl, permEl)"), 'must not inject #agy-ko-settings-card into General tab');
   assert.ok(mod06.includes('height: 100dvh !important'), 'must enforce 100dvh on ga-remote-control .app-container');
+
+  // 5. ensureVerboseConversationStepsEnabled auto-enables verboseConversationSteps when Default (false)
+  const mod01 = fs.readFileSync(path.join(RENDERER_DIR, '01-bootstrap-and-cache.js'), 'utf8');
+  let verbosePrefVal = false;
+  let setPrefCalls = [];
+  const mockProviderFiber = {
+    memoizedProps: {
+      value: {
+        getState: () => ({
+          getPrefValue: (k) => (k === 'verboseConversationSteps' ? verbosePrefVal : undefined),
+          setPrefValue: (k, v) => {
+            setPrefCalls.push([k, v]);
+            if (k === 'verboseConversationSteps') verbosePrefVal = v;
+            return Promise.resolve();
+          },
+        }),
+        onDidChange: () => () => {},
+      },
+    },
+    return: null,
+  };
+  const mockAnchor = {
+    __reactFiber$xyz: {
+      memoizedProps: {},
+      return: mockProviderFiber,
+    },
+  };
+  const bootSandbox = {
+    window: { location: { origin: 'vscode-file://vscode-app' } },
+    document: {
+      querySelector: (sel) => (sel.includes('conversation-view') ? mockAnchor : null),
+      body: {},
+    },
+    localStorage: { getItem: () => null, setItem() {} },
+  };
+  vm.runInNewContext(
+    `${mod01}\n;globalThis.__ensureVerbose = ensureVerboseConversationStepsEnabled;`,
+    bootSandbox
+  );
+  bootSandbox.__ensureVerbose();
+  assert.deepEqual(setPrefCalls, [['verboseConversationSteps', true]]);
+  assert.equal(verbosePrefVal, true);
 });

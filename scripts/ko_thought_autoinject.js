@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.9
+// @version      1.2.10
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,9 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.4';
+  const KO_LOCALIZER_VERSION = 'v13.5';
+  const DEFAULT_SHOW_THINKING_ENABLED = true;
+  const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -171,7 +173,8 @@
       const key = 'jetski.developer.customFlagOverrides';
       const raw = localStorage.getItem(key);
       const flags = raw ? JSON.parse(raw) : {};
-      if (flags['remove-conversation-history'] !== false) {
+      if (flags['remove-conversation-history'] !== false || flags['project-4k'] !== false) {
+        flags['project-4k'] = false;
         flags['remove-conversation-history'] = false;
         const nextVal = JSON.stringify(flags);
         localStorage.setItem(key, nextVal);
@@ -188,12 +191,104 @@
     } catch (e) {}
   }
 
+  let showThinkingEnabled = DEFAULT_SHOW_THINKING_ENABLED;
+  try {
+    const savedShowThinking = localStorage.getItem(SHOW_THINKING_STORAGE_KEY);
+    if (savedShowThinking === '0' || savedShowThinking === 'false') {
+      showThinkingEnabled = false;
+    } else if (savedShowThinking === '1' || savedShowThinking === 'true') {
+      showThinkingEnabled = true;
+    }
+  } catch (e) {}
+
+  function resolveUserSettingsStoreFromDoc(doc) {
+    if (!doc) return null;
+    try {
+      const anchor =
+        doc.querySelector(
+          '[data-testid="conversation-view"], [data-testid="worked-for-collapsible"], [data-testid="agent-input-box"]'
+        ) ||
+        doc.querySelector('#root, #app')?.firstElementChild ||
+        doc.body?.firstElementChild;
+      if (!anchor) return null;
+      const fk = Object.keys(anchor).find(
+        (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$')
+      );
+      if (!fk) return null;
+      let cur = anchor[fk];
+      for (let i = 0; i < 260 && cur; i++) {
+        const val = cur.memoizedProps?.value;
+        if (val && typeof val.getState === 'function' && typeof val.onDidChange === 'function') {
+          const st = val.getState();
+          if (st && typeof st.getPrefValue === 'function' && typeof st.setPrefValue === 'function') {
+            return st;
+          }
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function resolveUserSettingsStore() {
+    const direct = resolveUserSettingsStoreFromDoc(document);
+    if (direct) return direct;
+    try {
+      const iframes = document.querySelectorAll ? document.querySelectorAll('iframe') : [];
+      for (const ifr of iframes) {
+        try {
+          const cd = ifr.contentDocument;
+          if (cd && cd !== document) {
+            const sub = resolveUserSettingsStoreFromDoc(cd);
+            if (sub) return sub;
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function isShowThinkingEnabled() {
+    const st = resolveUserSettingsStore();
+    if (st) {
+      const liveVal = st.getPrefValue('verboseConversationSteps');
+      if (typeof liveVal === 'boolean') {
+        return liveVal;
+      }
+    }
+    return Boolean(showThinkingEnabled);
+  }
+
+  let verboseStepsEnsured = false;
+  function ensureVerboseConversationStepsEnabled() {
+    if (disposed || verboseStepsEnsured) return;
+    try {
+      const st = resolveUserSettingsStore();
+      if (!st) return;
+      const targetVal = Boolean(showThinkingEnabled);
+      const currentVal = st.getPrefValue('verboseConversationSteps');
+      if (currentVal === targetVal) {
+        verboseStepsEnsured = true;
+        return;
+      }
+      if (typeof currentVal === 'boolean') {
+        verboseStepsEnsured = true;
+        Promise.resolve(st.setPrefValue('verboseConversationSteps', targetVal)).catch(() => {
+          verboseStepsEnsured = false;
+        });
+      }
+    } catch (e) {}
+  }
+
   function prepareBootstrapLifecycle() {
+    ensureVerboseConversationStepsEnabled();
     ensureConversationHistoryMenuEnabled();
     if (
       window.__agyKoLocalizerActive === KO_LOCALIZER_VERSION &&
       window.__agyKoThoughtCleanup &&
-      typeof window.__agyRetranslateVisibleThoughts === 'function'
+      typeof window.__agyRetranslateVisibleThoughts === 'function' &&
+      typeof window.__agySetShowThinking === 'function' &&
+      !document.getElementById('agy-ko-settings-card')
     ) {
       if (
         window.__agyLastDefaultPretranslate !== undefined &&
@@ -560,6 +655,8 @@
 
     // Settings -> Execution & Queued Messages & Sandbox
     'Queued Messages': '대기열 메시지',
+    'Configure what the agent can do in local and remote conversations.':
+      '로컬 및 원격 대화에서 에이전트가 수행할 수 있는 작업 권한을 설정합니다.',
     'Configure when follow-up messages are sent.': '후속 메시지를 전송하는 시점을 설정합니다.',
     'Queue': '대기열 추가',
     'Send Immediately': '즉시 보내기',
@@ -635,6 +732,11 @@
       '사용자 확인이 필요하거나 에이전트 작업이 완료되었을 때 시스템 알림을 표시합니다.',
     'Verbose Agent Chat': '상세 에이전트 채팅 표시',
     'Display and preserve intermediate thinking steps.': '중간 추론 단계를 화면에 표시하고 보존합니다.',
+    'Conversation Steps': '대화 단계 표시',
+    'Choose how much detail is shown during a conversation.':
+      '대화 중 표시할 중간 과정의 상세 수준을 선택합니다.',
+    'Verbose': '상세히',
+    'Waiting for your approval': '사용자 승인 대기 중',
     'Custom Context Menus': '맞춤 컨텍스트 메뉴',
     'Replace the default browser right-click menu with quick actions.':
       '기본 우클릭 메뉴를 빠른 작업 메뉴로 대체합니다.',
@@ -2010,6 +2112,19 @@
           } catch (e) {}
           changed = true;
         }
+        const savedShow = items[SHOW_THINKING_STORAGE_KEY];
+        if (savedShow !== undefined) {
+          const nextShow = savedShow === '1' || savedShow === 'true' || savedShow === true;
+          if (nextShow !== showThinkingEnabled) {
+            showThinkingEnabled = nextShow;
+            verboseStepsEnsured = false;
+            try {
+              localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
+            } catch (e) {}
+            ensureVerboseConversationStepsEnabled();
+            changed = true;
+          }
+        }
         const savedPre = items[PRETRANSLATE_STORAGE_KEY];
         if (savedPre !== undefined) {
           const nextPre = savedPre === '1' || savedPre === 'true' || savedPre === true;
@@ -2145,6 +2260,53 @@
       pretranslateRunning = false;
     }
   }
+
+  window.__agyGetShowThinking = () => isShowThinkingEnabled();
+  window.__agySetShowThinking = (enabled) => {
+    showThinkingEnabled = Boolean(enabled);
+    verboseStepsEnsured = false;
+    try {
+      localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
+    } catch (e) {}
+    if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
+      try {
+        window.nativeStorage.updateItems({
+          [PROVIDER_STORAGE_KEY]: activeTranslationProvider,
+          [PRETRANSLATE_STORAGE_KEY]: pretranslateEnabled ? '1' : '0',
+          [SHOW_THINKING_STORAGE_KEY]: showThinkingEnabled ? '1' : '0',
+        });
+      } catch (e) {}
+    }
+    const st = resolveUserSettingsStore();
+    if (st && typeof st.setPrefValue === 'function') {
+      verboseStepsEnsured = true;
+      Promise.resolve(st.setPrefValue('verboseConversationSteps', showThinkingEnabled))
+        .then(() => {
+          if (typeof refreshTranslatorSettingsUi === 'function') {
+            refreshTranslatorSettingsUi();
+          }
+        })
+        .catch(() => {
+          verboseStepsEnsured = false;
+        });
+    }
+    if (typeof refreshTranslatorSettingsUi === 'function') {
+      refreshTranslatorSettingsUi();
+    }
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agySetShowThinking === 'function') {
+            cw.__agySetShowThinking(showThinkingEnabled);
+          }
+        } catch (e) {}
+      });
+    } catch (e) {}
+    return {
+      showThinkingEnabled,
+    };
+  };
 
   window.__agyGetPretranslate = () => isPretranslateEnabled();
   window.__agySetPretranslate = (enabled) => {
@@ -2733,7 +2895,55 @@
     rowProvider.appendChild(llmStatusRow);
     card.appendChild(rowProvider);
 
-    // Row 2: Pre-translate Toggle Switch
+    // Row 2: Show Thinking (verboseConversationSteps) Toggle Switch
+    const thinkingVisible = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
+    const rowShowThinking = document.createElement('div');
+    rowShowThinking.className =
+      'agy-ko-row agy-ko-row-inline py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center';
+    const showThinkingInfo = document.createElement('div');
+    showThinkingInfo.className = 'agy-ko-info flex-1 flex flex-col gap-0.5';
+    const showThinkingTitle = document.createElement('span');
+    showThinkingTitle.className = 'agy-ko-title text-sm font-medium text-foreground';
+    showThinkingTitle.textContent = 'Thinking (추론 과정) 표시';
+    const showThinkingDesc = document.createElement('span');
+    showThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
+    showThinkingDesc.textContent =
+      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계를 숨기지 않고 화면에 상시 표시합니다. (기본값: 켜짐)';
+    showThinkingInfo.appendChild(showThinkingTitle);
+    showThinkingInfo.appendChild(showThinkingDesc);
+
+    const showThinkingSwitchWrap = document.createElement('div');
+    showThinkingSwitchWrap.className = 'agy-ko-switch-wrap shrink-0 flex items-center gap-2';
+    const showThinkingSwitchLbl = document.createElement('span');
+    showThinkingSwitchLbl.className = 'agy-ko-switch-lbl text-xs font-medium text-muted-foreground';
+    showThinkingSwitchLbl.textContent = thinkingVisible ? '켜짐' : '꺼짐';
+    const showThinkingSwitchBtn = document.createElement('button');
+    showThinkingSwitchBtn.type = 'button';
+    showThinkingSwitchBtn.setAttribute('role', 'switch');
+    showThinkingSwitchBtn.setAttribute('data-testid', 'agy-ko-show-thinking-switch');
+    showThinkingSwitchBtn.setAttribute('aria-checked', thinkingVisible ? 'true' : 'false');
+    showThinkingSwitchBtn.className = 'agy-ko-switch';
+    const showThinkingThumb = document.createElement('span');
+    showThinkingThumb.className = 'agy-ko-switch-thumb';
+    showThinkingSwitchBtn.appendChild(showThinkingThumb);
+    showThinkingSwitchBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = !(typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true);
+      if (typeof window.__agySetShowThinking === 'function') {
+        window.__agySetShowThinking(next);
+      }
+      showSettingsFeedback(
+        `✓ Thinking(추론 과정) 표시가 '${next ? '켜짐 (ON)' : '꺼짐 (OFF)'}'(으)로 설정되었습니다.`
+      );
+    };
+    showThinkingSwitchWrap.appendChild(showThinkingSwitchLbl);
+    showThinkingSwitchWrap.appendChild(showThinkingSwitchBtn);
+    rowShowThinking.appendChild(showThinkingInfo);
+    rowShowThinking.appendChild(showThinkingSwitchWrap);
+    card.appendChild(rowShowThinking);
+
+    // Row 3: Pre-translate Toggle Switch
     const rowPre = document.createElement('div');
     rowPre.className = 'agy-ko-row agy-ko-row-inline py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center';
     const preInfo = document.createElement('div');
@@ -2839,21 +3049,9 @@
     const modal = document.querySelector('.settings-modal-container');
     if (!modal) return;
 
-    // 1. Inject inline card at top of General tab (#agent-permissions)
-    const permEl = modal.querySelector('#agent-permissions');
-    if (permEl && permEl.parentElement) {
-      let cardEl = modal.querySelector('#agy-ko-settings-card');
-      if (!cardEl) {
-        cardEl = document.createElement('div');
-        cardEl.id = 'agy-ko-settings-card';
-        cardEl.className = 'agy-ko-settings-root mb-6';
-        permEl.parentElement.insertBefore(cardEl, permEl);
-      }
-      if (cardEl.getAttribute('data-agy-ko-ver') !== KO_LOCALIZER_VERSION) {
-        cardEl.setAttribute('data-agy-ko-ver', KO_LOCALIZER_VERSION);
-        renderTranslatorSettingsContent(cardEl, false);
-      }
-    }
+    // 1. Ensure any legacy inline card on General tab (#agy-ko-settings-card) is removed
+    const legacyCard = modal.querySelector('#agy-ko-settings-card');
+    if (legacyCard) legacyCard.remove();
 
     // 2. Inject dedicated '한글 번역' nav tab in left sidebar of Settings modal
     const modelsNavBtn = modal.querySelector('button[data-testid="settings-nav-item-Models"]');
@@ -3008,8 +3206,8 @@
   window.__agyOpenTranslatorSettingsModal = openOrToggleTranslatorSettingsModal;
 
   function refreshTranslatorSettingsUi() {
-    const cardEl = document.getElementById('agy-ko-settings-card');
-    if (cardEl) renderTranslatorSettingsContent(cardEl, false);
+    const legacyCard = document.getElementById('agy-ko-settings-card');
+    if (legacyCard) legacyCard.remove();
     const paneEl = document.getElementById('agy-ko-settings-pane');
     if (paneEl && paneEl.style.display !== 'none') renderTranslatorSettingsContent(paneEl, true);
     const modalBadge = document.getElementById('agy-ko-translator-modal-badge');
@@ -3952,6 +4150,7 @@
   }
 
   function scanThoughtBlocks() {
+    ensureVerboseConversationStepsEnabled();
     scanTriggerButtonsSync();
     const allCursorEdits = document.querySelectorAll('.cursor-edit');
     for (const cursorEdit of allCursorEdits) {
@@ -3973,6 +4172,13 @@
     if (document.body) {
       localizeStaticUiInRoot(document.body);
       ensureNativeSettingsModalIntegration();
+      if (
+        document.getElementById('agy-ko-translator-modal') &&
+        !document.querySelector('[data-testid="agy-ko-show-thinking-switch"]') &&
+        typeof refreshTranslatorSettingsUi === 'function'
+      ) {
+        refreshTranslatorSettingsUi();
+      }
     }
     scanThoughtBlocks();
     if (typeof observer !== 'undefined' && observer && typeof observer.takeRecords === 'function') {
@@ -3986,6 +4192,7 @@
   let scanTimerScheduled = false;
 
   function runFastThoughtAndTriggerScan() {
+    ensureVerboseConversationStepsEnabled();
     if (disposed || inFastScan) return;
     inFastScan = true;
     try {
@@ -4017,6 +4224,13 @@
         if (document.body) {
           localizeStaticUiInRoot(document.body);
           ensureNativeSettingsModalIntegration();
+      if (
+        document.getElementById('agy-ko-translator-modal') &&
+        !document.querySelector('[data-testid="agy-ko-show-thinking-switch"]') &&
+        typeof refreshTranslatorSettingsUi === 'function'
+      ) {
+        refreshTranslatorSettingsUi();
+      }
         }
         runFastThoughtAndTriggerScan();
       }, 16);

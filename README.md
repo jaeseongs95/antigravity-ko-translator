@@ -11,7 +11,7 @@ Antigravity 2.0 네이티브 앱에서 영어로 스트리밍되는 **Thinking(�
    - **커스텀 어댑터 확장**: `window.__agyRegisterTranslationAdapter(id, { maxConcurrency, translate })`를 통해 새 번역 엔진을 코드 수정 없이 등록할 수 있습니다.
 
 2. **Antigravity 2.0 네이티브 설정창 통합 및 커스텀 상태바 어댑터 (`StatusBarAdapter`) 연동**
-   - 좌측 하단 **`설정` (`Settings`)** 클릭 시 열리는 기본 **`일반 (General)` 탭 최상단**과 좌측 사이드바의 전용 **`한글 번역` 탭**에서 번역 어댑터 전환, 로컬 LLM 연결 상태 확인, Thinking 사전 번역(`ON/OFF`), 현재 화면 즉시 재번역 및 캐시 초기화를 바로 실행할 수 있습니다.
+   - 좌측 하단 **`설정` (`Settings`)** 클릭 시 열리는 좌측 사이드바의 전용 **`한글 번역` 탭**과 상태바 빠른 설정 모달에서 번역 어댑터 전환, 로컬 LLM 연결 상태 확인, **Thinking(추론 과정) 표시 (`ON/OFF`)**, Thinking 사전 번역(`ON/OFF`), 현재 화면 즉시 재번역 및 캐시 초기화를 바로 실행할 수 있습니다.
    - [`antigravity-statusbar`](https://github.com/jaeseongs95/antigravity-statusbar)의 `window.agyStatusBar.registerAdapter` API를 통해 상태바 코어 DOM이나 기존 버튼(`[ compact ]`, `[ context ]`) 영역을 침범하지 않고 우측 슬롯(`slot: 'right'`, `order: 30`)에 `[ 번역:구글 ]` / `[ 번역:LLM ]` 어댑터 버튼을 모듈화하여 장착합니다(클릭 시 빠른 설정 모달 열기/닫기, `Shift+클릭` 시 로컬 LLM ↔ Google 번역 즉시 전환).
 
 3. **고정 UI 및 위젯 0ms 동기 한글화 (`STATIC_UI_MAP`)**
@@ -33,7 +33,7 @@ Antigravity 2.0 네이티브 앱에서 영어로 스트리밍되는 **Thinking(�
 ## 모듈 구조 (SOLID Architecture)
 
 - **렌더러 계층 (`scripts/renderer/`)**:
-  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.4`), `remove-conversation-history: false`(`대화 기록` 메뉴) 상시 활성화, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
+  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.5`), `remove-conversation-history: false`(`대화 기록` 메뉴) 및 `verboseConversationSteps: true`(`대화 단계 표시: 상세히`, Thinking 블록 상시 표시) 자동 활성화, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
   - `02-static-ui-dict.js`: 0ms 정적 UI 한국어 사전(`STATIC_UI_MAP`) 및 동기 패턴 매처
   - `03-text-tokenizer.js`: 코드(`⟦C0⟧`)·식별자/인용구(`⟦T0⟧`) 보호 토크나이저, 조사 교정, 마크다운 세그먼트 추출
   - `04-translation-adapters.js`: Port & Adapter 번역 엔진(`local-llm`, `google-translate`, 커스텀 어댑터) 및 동시성/취소 큐

@@ -1,6 +1,8 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.4';
+  const KO_LOCALIZER_VERSION = 'v13.5';
+  const DEFAULT_SHOW_THINKING_ENABLED = true;
+  const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -146,7 +148,8 @@
       const key = 'jetski.developer.customFlagOverrides';
       const raw = localStorage.getItem(key);
       const flags = raw ? JSON.parse(raw) : {};
-      if (flags['remove-conversation-history'] !== false) {
+      if (flags['remove-conversation-history'] !== false || flags['project-4k'] !== false) {
+        flags['project-4k'] = false;
         flags['remove-conversation-history'] = false;
         const nextVal = JSON.stringify(flags);
         localStorage.setItem(key, nextVal);
@@ -163,12 +166,104 @@
     } catch (e) {}
   }
 
+  let showThinkingEnabled = DEFAULT_SHOW_THINKING_ENABLED;
+  try {
+    const savedShowThinking = localStorage.getItem(SHOW_THINKING_STORAGE_KEY);
+    if (savedShowThinking === '0' || savedShowThinking === 'false') {
+      showThinkingEnabled = false;
+    } else if (savedShowThinking === '1' || savedShowThinking === 'true') {
+      showThinkingEnabled = true;
+    }
+  } catch (e) {}
+
+  function resolveUserSettingsStoreFromDoc(doc) {
+    if (!doc) return null;
+    try {
+      const anchor =
+        doc.querySelector(
+          '[data-testid="conversation-view"], [data-testid="worked-for-collapsible"], [data-testid="agent-input-box"]'
+        ) ||
+        doc.querySelector('#root, #app')?.firstElementChild ||
+        doc.body?.firstElementChild;
+      if (!anchor) return null;
+      const fk = Object.keys(anchor).find(
+        (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$')
+      );
+      if (!fk) return null;
+      let cur = anchor[fk];
+      for (let i = 0; i < 260 && cur; i++) {
+        const val = cur.memoizedProps?.value;
+        if (val && typeof val.getState === 'function' && typeof val.onDidChange === 'function') {
+          const st = val.getState();
+          if (st && typeof st.getPrefValue === 'function' && typeof st.setPrefValue === 'function') {
+            return st;
+          }
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function resolveUserSettingsStore() {
+    const direct = resolveUserSettingsStoreFromDoc(document);
+    if (direct) return direct;
+    try {
+      const iframes = document.querySelectorAll ? document.querySelectorAll('iframe') : [];
+      for (const ifr of iframes) {
+        try {
+          const cd = ifr.contentDocument;
+          if (cd && cd !== document) {
+            const sub = resolveUserSettingsStoreFromDoc(cd);
+            if (sub) return sub;
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function isShowThinkingEnabled() {
+    const st = resolveUserSettingsStore();
+    if (st) {
+      const liveVal = st.getPrefValue('verboseConversationSteps');
+      if (typeof liveVal === 'boolean') {
+        return liveVal;
+      }
+    }
+    return Boolean(showThinkingEnabled);
+  }
+
+  let verboseStepsEnsured = false;
+  function ensureVerboseConversationStepsEnabled() {
+    if (disposed || verboseStepsEnsured) return;
+    try {
+      const st = resolveUserSettingsStore();
+      if (!st) return;
+      const targetVal = Boolean(showThinkingEnabled);
+      const currentVal = st.getPrefValue('verboseConversationSteps');
+      if (currentVal === targetVal) {
+        verboseStepsEnsured = true;
+        return;
+      }
+      if (typeof currentVal === 'boolean') {
+        verboseStepsEnsured = true;
+        Promise.resolve(st.setPrefValue('verboseConversationSteps', targetVal)).catch(() => {
+          verboseStepsEnsured = false;
+        });
+      }
+    } catch (e) {}
+  }
+
   function prepareBootstrapLifecycle() {
+    ensureVerboseConversationStepsEnabled();
     ensureConversationHistoryMenuEnabled();
     if (
       window.__agyKoLocalizerActive === KO_LOCALIZER_VERSION &&
       window.__agyKoThoughtCleanup &&
-      typeof window.__agyRetranslateVisibleThoughts === 'function'
+      typeof window.__agyRetranslateVisibleThoughts === 'function' &&
+      typeof window.__agySetShowThinking === 'function' &&
+      !document.getElementById('agy-ko-settings-card')
     ) {
       if (
         window.__agyLastDefaultPretranslate !== undefined &&
