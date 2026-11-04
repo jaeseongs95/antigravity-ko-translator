@@ -890,6 +890,44 @@
     if (m) return `명령 ${m[1]}개 실행함`;
     m = c.match(/^Explored\s+(\d+)\s+files?$/i);
     if (m) return `파일 ${m[1]}개 탐색함`;
+    m = c.match(/^Searched\s+(\d+)\s+files?$/i);
+    if (m) return `파일 ${m[1]}개 검색함`;
+    m = c.match(/^Analyzed\s+(\d+)\s+files?$/i);
+    if (m) return `파일 ${m[1]}개 분석함`;
+    m = c.match(/^Listed\s+(\d+)\s+(?:files?|directories|folders?)$/i);
+    if (m) return `항목 ${m[1]}개 목록 조회함`;
+
+    // Dynamic single-target tool group labels (e.g. "Reading http-engine-client.ts", "Editing App.tsx", "Listing src/")
+    const dynamicVerbMap = [
+      [/^Reading\s+(.+)$/i, '읽는 중'],
+      [/^Read\s+(.+)$/i, '읽음'],
+      [/^Editing\s+(.+)$/i, '수정 중'],
+      [/^Edited\s+(.+)$/i, '수정함'],
+      [/^Creating\s+(.+)$/i, '생성 중'],
+      [/^Created\s+(.+)$/i, '생성함'],
+      [/^Deleting\s+(.+)$/i, '삭제 중'],
+      [/^Deleted\s+(.+)$/i, '삭제함'],
+      [/^Listing\s+(.+)$/i, '목록 조회 중'],
+      [/^Listed\s+(.+)$/i, '목록 조회함'],
+      [/^Searching\s+(?:for\s+)?(.+)$/i, '검색 중'],
+      [/^Searched\s+(?:for\s+)?(.+)$/i, '검색함'],
+      [/^Analyzing\s+(.+)$/i, '분석 중'],
+      [/^Analyzed\s+(.+)$/i, '분석함'],
+      [/^Running\s+(.+)$/i, '실행 중'],
+      [/^Ran\s+(.+)$/i, '실행함'],
+      [/^Viewing\s+(.+)$/i, '확인 중'],
+      [/^Viewed\s+(.+)$/i, '확인함'],
+      [/^Fetching\s+(.+)$/i, '가져오는 중'],
+      [/^Fetched\s+(.+)$/i, '가져옴'],
+      [/^Exploring\s+(.+)$/i, '탐색 중'],
+      [/^Explored\s+(.+)$/i, '탐색함'],
+    ];
+    for (const [re, koVerb] of dynamicVerbMap) {
+      const dm = c.match(re);
+      if (dm && dm[1]) {
+        return `${koVerb}: ${dm[1].trim()}`;
+      }
+    }
     return null;
   }
 

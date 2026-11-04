@@ -27,12 +27,13 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.7';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.8';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.ok(bundleCode.includes("ensureVerboseConversationStepsEnabled"));
   assert.ok(bundleCode.includes("'verboseConversationSteps'"));
   assert.ok(bundleCode.includes("doesWorkedForButtonContainThinking"));
   assert.ok(bundleCode.includes("doesToolGroupButtonContainThinking"));
+  assert.ok(fs.existsSync(path.join(ROOT, 'rules', 'AGENTS.md')), 'rules/AGENTS.md must exist to enforce structured <thought> output across all sessions/models');
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
 
@@ -212,6 +213,12 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(dictSandbox.translateStaticUiSync('Explored'), '탐색함');
   assert.equal(dictSandbox.translateStaticUiSync('Explored files, ran commands, edited files'), '파일 탐색, 명령 실행, 파일 수정');
   assert.equal(dictSandbox.translateStaticUiSync('Exploring artifacts'), '산출물 탐색 중');
+  assert.equal(dictSandbox.translateStaticUiSync('Reading http-engine-client.ts'), '읽는 중: http-engine-client.ts');
+  assert.equal(dictSandbox.translateStaticUiSync('Editing App.tsx'), '수정 중: App.tsx');
+  assert.equal(dictSandbox.translateStaticUiSync('Listing src/components'), '목록 조회 중: src/components');
+  assert.equal(dictSandbox.translateStaticUiSync('Searching authToken'), '검색 중: authToken');
+  assert.equal(dictSandbox.translateStaticUiSync('Analyzing main.js'), '분석 중: main.js');
+  assert.equal(dictSandbox.translateStaticUiSync('Running npm test'), '실행 중: npm test');
 
   // 4. Remote Control defaults to google-translate and local-llm falls back to google-translate when unreachable
   const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
@@ -318,14 +325,15 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.deepEqual(setPrefCalls, [['verboseConversationSteps', true]]);
   assert.equal(verbosePrefVal, true);
 
-  // 6. processTriggerButton clears origSpan.textContent to eliminate duplicate English/Korean textContent and updates across streaming ticks
-  assert.ok(mod08.includes('const liveText = (origSpan.textContent || \'\').trim();'), 'must prioritize non-empty live origSpan.textContent over cached __agyOrigLabelText');
+  // 6. processTriggerButton NEVER clears origSpan.textContent (prevents React removeChild Black Screen crash) and strips [data-slot-out] animation residue
+  assert.ok(mod08.includes('const liveText = extractTriggerSpanRawText(origSpan);'), 'must extract live text via extractTriggerSpanRawText');
   assert.ok(mod08.includes('origSpan.__agyOrigLabelText = rawText;'), 'must preserve original label text on origSpan.__agyOrigLabelText');
-  assert.ok(mod08.includes("origSpan.textContent = '';"), 'must clear origSpan.textContent so button.textContent never duplicates English and Korean');
-  assert.ok(mod08.includes('btn.__agyAutoExpanded = true;'), 'must auto-expand collapsed thinking/worked-for buttons at most once when Show Thinking is enabled');
+  assert.ok(!mod08.includes("origSpan.textContent = '';"), 'must NEVER clear origSpan.textContent (detaching React child fibers causes NotFoundError removeChild black screen)');
+  assert.ok(mod08.includes('!btn.__agyUserCollapsed'), 'must re-expand collapsed buttons unless user manually collapsed them');
 
+  const extractFnMatch = mod08.match(/function extractTriggerSpanRawText\(origSpan\)\s*\{[\s\S]*?\r?\n  \}/);
   const processBtnMatch = mod08.match(/function processTriggerButton\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
-  assert.ok(processBtnMatch, 'processTriggerButton must exist');
+  assert.ok(extractFnMatch && processBtnMatch, 'extractTriggerSpanRawText and processTriggerButton must exist');
   const triggerSandbox = {
     translateStaticUiSync: dictSandbox.translateStaticUiSync,
     document: {
@@ -348,7 +356,10 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
       },
     },
   };
-  vm.runInNewContext(`${processBtnMatch[0]}\n;globalThis.__processTriggerButton = processTriggerButton;`, triggerSandbox);
+  vm.runInNewContext(
+    `${extractFnMatch[0]}\n${processBtnMatch[0]}\n;globalThis.__processTriggerButton = processTriggerButton;`,
+    triggerSandbox
+  );
   const mockSpans = [];
   const origSpan = {
     className: 'text-muted-foreground',
@@ -374,38 +385,55 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     querySelectorAll: () => mockSpans,
   };
   triggerSandbox.__processTriggerButton(mockBtn);
-  assert.equal(origSpan.textContent, '');
+  assert.equal(origSpan.textContent, 'Thinking for 1s', 'origSpan.textContent must remain intact so React child fibers are never detached');
+  assert.equal(origSpan.style.display, 'none');
+  assert.equal(origSpan.attrs['data-agy-orig-label'], '1');
   assert.equal(origSpan.__agyOrigLabelText, 'Thinking for 1s');
   assert.equal(mockSpans[1].textContent, '1초 동안 생각하는 중');
 
   // Simulate React updating origSpan.textContent to "Thought for 8s" on completion
   origSpan.textContent = 'Thought for 8s';
   triggerSandbox.__processTriggerButton(mockBtn);
-  assert.equal(origSpan.textContent, '');
+  assert.equal(origSpan.textContent, 'Thought for 8s', 'origSpan.textContent must remain intact after completion update');
   assert.equal(origSpan.__agyOrigLabelText, 'Thought for 8s');
   assert.equal(mockSpans[1].textContent, '8초 동안 생각함');
 
-  // Subsequent scan when origSpan.textContent is already empty preserves "8초 동안 생각함"
+  // Simulate <CZb> (s_) 320ms slot transition ("Analyzing" out, "Analyzed" in)
+  origSpan.textContent = 'AnalyzingAnalyzed';
+  origSpan.querySelector = (sel) => (sel === '[data-slot-out]' ? {} : null);
+  origSpan.cloneNode = () => ({
+    textContent: 'Analyzed',
+    querySelectorAll: () => [{ remove() {} }],
+  });
   triggerSandbox.__processTriggerButton(mockBtn);
-  assert.equal(origSpan.__agyOrigLabelText, 'Thought for 8s');
-  assert.equal(mockSpans[1].textContent, '8초 동안 생각함');
+  assert.equal(origSpan.__agyOrigLabelText, 'Analyzed');
+  assert.equal(mockSpans[1].textContent, '분석함');
 
-  // 7. doesToolGroupButtonContainThinking and 3-tier collapsible auto-expand (worked-for -> tool-group -> thinking)
+  // 7. doesToolGroupButtonContainThinking, 3-tier collapsible auto-expand, and re-expand after React G_ auto-collapse (unless user-collapsed)
   const toolGrpFnMatch = mod08.match(/function doesToolGroupButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const workedFnMatch = mod08.match(/function doesWorkedForButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
+  const expandBtnFnMatch = mod08.match(/function expandTriggerButtonIfNeeded\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
+  const clickCapFnMatch = mod08.match(/function onTriggerButtonClickCapture\(e\)\s*\{[\s\S]*?\r?\n  \}/);
   const scanBtnsMatch = mod08.match(/function scanTriggerButtonsSync\(\)\s*\{[\s\S]*?\r?\n  \}/);
-  assert.ok(toolGrpFnMatch && workedFnMatch && scanBtnsMatch, '3-tier collapsible functions must exist in 08-dom-observer.js');
+  assert.ok(
+    toolGrpFnMatch && workedFnMatch && expandBtnFnMatch && clickCapFnMatch && scanBtnsMatch,
+    '3-tier collapsible and user-collapse tracking functions must exist in 08-dom-observer.js'
+  );
 
   let clickedOrder = [];
   const makeCollapsibleBtn = (fiberKey, fiberVal, expanded = 'false') => ({
     [fiberKey]: fiberVal,
-    __agyAutoExpanded: false,
+    expandedState: expanded,
     querySelectorAll: () => [],
+    closest() {
+      return this;
+    },
     getAttribute(k) {
-      return k === 'aria-expanded' ? expanded : null;
+      return k === 'aria-expanded' ? this.expandedState : null;
     },
     click() {
       clickedOrder.push(fiberKey);
+      this.expandedState = this.expandedState === 'true' ? 'false' : 'true';
     },
   });
 
@@ -434,7 +462,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     },
   };
   vm.runInNewContext(
-    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;`,
+    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${expandBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
     expandSandbox
   );
   assert.equal(expandSandbox.__doesToolGroupContainThinking(toolGroupWithThinking), true);
@@ -445,4 +473,23 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     '__reactFiber$toolGrp1',
     '__reactFiber$thinking1',
   ]);
+
+  // Simulate React G_ collapsing toolGroupWithThinking & thinkingTriggerBtn when step finishes (isActive: true -> false)
+  clickedOrder = [];
+  toolGroupWithThinking.expandedState = 'false';
+  thinkingTriggerBtn.expandedState = 'false';
+  expandSandbox.__scanTriggerButtonsSync();
+  assert.deepEqual(
+    clickedOrder,
+    ['__reactFiber$toolGrp1', '__reactFiber$thinking1'],
+    'must automatically re-expand when React G_ collapses active step on completion'
+  );
+
+  // Simulate user manually clicking thinkingTriggerBtn while expanded ('true') -> records __agyUserCollapsed = true
+  clickedOrder = [];
+  expandSandbox.__onTriggerClick({ target: thinkingTriggerBtn, isTrusted: true });
+  thinkingTriggerBtn.expandedState = 'false';
+  assert.equal(thinkingTriggerBtn.__agyUserCollapsed, true);
+  expandSandbox.__scanTriggerButtonsSync();
+  assert.deepEqual(clickedOrder, [], 'must respect manual user collapse and not re-open');
 });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.12
+// @version      1.2.13
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.7';
+  const KO_LOCALIZER_VERSION = 'v13.8';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
@@ -1210,6 +1210,44 @@
     if (m) return `명령 ${m[1]}개 실행함`;
     m = c.match(/^Explored\s+(\d+)\s+files?$/i);
     if (m) return `파일 ${m[1]}개 탐색함`;
+    m = c.match(/^Searched\s+(\d+)\s+files?$/i);
+    if (m) return `파일 ${m[1]}개 검색함`;
+    m = c.match(/^Analyzed\s+(\d+)\s+files?$/i);
+    if (m) return `파일 ${m[1]}개 분석함`;
+    m = c.match(/^Listed\s+(\d+)\s+(?:files?|directories|folders?)$/i);
+    if (m) return `항목 ${m[1]}개 목록 조회함`;
+
+    // Dynamic single-target tool group labels (e.g. "Reading http-engine-client.ts", "Editing App.tsx", "Listing src/")
+    const dynamicVerbMap = [
+      [/^Reading\s+(.+)$/i, '읽는 중'],
+      [/^Read\s+(.+)$/i, '읽음'],
+      [/^Editing\s+(.+)$/i, '수정 중'],
+      [/^Edited\s+(.+)$/i, '수정함'],
+      [/^Creating\s+(.+)$/i, '생성 중'],
+      [/^Created\s+(.+)$/i, '생성함'],
+      [/^Deleting\s+(.+)$/i, '삭제 중'],
+      [/^Deleted\s+(.+)$/i, '삭제함'],
+      [/^Listing\s+(.+)$/i, '목록 조회 중'],
+      [/^Listed\s+(.+)$/i, '목록 조회함'],
+      [/^Searching\s+(?:for\s+)?(.+)$/i, '검색 중'],
+      [/^Searched\s+(?:for\s+)?(.+)$/i, '검색함'],
+      [/^Analyzing\s+(.+)$/i, '분석 중'],
+      [/^Analyzed\s+(.+)$/i, '분석함'],
+      [/^Running\s+(.+)$/i, '실행 중'],
+      [/^Ran\s+(.+)$/i, '실행함'],
+      [/^Viewing\s+(.+)$/i, '확인 중'],
+      [/^Viewed\s+(.+)$/i, '확인함'],
+      [/^Fetching\s+(.+)$/i, '가져오는 중'],
+      [/^Fetched\s+(.+)$/i, '가져옴'],
+      [/^Exploring\s+(.+)$/i, '탐색 중'],
+      [/^Explored\s+(.+)$/i, '탐색함'],
+    ];
+    for (const [re, koVerb] of dynamicVerbMap) {
+      const dm = c.match(re);
+      if (dm && dm[1]) {
+        return `${koVerb}: ${dm[1].trim()}`;
+      }
+    }
     return null;
   }
 
@@ -2928,7 +2966,7 @@
     const showThinkingDesc = document.createElement('span');
     showThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
     showThinkingDesc.textContent =
-      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계(Worked for / 도구 그룹 접힘 블록 포함)를 자동으로 펼쳐 화면에 상시 표시합니다. (기본값: 켜짐 · 참고: Gemini Low/Flash나 Argon Medium(EFFORT 0.20) 등 경량 추론 설정, 또는 Low로 시작한 긴 세션에서 중간에 모델을 변경한 경우에는 모델이 추론 본문 없이 바로 도구를 호출할 수 있습니다)';
+      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계(Worked for / 도구 그룹 접힘 블록 포함)를 스트리밍 단계 전환 후에도 접히지 않게 자동으로 펼쳐 화면에 상시 표시합니다. (기본값: 켜짐 · 사용자가 직접 클릭해 접은 블록은 수동 상태를 유지합니다)';
     showThinkingInfo.appendChild(showThinkingTitle);
     showThinkingInfo.appendChild(showThinkingDesc);
 
@@ -3370,12 +3408,24 @@
     };
   }
 
+  function extractTriggerSpanRawText(origSpan) {
+    if (!origSpan) return '';
+    if (origSpan.querySelector && origSpan.querySelector('[data-slot-out]')) {
+      const clone = origSpan.cloneNode(true);
+      if (clone.querySelectorAll) {
+        clone.querySelectorAll('[data-slot-out]').forEach((el) => el.remove());
+      }
+      return (clone.textContent || '').trim();
+    }
+    return (origSpan.textContent || '').trim();
+  }
+
   function processTriggerButton(btn) {
     const spans = Array.from(btn.querySelectorAll(':scope > span'));
     const origSpan = spans.find((s) => !s.classList.contains('agy-ko-trigger-label'));
     if (!origSpan) return;
 
-    const liveText = (origSpan.textContent || '').trim();
+    const liveText = extractTriggerSpanRawText(origSpan);
     const rawText = liveText || (origSpan.__agyOrigLabelText || '').trim();
     const koText = translateStaticUiSync(rawText);
     if (!koText) return;
@@ -3387,8 +3437,11 @@
     if (origSpan.style.display !== 'none') {
       origSpan.style.display = 'none';
     }
-    if (origSpan.textContent !== '') {
-      origSpan.textContent = '';
+    // IMPORTANT: Never clear or overwrite origSpan.textContent!
+    // React mounts child fibers (<z6b>, <HZb>, <CZb>) inside origSpan; detaching them via
+    // origSpan.textContent = '' triggers NotFoundError (removeChild) and unmounts #root (black screen).
+    if (!liveText && origSpan.__agyOrigLabelText && (!origSpan.childNodes || origSpan.childNodes.length === 0)) {
+      origSpan.textContent = origSpan.__agyOrigLabelText;
     }
     let koSpan = spans.find((s) => s.classList.contains('agy-ko-trigger-label'));
     if (!koSpan) {
@@ -3695,8 +3748,6 @@
           if (!tn.__agyOrigValue) tn.__agyOrigValue = tn.nodeValue;
           tn.__agyKoApplied = syncKo;
           tn.nodeValue = syncKo;
-        } else {
-          el.textContent = syncKo;
         }
         continue;
       }
@@ -3710,8 +3761,6 @@
             if (!tn.__agyOrigValue) tn.__agyOrigValue = tn.nodeValue;
             tn.__agyKoApplied = ko;
             tn.nodeValue = ko;
-          } else {
-            el.textContent = ko;
           }
         });
       }
@@ -3767,16 +3816,23 @@
   }
 
   function doesWorkedForButtonContainThinking(btn) {
+    if (!btn) return false;
+    if (btn.__agyHasThinking) return true;
     try {
       const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
       let cur = fk ? btn[fk] : null;
       for (let i = 0; i < 12 && cur; i++) {
         const segSteps = cur.memoizedProps?.segment?.steps;
         if (Array.isArray(segSteps)) {
-          return segSteps.some((s) => {
+          const found = segSteps.some((s) => {
             const val = s?.step?.value;
             return Boolean(val && (val.thinking || val.rawThinking));
           });
+          if (found) {
+            btn.__agyHasThinking = true;
+            return true;
+          }
+          return false;
         }
         cur = cur.return;
       }
@@ -3785,21 +3841,59 @@
   }
 
   function doesToolGroupButtonContainThinking(btn) {
+    if (!btn) return false;
+    if (btn.__agyHasThinking) return true;
     try {
       const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
       let cur = fk ? btn[fk] : null;
       for (let i = 0; i < 12 && cur; i++) {
         const grpSteps = cur.memoizedProps?.steps || cur.memoizedProps?.group?.steps;
         if (Array.isArray(grpSteps)) {
-          return grpSteps.some((s) => {
+          const found = grpSteps.some((s) => {
             const val = s?.step?.value;
             return Boolean(val && (val.thinking || val.rawThinking));
           });
+          if (found) {
+            btn.__agyHasThinking = true;
+            return true;
+          }
+          return false;
         }
         cur = cur.return;
       }
     } catch (e) {}
     return false;
+  }
+
+  function expandTriggerButtonIfNeeded(btn) {
+    if (!btn || btn.getAttribute('aria-expanded') !== 'false' || btn.__agyUserCollapsed) {
+      return false;
+    }
+    btn.__agyAutoExpanded = true;
+    btn.__agyProgrammaticClick = true;
+    try {
+      btn.click();
+    } catch (e) {
+    } finally {
+      btn.__agyProgrammaticClick = false;
+    }
+    return true;
+  }
+
+  function onTriggerButtonClickCapture(e) {
+    try {
+      if (!e || !e.target || typeof e.target.closest !== 'function') return;
+      const btn = e.target.closest(
+        'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"]'
+      );
+      if (!btn || btn.__agyProgrammaticClick || e.isTrusted === false) return;
+      const expandedBeforeClick = btn.getAttribute('aria-expanded');
+      if (expandedBeforeClick === 'true') {
+        btn.__agyUserCollapsed = true;
+      } else if (expandedBeforeClick === 'false') {
+        btn.__agyUserCollapsed = false;
+      }
+    } catch (err) {}
   }
 
   function scanTriggerButtonsSync() {
@@ -3811,13 +3905,10 @@
       if (
         autoExpand &&
         btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyAutoExpanded &&
+        !btn.__agyUserCollapsed &&
         doesWorkedForButtonContainThinking(btn)
       ) {
-        btn.__agyAutoExpanded = true;
-        try {
-          btn.click();
-        } catch (e) {}
+        expandTriggerButtonIfNeeded(btn);
       }
     }
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
@@ -3826,23 +3917,17 @@
       if (
         autoExpand &&
         btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyAutoExpanded &&
+        !btn.__agyUserCollapsed &&
         doesToolGroupButtonContainThinking(btn)
       ) {
-        btn.__agyAutoExpanded = true;
-        try {
-          btn.click();
-        } catch (e) {}
+        expandTriggerButtonIfNeeded(btn);
       }
     }
     const thinkingBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
     for (const btn of thinkingBtns) {
       processTriggerButton(btn);
-      if (autoExpand && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyAutoExpanded) {
-        btn.__agyAutoExpanded = true;
-        try {
-          btn.click();
-        } catch (e) {}
+      if (autoExpand && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+        expandTriggerButtonIfNeeded(btn);
       }
     }
   }
@@ -4339,7 +4424,17 @@
 
   const observer = new MutationObserver((mutations) => {
     for (const m of mutations) {
-      if (m.type === 'childList' && m.addedNodes.length > 0) {
+      if (m.type === 'childList' && (m.addedNodes.length > 0 || m.removedNodes.length > 0)) {
+        const tEl = m.target && m.target.nodeType === 1 ? m.target : m.target?.parentElement;
+        if (
+          tEl &&
+          tEl.closest &&
+          (tEl.closest('.agy-ko-thought-wrap') ||
+            tEl.closest('.agy-ko-settings-root') ||
+            tEl.classList?.contains('agy-ko-trigger-label'))
+        ) {
+          continue;
+        }
         scheduleCoalescedScan();
         return;
       }
@@ -4347,16 +4442,19 @@
         const parent = m.target.parentElement;
         if (
           parent &&
-          (parent.closest('.cursor-edit') ||
-            parent.closest('button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"]')) &&
           !parent.classList.contains('agy-ko-trigger-label') &&
-          !parent.closest('.agy-ko-thought-wrap')
+          !parent.closest('.agy-ko-thought-wrap') &&
+          m.target.__agyKoApplied !== (m.target.nodeValue || '').trim()
         ) {
           scheduleCoalescedScan();
           return;
         }
       }
       if (m.type === 'attributes' && m.target && m.target.closest) {
+        if (m.attributeName === 'aria-expanded') {
+          scheduleCoalescedScan();
+          return;
+        }
         if (
           !m.target.closest('.agy-ko-settings-root') &&
           m.target.closest('.settings-modal-container, [role="dialog"]')
@@ -4374,12 +4472,15 @@
       window.addEventListener('DOMContentLoaded', startObserver, { once: true });
       return;
     }
+    if (document.addEventListener) {
+      document.addEventListener('click', onTriggerButtonClickCapture, true);
+    }
     observer.observe(root, {
       childList: true,
       subtree: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['style'],
+      attributeFilter: ['style', 'aria-expanded'],
     });
     loadPersistentTranslatorSettings();
     registerStatusbarTranslatorAdapter();
@@ -4406,6 +4507,9 @@
     if (thoughtDebounceTimer) clearTimeout(thoughtDebounceTimer);
     if (settingsFeedbackTimer) clearTimeout(settingsFeedbackTimer);
     observer.disconnect();
+    if (document.removeEventListener) {
+      document.removeEventListener('click', onTriggerButtonClickCapture, true);
+    }
     delete window.__agyKoLocalizerActive;
     unregisterStatusbarTranslatorAdapter(fullRestore);
     document.querySelectorAll('.cursor-edit').forEach((el) => {

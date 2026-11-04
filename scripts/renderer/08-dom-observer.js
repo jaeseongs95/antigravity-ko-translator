@@ -43,12 +43,24 @@
     };
   }
 
+  function extractTriggerSpanRawText(origSpan) {
+    if (!origSpan) return '';
+    if (origSpan.querySelector && origSpan.querySelector('[data-slot-out]')) {
+      const clone = origSpan.cloneNode(true);
+      if (clone.querySelectorAll) {
+        clone.querySelectorAll('[data-slot-out]').forEach((el) => el.remove());
+      }
+      return (clone.textContent || '').trim();
+    }
+    return (origSpan.textContent || '').trim();
+  }
+
   function processTriggerButton(btn) {
     const spans = Array.from(btn.querySelectorAll(':scope > span'));
     const origSpan = spans.find((s) => !s.classList.contains('agy-ko-trigger-label'));
     if (!origSpan) return;
 
-    const liveText = (origSpan.textContent || '').trim();
+    const liveText = extractTriggerSpanRawText(origSpan);
     const rawText = liveText || (origSpan.__agyOrigLabelText || '').trim();
     const koText = translateStaticUiSync(rawText);
     if (!koText) return;
@@ -60,8 +72,11 @@
     if (origSpan.style.display !== 'none') {
       origSpan.style.display = 'none';
     }
-    if (origSpan.textContent !== '') {
-      origSpan.textContent = '';
+    // IMPORTANT: Never clear or overwrite origSpan.textContent!
+    // React mounts child fibers (<z6b>, <HZb>, <CZb>) inside origSpan; detaching them via
+    // origSpan.textContent = '' triggers NotFoundError (removeChild) and unmounts #root (black screen).
+    if (!liveText && origSpan.__agyOrigLabelText && (!origSpan.childNodes || origSpan.childNodes.length === 0)) {
+      origSpan.textContent = origSpan.__agyOrigLabelText;
     }
     let koSpan = spans.find((s) => s.classList.contains('agy-ko-trigger-label'));
     if (!koSpan) {
@@ -368,8 +383,6 @@
           if (!tn.__agyOrigValue) tn.__agyOrigValue = tn.nodeValue;
           tn.__agyKoApplied = syncKo;
           tn.nodeValue = syncKo;
-        } else {
-          el.textContent = syncKo;
         }
         continue;
       }
@@ -383,8 +396,6 @@
             if (!tn.__agyOrigValue) tn.__agyOrigValue = tn.nodeValue;
             tn.__agyKoApplied = ko;
             tn.nodeValue = ko;
-          } else {
-            el.textContent = ko;
           }
         });
       }
@@ -440,16 +451,23 @@
   }
 
   function doesWorkedForButtonContainThinking(btn) {
+    if (!btn) return false;
+    if (btn.__agyHasThinking) return true;
     try {
       const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
       let cur = fk ? btn[fk] : null;
       for (let i = 0; i < 12 && cur; i++) {
         const segSteps = cur.memoizedProps?.segment?.steps;
         if (Array.isArray(segSteps)) {
-          return segSteps.some((s) => {
+          const found = segSteps.some((s) => {
             const val = s?.step?.value;
             return Boolean(val && (val.thinking || val.rawThinking));
           });
+          if (found) {
+            btn.__agyHasThinking = true;
+            return true;
+          }
+          return false;
         }
         cur = cur.return;
       }
@@ -458,21 +476,59 @@
   }
 
   function doesToolGroupButtonContainThinking(btn) {
+    if (!btn) return false;
+    if (btn.__agyHasThinking) return true;
     try {
       const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
       let cur = fk ? btn[fk] : null;
       for (let i = 0; i < 12 && cur; i++) {
         const grpSteps = cur.memoizedProps?.steps || cur.memoizedProps?.group?.steps;
         if (Array.isArray(grpSteps)) {
-          return grpSteps.some((s) => {
+          const found = grpSteps.some((s) => {
             const val = s?.step?.value;
             return Boolean(val && (val.thinking || val.rawThinking));
           });
+          if (found) {
+            btn.__agyHasThinking = true;
+            return true;
+          }
+          return false;
         }
         cur = cur.return;
       }
     } catch (e) {}
     return false;
+  }
+
+  function expandTriggerButtonIfNeeded(btn) {
+    if (!btn || btn.getAttribute('aria-expanded') !== 'false' || btn.__agyUserCollapsed) {
+      return false;
+    }
+    btn.__agyAutoExpanded = true;
+    btn.__agyProgrammaticClick = true;
+    try {
+      btn.click();
+    } catch (e) {
+    } finally {
+      btn.__agyProgrammaticClick = false;
+    }
+    return true;
+  }
+
+  function onTriggerButtonClickCapture(e) {
+    try {
+      if (!e || !e.target || typeof e.target.closest !== 'function') return;
+      const btn = e.target.closest(
+        'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"]'
+      );
+      if (!btn || btn.__agyProgrammaticClick || e.isTrusted === false) return;
+      const expandedBeforeClick = btn.getAttribute('aria-expanded');
+      if (expandedBeforeClick === 'true') {
+        btn.__agyUserCollapsed = true;
+      } else if (expandedBeforeClick === 'false') {
+        btn.__agyUserCollapsed = false;
+      }
+    } catch (err) {}
   }
 
   function scanTriggerButtonsSync() {
@@ -484,13 +540,10 @@
       if (
         autoExpand &&
         btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyAutoExpanded &&
+        !btn.__agyUserCollapsed &&
         doesWorkedForButtonContainThinking(btn)
       ) {
-        btn.__agyAutoExpanded = true;
-        try {
-          btn.click();
-        } catch (e) {}
+        expandTriggerButtonIfNeeded(btn);
       }
     }
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
@@ -499,23 +552,17 @@
       if (
         autoExpand &&
         btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyAutoExpanded &&
+        !btn.__agyUserCollapsed &&
         doesToolGroupButtonContainThinking(btn)
       ) {
-        btn.__agyAutoExpanded = true;
-        try {
-          btn.click();
-        } catch (e) {}
+        expandTriggerButtonIfNeeded(btn);
       }
     }
     const thinkingBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
     for (const btn of thinkingBtns) {
       processTriggerButton(btn);
-      if (autoExpand && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyAutoExpanded) {
-        btn.__agyAutoExpanded = true;
-        try {
-          btn.click();
-        } catch (e) {}
+      if (autoExpand && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+        expandTriggerButtonIfNeeded(btn);
       }
     }
   }
@@ -1012,7 +1059,17 @@
 
   const observer = new MutationObserver((mutations) => {
     for (const m of mutations) {
-      if (m.type === 'childList' && m.addedNodes.length > 0) {
+      if (m.type === 'childList' && (m.addedNodes.length > 0 || m.removedNodes.length > 0)) {
+        const tEl = m.target && m.target.nodeType === 1 ? m.target : m.target?.parentElement;
+        if (
+          tEl &&
+          tEl.closest &&
+          (tEl.closest('.agy-ko-thought-wrap') ||
+            tEl.closest('.agy-ko-settings-root') ||
+            tEl.classList?.contains('agy-ko-trigger-label'))
+        ) {
+          continue;
+        }
         scheduleCoalescedScan();
         return;
       }
@@ -1020,16 +1077,19 @@
         const parent = m.target.parentElement;
         if (
           parent &&
-          (parent.closest('.cursor-edit') ||
-            parent.closest('button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"]')) &&
           !parent.classList.contains('agy-ko-trigger-label') &&
-          !parent.closest('.agy-ko-thought-wrap')
+          !parent.closest('.agy-ko-thought-wrap') &&
+          m.target.__agyKoApplied !== (m.target.nodeValue || '').trim()
         ) {
           scheduleCoalescedScan();
           return;
         }
       }
       if (m.type === 'attributes' && m.target && m.target.closest) {
+        if (m.attributeName === 'aria-expanded') {
+          scheduleCoalescedScan();
+          return;
+        }
         if (
           !m.target.closest('.agy-ko-settings-root') &&
           m.target.closest('.settings-modal-container, [role="dialog"]')
@@ -1047,12 +1107,15 @@
       window.addEventListener('DOMContentLoaded', startObserver, { once: true });
       return;
     }
+    if (document.addEventListener) {
+      document.addEventListener('click', onTriggerButtonClickCapture, true);
+    }
     observer.observe(root, {
       childList: true,
       subtree: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['style'],
+      attributeFilter: ['style', 'aria-expanded'],
     });
     loadPersistentTranslatorSettings();
     registerStatusbarTranslatorAdapter();
@@ -1079,6 +1142,9 @@
     if (thoughtDebounceTimer) clearTimeout(thoughtDebounceTimer);
     if (settingsFeedbackTimer) clearTimeout(settingsFeedbackTimer);
     observer.disconnect();
+    if (document.removeEventListener) {
+      document.removeEventListener('click', onTriggerButtonClickCapture, true);
+    }
     delete window.__agyKoLocalizerActive;
     unregisterStatusbarTranslatorAdapter(fullRestore);
     document.querySelectorAll('.cursor-edit').forEach((el) => {
