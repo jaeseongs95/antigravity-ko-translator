@@ -142,6 +142,8 @@
     'Reconnect': '재연결',
     'Configure': '설정',
     // Tool step action verbs
+    'Explored': '탐색함',
+    'Exploring': '탐색 중',
     'Created': '생성함',
     'Creating': '생성 중',
     'Canceled creation of': '생성 취소됨',
@@ -850,16 +852,26 @@
   function translateToolClause(clause) {
     const c = clause.trim();
     const lower = c.toLowerCase();
-    if (lower === 'explored files') return '파일 탐색';
-    if (lower === 'exploring files') return '파일 탐색 중';
+    if (lower === 'explored') return '탐색함';
+    if (lower === 'exploring') return '탐색 중';
+    if (lower === 'explored files' || lower === 'explored file') return '파일 탐색';
+    if (lower === 'exploring files' || lower === 'exploring file') return '파일 탐색 중';
+    if (lower === 'explored artifacts' || lower === 'explored artifact') return '산출물 탐색';
+    if (lower === 'exploring artifacts' || lower === 'exploring artifact') return '산출물 탐색 중';
     if (lower === 'ran commands' || lower === 'ran command') return '명령 실행';
     if (lower === 'running commands' || lower === 'running command') return '명령 실행 중';
     if (lower === 'edited files' || lower === 'edited file') return '파일 수정';
     if (lower === 'editing files' || lower === 'editing file') return '파일 수정 중';
+    if (lower === 'edited artifacts' || lower === 'edited artifact') return '산출물 수정';
+    if (lower === 'editing artifacts' || lower === 'editing artifact') return '산출물 수정 중';
     if (lower === 'created files' || lower === 'created file') return '파일 생성';
     if (lower === 'creating files' || lower === 'creating file') return '파일 생성 중';
+    if (lower === 'created artifacts' || lower === 'created artifact') return '산출물 생성';
+    if (lower === 'creating artifacts' || lower === 'creating artifact') return '산출물 생성 중';
     if (lower === 'deleted files' || lower === 'deleted file') return '파일 삭제';
     if (lower === 'deleting files' || lower === 'deleting file') return '파일 삭제 중';
+    if (lower === 'deleted artifacts' || lower === 'deleted artifact') return '산출물 삭제';
+    if (lower === 'deleting artifacts' || lower === 'deleting artifact') return '산출물 삭제 중';
     if (lower === 'read files' || lower === 'read file') return '파일 읽기';
     if (lower === 'reading files' || lower === 'reading file') return '파일 읽는 중';
     if (lower === 'searched web' || lower === 'searching web') return '웹 검색';
@@ -876,6 +888,8 @@
     if (m) return `파일 ${m[1]}개 삭제함`;
     m = c.match(/^Ran\s+(\d+)\s+commands?$/i);
     if (m) return `명령 ${m[1]}개 실행함`;
+    m = c.match(/^Explored\s+(\d+)\s+files?$/i);
+    if (m) return `파일 ${m[1]}개 탐색함`;
     return null;
   }
 

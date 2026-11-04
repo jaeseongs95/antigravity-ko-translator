@@ -207,6 +207,9 @@
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
+    if (showThinkingEnabled && typeof scanTriggerButtonsSync === 'function') {
+      scanTriggerButtonsSync();
+    }
     try {
       document.querySelectorAll('iframe').forEach((ifr) => {
         try {

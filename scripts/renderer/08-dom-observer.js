@@ -48,15 +48,20 @@
     const origSpan = spans.find((s) => !s.classList.contains('agy-ko-trigger-label'));
     if (!origSpan) return;
 
-    const rawText = (origSpan.textContent || '').trim();
+    const liveText = (origSpan.textContent || '').trim();
+    const rawText = liveText || (origSpan.__agyOrigLabelText || '').trim();
     const koText = translateStaticUiSync(rawText);
     if (!koText) return;
 
+    origSpan.__agyOrigLabelText = rawText;
     if (origSpan.getAttribute('data-agy-orig-label') !== '1') {
       origSpan.setAttribute('data-agy-orig-label', '1');
     }
     if (origSpan.style.display !== 'none') {
       origSpan.style.display = 'none';
+    }
+    if (origSpan.textContent !== '') {
+      origSpan.textContent = '';
     }
     let koSpan = spans.find((s) => s.classList.contains('agy-ko-trigger-label'));
     if (!koSpan) {
@@ -434,15 +439,51 @@
     localizeQuestionAndPermissionWidgets(rootNode);
   }
 
+  function doesWorkedForButtonContainThinking(btn) {
+    try {
+      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+      let cur = fk ? btn[fk] : null;
+      for (let i = 0; i < 12 && cur; i++) {
+        const segSteps = cur.memoizedProps?.segment?.steps;
+        if (Array.isArray(segSteps)) {
+          return segSteps.some((s) => {
+            const val = s?.step?.value;
+            return Boolean(val && (val.thinking || val.rawThinking));
+          });
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    return false;
+  }
+
   function scanTriggerButtonsSync() {
     ensureStyle();
+    const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
     const thinkingBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
     for (const btn of thinkingBtns) {
       processTriggerButton(btn);
+      if (autoExpand && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyAutoExpanded) {
+        btn.__agyAutoExpanded = true;
+        try {
+          btn.click();
+        } catch (e) {}
+      }
     }
     const workedBtns = document.querySelectorAll('button[data-testid="worked-for-collapsible"]');
     for (const btn of workedBtns) {
       processTriggerButton(btn);
+      if (
+        autoExpand &&
+        btn.getAttribute('aria-expanded') === 'false' &&
+        !btn.__agyAutoExpanded &&
+        doesWorkedForButtonContainThinking(btn)
+      ) {
+        btn.__agyAutoExpanded = true;
+        try {
+          btn.click();
+        } catch (e) {}
+      }
     }
   }
 
@@ -1041,6 +1082,10 @@
       if (st) st.remove();
       document.querySelectorAll('.agy-ko-thought-wrap, .agy-ko-trigger-label').forEach((el) => el.remove());
       document.querySelectorAll('[data-agy-orig-label]').forEach((el) => {
+        if (el.__agyOrigLabelText && !el.textContent) {
+          el.textContent = el.__agyOrigLabelText;
+        }
+        delete el.__agyOrigLabelText;
         el.removeAttribute('data-agy-orig-label');
         el.style.display = '';
       });

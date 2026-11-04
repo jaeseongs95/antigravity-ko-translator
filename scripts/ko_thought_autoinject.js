@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.10
+// @version      1.2.11
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.5';
+  const KO_LOCALIZER_VERSION = 'v13.6';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
@@ -462,6 +462,8 @@
     'Reconnect': '재연결',
     'Configure': '설정',
     // Tool step action verbs
+    'Explored': '탐색함',
+    'Exploring': '탐색 중',
     'Created': '생성함',
     'Creating': '생성 중',
     'Canceled creation of': '생성 취소됨',
@@ -1170,16 +1172,26 @@
   function translateToolClause(clause) {
     const c = clause.trim();
     const lower = c.toLowerCase();
-    if (lower === 'explored files') return '파일 탐색';
-    if (lower === 'exploring files') return '파일 탐색 중';
+    if (lower === 'explored') return '탐색함';
+    if (lower === 'exploring') return '탐색 중';
+    if (lower === 'explored files' || lower === 'explored file') return '파일 탐색';
+    if (lower === 'exploring files' || lower === 'exploring file') return '파일 탐색 중';
+    if (lower === 'explored artifacts' || lower === 'explored artifact') return '산출물 탐색';
+    if (lower === 'exploring artifacts' || lower === 'exploring artifact') return '산출물 탐색 중';
     if (lower === 'ran commands' || lower === 'ran command') return '명령 실행';
     if (lower === 'running commands' || lower === 'running command') return '명령 실행 중';
     if (lower === 'edited files' || lower === 'edited file') return '파일 수정';
     if (lower === 'editing files' || lower === 'editing file') return '파일 수정 중';
+    if (lower === 'edited artifacts' || lower === 'edited artifact') return '산출물 수정';
+    if (lower === 'editing artifacts' || lower === 'editing artifact') return '산출물 수정 중';
     if (lower === 'created files' || lower === 'created file') return '파일 생성';
     if (lower === 'creating files' || lower === 'creating file') return '파일 생성 중';
+    if (lower === 'created artifacts' || lower === 'created artifact') return '산출물 생성';
+    if (lower === 'creating artifacts' || lower === 'creating artifact') return '산출물 생성 중';
     if (lower === 'deleted files' || lower === 'deleted file') return '파일 삭제';
     if (lower === 'deleting files' || lower === 'deleting file') return '파일 삭제 중';
+    if (lower === 'deleted artifacts' || lower === 'deleted artifact') return '산출물 삭제';
+    if (lower === 'deleting artifacts' || lower === 'deleting artifact') return '산출물 삭제 중';
     if (lower === 'read files' || lower === 'read file') return '파일 읽기';
     if (lower === 'reading files' || lower === 'reading file') return '파일 읽는 중';
     if (lower === 'searched web' || lower === 'searching web') return '웹 검색';
@@ -1196,6 +1208,8 @@
     if (m) return `파일 ${m[1]}개 삭제함`;
     m = c.match(/^Ran\s+(\d+)\s+commands?$/i);
     if (m) return `명령 ${m[1]}개 실행함`;
+    m = c.match(/^Explored\s+(\d+)\s+files?$/i);
+    if (m) return `파일 ${m[1]}개 탐색함`;
     return null;
   }
 
@@ -2293,6 +2307,9 @@
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
+    if (showThinkingEnabled && typeof scanTriggerButtonsSync === 'function') {
+      scanTriggerButtonsSync();
+    }
     try {
       document.querySelectorAll('iframe').forEach((ifr) => {
         try {
@@ -2363,6 +2380,8 @@
     button[data-testid="thinking-collapsible-trigger"] > span[data-agy-orig-label="1"],
     button[data-testid="worked-for-collapsible"] > span[data-agy-orig-label="1"] {
       display: none !important;
+      font-size: 0 !important;
+      visibility: hidden !important;
     }
     .agy-ko-pill-group {
       display: inline-flex;
@@ -2908,7 +2927,7 @@
     const showThinkingDesc = document.createElement('span');
     showThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
     showThinkingDesc.textContent =
-      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계를 숨기지 않고 화면에 상시 표시합니다. (기본값: 켜짐)';
+      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계를 자동으로 펼쳐 화면에 상시 표시합니다. (기본값: 켜짐 · 참고: Gemini Low 등 경량 추론 설정 모델은 도구 호출 시 추론 본문을 생성하지 않을 수 있습니다)';
     showThinkingInfo.appendChild(showThinkingTitle);
     showThinkingInfo.appendChild(showThinkingDesc);
 
@@ -3355,15 +3374,20 @@
     const origSpan = spans.find((s) => !s.classList.contains('agy-ko-trigger-label'));
     if (!origSpan) return;
 
-    const rawText = (origSpan.textContent || '').trim();
+    const liveText = (origSpan.textContent || '').trim();
+    const rawText = liveText || (origSpan.__agyOrigLabelText || '').trim();
     const koText = translateStaticUiSync(rawText);
     if (!koText) return;
 
+    origSpan.__agyOrigLabelText = rawText;
     if (origSpan.getAttribute('data-agy-orig-label') !== '1') {
       origSpan.setAttribute('data-agy-orig-label', '1');
     }
     if (origSpan.style.display !== 'none') {
       origSpan.style.display = 'none';
+    }
+    if (origSpan.textContent !== '') {
+      origSpan.textContent = '';
     }
     let koSpan = spans.find((s) => s.classList.contains('agy-ko-trigger-label'));
     if (!koSpan) {
@@ -3741,15 +3765,51 @@
     localizeQuestionAndPermissionWidgets(rootNode);
   }
 
+  function doesWorkedForButtonContainThinking(btn) {
+    try {
+      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+      let cur = fk ? btn[fk] : null;
+      for (let i = 0; i < 12 && cur; i++) {
+        const segSteps = cur.memoizedProps?.segment?.steps;
+        if (Array.isArray(segSteps)) {
+          return segSteps.some((s) => {
+            const val = s?.step?.value;
+            return Boolean(val && (val.thinking || val.rawThinking));
+          });
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    return false;
+  }
+
   function scanTriggerButtonsSync() {
     ensureStyle();
+    const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
     const thinkingBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
     for (const btn of thinkingBtns) {
       processTriggerButton(btn);
+      if (autoExpand && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyAutoExpanded) {
+        btn.__agyAutoExpanded = true;
+        try {
+          btn.click();
+        } catch (e) {}
+      }
     }
     const workedBtns = document.querySelectorAll('button[data-testid="worked-for-collapsible"]');
     for (const btn of workedBtns) {
       processTriggerButton(btn);
+      if (
+        autoExpand &&
+        btn.getAttribute('aria-expanded') === 'false' &&
+        !btn.__agyAutoExpanded &&
+        doesWorkedForButtonContainThinking(btn)
+      ) {
+        btn.__agyAutoExpanded = true;
+        try {
+          btn.click();
+        } catch (e) {}
+      }
     }
   }
 
@@ -4348,6 +4408,10 @@
       if (st) st.remove();
       document.querySelectorAll('.agy-ko-thought-wrap, .agy-ko-trigger-label').forEach((el) => el.remove());
       document.querySelectorAll('[data-agy-orig-label]').forEach((el) => {
+        if (el.__agyOrigLabelText && !el.textContent) {
+          el.textContent = el.__agyOrigLabelText;
+        }
+        delete el.__agyOrigLabelText;
         el.removeAttribute('data-agy-orig-label');
         el.style.display = '';
       });

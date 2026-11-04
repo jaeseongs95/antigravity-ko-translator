@@ -27,11 +27,11 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.5';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.6';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.ok(bundleCode.includes("ensureVerboseConversationStepsEnabled"));
   assert.ok(bundleCode.includes("'verboseConversationSteps'"));
-  assert.ok(bundleCode.includes("'remove-conversation-history'"));
+  assert.ok(bundleCode.includes("doesWorkedForButtonContainThinking"));
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
 
@@ -207,6 +207,10 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(dictSandbox.translateStaticUiSync('Conversation Steps'), '대화 단계 표시');
   assert.equal(dictSandbox.translateStaticUiSync('Verbose'), '상세히');
   assert.equal(dictSandbox.translateStaticUiSync('Waiting for your approval'), '사용자 승인 대기 중');
+  assert.equal(dictSandbox.translateStaticUiSync('Exploring'), '탐색 중');
+  assert.equal(dictSandbox.translateStaticUiSync('Explored'), '탐색함');
+  assert.equal(dictSandbox.translateStaticUiSync('Explored files, ran commands, edited files'), '파일 탐색, 명령 실행, 파일 수정');
+  assert.equal(dictSandbox.translateStaticUiSync('Exploring artifacts'), '산출물 탐색 중');
 
   // 4. Remote Control defaults to google-translate and local-llm falls back to google-translate when unreachable
   const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
@@ -312,4 +316,76 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   bootSandbox.__ensureVerbose();
   assert.deepEqual(setPrefCalls, [['verboseConversationSteps', true]]);
   assert.equal(verbosePrefVal, true);
+
+  // 6. processTriggerButton clears origSpan.textContent to eliminate duplicate English/Korean textContent and updates across streaming ticks
+  assert.ok(mod08.includes('const liveText = (origSpan.textContent || \'\').trim();'), 'must prioritize non-empty live origSpan.textContent over cached __agyOrigLabelText');
+  assert.ok(mod08.includes('origSpan.__agyOrigLabelText = rawText;'), 'must preserve original label text on origSpan.__agyOrigLabelText');
+  assert.ok(mod08.includes("origSpan.textContent = '';"), 'must clear origSpan.textContent so button.textContent never duplicates English and Korean');
+  assert.ok(mod08.includes('btn.__agyAutoExpanded = true;'), 'must auto-expand collapsed thinking/worked-for buttons at most once when Show Thinking is enabled');
+
+  const processBtnMatch = mod08.match(/function processTriggerButton\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
+  assert.ok(processBtnMatch, 'processTriggerButton must exist');
+  const triggerSandbox = {
+    translateStaticUiSync: dictSandbox.translateStaticUiSync,
+    document: {
+      createElement(tag) {
+        return {
+          tagName: tag.toUpperCase(),
+          className: '',
+          textContent: '',
+          style: {},
+          classList: {
+            contains(cls) {
+              return String(this.className || '').split(/\s+/).includes(cls);
+            },
+          },
+          getAttribute() {
+            return null;
+          },
+          setAttribute() {},
+        };
+      },
+    },
+  };
+  vm.runInNewContext(`${processBtnMatch[0]}\n;globalThis.__processTriggerButton = processTriggerButton;`, triggerSandbox);
+  const mockSpans = [];
+  const origSpan = {
+    className: 'text-muted-foreground',
+    textContent: 'Thinking for 1s',
+    style: {},
+    attrs: {},
+    classList: { contains: (c) => c === 'text-muted-foreground' },
+    getAttribute(k) {
+      return this.attrs[k] || null;
+    },
+    setAttribute(k, v) {
+      this.attrs[k] = v;
+    },
+    insertAdjacentElement(pos, el) {
+      el.classList = {
+        contains: (c) => String(el.className || '').split(/\s+/).includes(c),
+      };
+      mockSpans.push(el);
+    },
+  };
+  mockSpans.push(origSpan);
+  const mockBtn = {
+    querySelectorAll: () => mockSpans,
+  };
+  triggerSandbox.__processTriggerButton(mockBtn);
+  assert.equal(origSpan.textContent, '');
+  assert.equal(origSpan.__agyOrigLabelText, 'Thinking for 1s');
+  assert.equal(mockSpans[1].textContent, '1초 동안 생각하는 중');
+
+  // Simulate React updating origSpan.textContent to "Thought for 8s" on completion
+  origSpan.textContent = 'Thought for 8s';
+  triggerSandbox.__processTriggerButton(mockBtn);
+  assert.equal(origSpan.textContent, '');
+  assert.equal(origSpan.__agyOrigLabelText, 'Thought for 8s');
+  assert.equal(mockSpans[1].textContent, '8초 동안 생각함');
+
+  // Subsequent scan when origSpan.textContent is already empty preserves "8초 동안 생각함"
+  triggerSandbox.__processTriggerButton(mockBtn);
+  assert.equal(origSpan.__agyOrigLabelText, 'Thought for 8s');
+  assert.equal(mockSpans[1].textContent, '8초 동안 생각함');
 });
