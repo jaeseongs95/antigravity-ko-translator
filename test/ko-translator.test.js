@@ -27,11 +27,12 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.6';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.7';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.ok(bundleCode.includes("ensureVerboseConversationStepsEnabled"));
   assert.ok(bundleCode.includes("'verboseConversationSteps'"));
   assert.ok(bundleCode.includes("doesWorkedForButtonContainThinking"));
+  assert.ok(bundleCode.includes("doesToolGroupButtonContainThinking"));
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
 
@@ -388,4 +389,60 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   triggerSandbox.__processTriggerButton(mockBtn);
   assert.equal(origSpan.__agyOrigLabelText, 'Thought for 8s');
   assert.equal(mockSpans[1].textContent, '8초 동안 생각함');
+
+  // 7. doesToolGroupButtonContainThinking and 3-tier collapsible auto-expand (worked-for -> tool-group -> thinking)
+  const toolGrpFnMatch = mod08.match(/function doesToolGroupButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
+  const workedFnMatch = mod08.match(/function doesWorkedForButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
+  const scanBtnsMatch = mod08.match(/function scanTriggerButtonsSync\(\)\s*\{[\s\S]*?\r?\n  \}/);
+  assert.ok(toolGrpFnMatch && workedFnMatch && scanBtnsMatch, '3-tier collapsible functions must exist in 08-dom-observer.js');
+
+  let clickedOrder = [];
+  const makeCollapsibleBtn = (fiberKey, fiberVal, expanded = 'false') => ({
+    [fiberKey]: fiberVal,
+    __agyAutoExpanded: false,
+    querySelectorAll: () => [],
+    getAttribute(k) {
+      return k === 'aria-expanded' ? expanded : null;
+    },
+    click() {
+      clickedOrder.push(fiberKey);
+    },
+  });
+
+  const workedWithThinking = makeCollapsibleBtn('__reactFiber$worked1', {
+    memoizedProps: { segment: { steps: [{ step: { value: { thinking: 'Step 1 thought' } } }] } },
+  });
+  const toolGroupWithThinking = makeCollapsibleBtn('__reactFiber$toolGrp1', {
+    memoizedProps: { steps: [{ step: { value: { thinking: 'Intermediate tool thought' } } }] },
+  });
+  const toolGroupWithoutThinking = makeCollapsibleBtn('__reactFiber$toolGrp2', {
+    memoizedProps: { steps: [{ step: { value: { thinking: '' } } }] },
+  });
+  const thinkingTriggerBtn = makeCollapsibleBtn('__reactFiber$thinking1', {});
+
+  const expandSandbox = {
+    ensureStyle() {},
+    processTriggerButton() {},
+    isShowThinkingEnabled: () => true,
+    document: {
+      querySelectorAll(sel) {
+        if (sel.includes('worked-for-collapsible')) return [workedWithThinking];
+        if (sel.includes('tool-group-collapsible')) return [toolGroupWithThinking, toolGroupWithoutThinking];
+        if (sel.includes('thinking-collapsible-trigger')) return [thinkingTriggerBtn];
+        return [];
+      },
+    },
+  };
+  vm.runInNewContext(
+    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;`,
+    expandSandbox
+  );
+  assert.equal(expandSandbox.__doesToolGroupContainThinking(toolGroupWithThinking), true);
+  assert.equal(expandSandbox.__doesToolGroupContainThinking(toolGroupWithoutThinking), false);
+  expandSandbox.__scanTriggerButtonsSync();
+  assert.deepEqual(clickedOrder, [
+    '__reactFiber$worked1',
+    '__reactFiber$toolGrp1',
+    '__reactFiber$thinking1',
+  ]);
 });

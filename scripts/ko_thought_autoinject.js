@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.11
+// @version      1.2.12
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.6';
+  const KO_LOCALIZER_VERSION = 'v13.7';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
@@ -2378,7 +2378,8 @@
       position: relative;
     }
     button[data-testid="thinking-collapsible-trigger"] > span[data-agy-orig-label="1"],
-    button[data-testid="worked-for-collapsible"] > span[data-agy-orig-label="1"] {
+    button[data-testid="worked-for-collapsible"] > span[data-agy-orig-label="1"],
+    button[data-testid="tool-group-collapsible"] > span[data-agy-orig-label="1"] {
       display: none !important;
       font-size: 0 !important;
       visibility: hidden !important;
@@ -2927,7 +2928,7 @@
     const showThinkingDesc = document.createElement('span');
     showThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
     showThinkingDesc.textContent =
-      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계를 자동으로 펼쳐 화면에 상시 표시합니다. (기본값: 켜짐 · 참고: Gemini Low 등 경량 추론 설정 모델은 도구 호출 시 추론 본문을 생성하지 않을 수 있습니다)';
+      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계(Worked for / 도구 그룹 접힘 블록 포함)를 자동으로 펼쳐 화면에 상시 표시합니다. (기본값: 켜짐 · 참고: Gemini Low/Flash나 Argon Medium(EFFORT 0.20) 등 경량 추론 설정, 또는 Low로 시작한 긴 세션에서 중간에 모델을 변경한 경우에는 모델이 추론 본문 없이 바로 도구를 호출할 수 있습니다)';
     showThinkingInfo.appendChild(showThinkingTitle);
     showThinkingInfo.appendChild(showThinkingDesc);
 
@@ -3624,7 +3625,7 @@
       'style, script, code, pre, [contenteditable="true"], .monaco-editor, .xterm, ' +
       '.agy-ctx-statusbar, .agy-ctx-modal-backdrop, .agy-ko-settings-root, #agy-ko-translator-modal, ' +
       '[data-testid="agent-input-box"], [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
-      'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], ' +
+      'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
       '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
       '[data-uri], [data-quotable-inline="true"], .cursor-edit';
     const selector = forAttributes ? baseExcluded : 'textarea, ' + baseExcluded;
@@ -3783,19 +3784,27 @@
     return false;
   }
 
+  function doesToolGroupButtonContainThinking(btn) {
+    try {
+      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+      let cur = fk ? btn[fk] : null;
+      for (let i = 0; i < 12 && cur; i++) {
+        const grpSteps = cur.memoizedProps?.steps || cur.memoizedProps?.group?.steps;
+        if (Array.isArray(grpSteps)) {
+          return grpSteps.some((s) => {
+            const val = s?.step?.value;
+            return Boolean(val && (val.thinking || val.rawThinking));
+          });
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    return false;
+  }
+
   function scanTriggerButtonsSync() {
     ensureStyle();
     const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
-    const thinkingBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
-    for (const btn of thinkingBtns) {
-      processTriggerButton(btn);
-      if (autoExpand && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyAutoExpanded) {
-        btn.__agyAutoExpanded = true;
-        try {
-          btn.click();
-        } catch (e) {}
-      }
-    }
     const workedBtns = document.querySelectorAll('button[data-testid="worked-for-collapsible"]');
     for (const btn of workedBtns) {
       processTriggerButton(btn);
@@ -3805,6 +3814,31 @@
         !btn.__agyAutoExpanded &&
         doesWorkedForButtonContainThinking(btn)
       ) {
+        btn.__agyAutoExpanded = true;
+        try {
+          btn.click();
+        } catch (e) {}
+      }
+    }
+    const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
+    for (const btn of toolGroupBtns) {
+      processTriggerButton(btn);
+      if (
+        autoExpand &&
+        btn.getAttribute('aria-expanded') === 'false' &&
+        !btn.__agyAutoExpanded &&
+        doesToolGroupButtonContainThinking(btn)
+      ) {
+        btn.__agyAutoExpanded = true;
+        try {
+          btn.click();
+        } catch (e) {}
+      }
+    }
+    const thinkingBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
+    for (const btn of thinkingBtns) {
+      processTriggerButton(btn);
+      if (autoExpand && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyAutoExpanded) {
         btn.__agyAutoExpanded = true;
         try {
           btn.click();
@@ -4314,7 +4348,7 @@
         if (
           parent &&
           (parent.closest('.cursor-edit') ||
-            parent.closest('button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"]')) &&
+            parent.closest('button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"]')) &&
           !parent.classList.contains('agy-ko-trigger-label') &&
           !parent.closest('.agy-ko-thought-wrap')
         ) {

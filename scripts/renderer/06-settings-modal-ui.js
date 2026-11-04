@@ -9,7 +9,8 @@
       position: relative;
     }
     button[data-testid="thinking-collapsible-trigger"] > span[data-agy-orig-label="1"],
-    button[data-testid="worked-for-collapsible"] > span[data-agy-orig-label="1"] {
+    button[data-testid="worked-for-collapsible"] > span[data-agy-orig-label="1"],
+    button[data-testid="tool-group-collapsible"] > span[data-agy-orig-label="1"] {
       display: none !important;
       font-size: 0 !important;
       visibility: hidden !important;
@@ -558,7 +559,7 @@
     const showThinkingDesc = document.createElement('span');
     showThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
     showThinkingDesc.textContent =
-      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계를 자동으로 펼쳐 화면에 상시 표시합니다. (기본값: 켜짐 · 참고: Gemini Low 등 경량 추론 설정 모델은 도구 호출 시 추론 본문을 생성하지 않을 수 있습니다)';
+      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계(Worked for / 도구 그룹 접힘 블록 포함)를 자동으로 펼쳐 화면에 상시 표시합니다. (기본값: 켜짐 · 참고: Gemini Low/Flash나 Argon Medium(EFFORT 0.20) 등 경량 추론 설정, 또는 Low로 시작한 긴 세션에서 중간에 모델을 변경한 경우에는 모델이 추론 본문 없이 바로 도구를 호출할 수 있습니다)';
     showThinkingInfo.appendChild(showThinkingTitle);
     showThinkingInfo.appendChild(showThinkingDesc);
 
