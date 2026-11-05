@@ -15,6 +15,13 @@
       font-size: 0 !important;
       visibility: hidden !important;
     }
+    button[data-testid="thinking-collapsible-trigger"][data-agy-auto-expanded="1"][aria-expanded="true"] + div,
+    button[data-testid="worked-for-collapsible"][data-agy-auto-expanded="1"][aria-expanded="true"] + div,
+    button[data-testid="tool-group-collapsible"][data-agy-auto-expanded="1"][aria-expanded="true"] + div {
+      opacity: 1 !important;
+      transform: none !important;
+      transition: none !important;
+    }
     .agy-ko-pill-group {
       display: inline-flex;
       align-items: center;

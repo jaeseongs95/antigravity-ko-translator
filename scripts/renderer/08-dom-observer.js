@@ -78,11 +78,14 @@
     if (!liveText && origSpan.__agyOrigLabelText && (!origSpan.childNodes || origSpan.childNodes.length === 0)) {
       origSpan.textContent = origSpan.__agyOrigLabelText;
     }
+    const expectedKoClass = (origSpan.className ? origSpan.className + ' ' : '') + 'agy-ko-trigger-label';
     let koSpan = spans.find((s) => s.classList.contains('agy-ko-trigger-label'));
     if (!koSpan) {
       koSpan = document.createElement('span');
-      koSpan.className = origSpan.className + ' agy-ko-trigger-label';
+      koSpan.className = expectedKoClass;
       origSpan.insertAdjacentElement('afterend', koSpan);
+    } else if (koSpan.className !== expectedKoClass) {
+      koSpan.className = expectedKoClass;
     }
 
     if (koSpan.__lastRawText !== rawText) {
@@ -159,30 +162,44 @@
     const prevWrapChildren = Array.from(wrap.children);
 
     if (blockChildren.length > 0) {
-      const nextFragment = document.createDocumentFragment();
       const slots = blockChildren.map((ch, idx) => {
         const chSrc = (ch.textContent || '').trim();
-        const syncNode = tryTranslateBlockElementSync(ch);
-        let initialNode = syncNode;
-        if (!initialNode) {
-          const prevSlot = prevWrapChildren[idx];
-          if (
-            prevSlot &&
-            prevSlot.getAttribute('data-agy-src') === chSrc &&
-            /[가-힣]/.test(prevSlot.textContent || '')
-          ) {
-            initialNode = prevSlot.cloneNode(true);
-          } else {
-            initialNode = ch.cloneNode(true);
-          }
+        const prevSlot = prevWrapChildren[idx];
+        if (
+          prevSlot &&
+          prevSlot.getAttribute('data-agy-src') === chSrc &&
+          /[가-힣]/.test(prevSlot.textContent || '')
+        ) {
+          return { orig: ch, slot: prevSlot, alreadyDone: true, src: chSrc };
         }
+        const syncNode = tryTranslateBlockElementSync(ch);
+        if (syncNode) {
+          syncNode.setAttribute('data-agy-src', chSrc);
+          if (!prevSlot) {
+            wrap.appendChild(syncNode);
+          } else if (prevSlot !== syncNode) {
+            wrap.replaceChild(syncNode, prevSlot);
+          }
+          return { orig: ch, slot: syncNode, alreadyDone: true, src: chSrc };
+        }
+        if (prevSlot && /[가-힣]/.test(prevSlot.textContent || '')) {
+          return { orig: ch, slot: prevSlot, alreadyDone: false, src: chSrc };
+        }
+        if (prevSlot && prevSlot.getAttribute('data-agy-src') === chSrc) {
+          return { orig: ch, slot: prevSlot, alreadyDone: false, src: chSrc };
+        }
+        const initialNode = ch.cloneNode(true);
         initialNode.setAttribute('data-agy-src', chSrc);
-        nextFragment.appendChild(initialNode);
-        return { orig: ch, slot: initialNode, alreadyDone: !!syncNode, src: chSrc };
+        if (!prevSlot) {
+          wrap.appendChild(initialNode);
+        } else {
+          wrap.replaceChild(initialNode, prevSlot);
+        }
+        return { orig: ch, slot: initialNode, alreadyDone: false, src: chSrc };
       });
-
-      wrap.textContent = '';
-      wrap.appendChild(nextFragment);
+      while (wrap.children.length > slots.length) {
+        wrap.lastElementChild.remove();
+      }
       cursorEdit.setAttribute('data-agy-ko-ready', '1');
       if (triggerBtn) processTriggerButton(triggerBtn);
 
@@ -259,8 +276,14 @@
       p.textContent = rawSnapshot;
       const syncNode = tryTranslateBlockElementSync(p);
       if (syncNode) {
-        wrap.textContent = '';
-        wrap.appendChild(syncNode);
+        if (wrap.firstElementChild) {
+          wrap.replaceChild(syncNode, wrap.firstElementChild);
+        } else {
+          wrap.appendChild(syncNode);
+        }
+        while (wrap.children.length > 1) {
+          wrap.lastElementChild.remove();
+        }
         cursorEdit.setAttribute('data-agy-ko-ready', '1');
         cursorEdit.__agyLastSnapshot = rawSnapshot;
         delete cursorEdit.__agyPendingSnapshot;
@@ -282,8 +305,14 @@
         try {
           const res = await translateBlockElement(p, abortCtrl.signal);
           if (abortCtrl.signal.aborted || cursorEdit.__agyPendingSnapshot !== rawSnapshot) return;
-          wrap.textContent = '';
-          wrap.appendChild(res.node);
+          if (wrap.firstElementChild) {
+            wrap.replaceChild(res.node, wrap.firstElementChild);
+          } else {
+            wrap.appendChild(res.node);
+          }
+          while (wrap.children.length > 1) {
+            wrap.lastElementChild.remove();
+          }
           delete cursorEdit.__agyPendingSnapshot;
           if (res.translated) {
             cursorEdit.__agyLastSnapshot = rawSnapshot;
@@ -505,6 +534,9 @@
       return false;
     }
     btn.__agyAutoExpanded = true;
+    if (typeof btn.setAttribute === 'function') {
+      btn.setAttribute('data-agy-auto-expanded', '1');
+    }
     btn.__agyProgrammaticClick = true;
     try {
       btn.click();
@@ -525,6 +557,9 @@
       const expandedBeforeClick = btn.getAttribute('aria-expanded');
       if (expandedBeforeClick === 'true') {
         btn.__agyUserCollapsed = true;
+        if (typeof btn.removeAttribute === 'function') {
+          btn.removeAttribute('data-agy-auto-expanded');
+        }
       } else if (expandedBeforeClick === 'false') {
         btn.__agyUserCollapsed = false;
       }
@@ -1091,6 +1126,14 @@
           return;
         }
         if (
+          m.attributeName === 'class' &&
+          m.target.getAttribute &&
+          m.target.getAttribute('data-agy-orig-label') === '1'
+        ) {
+          scheduleCoalescedScan();
+          return;
+        }
+        if (
           !m.target.closest('.agy-ko-settings-root') &&
           m.target.closest('.settings-modal-container, [role="dialog"]')
         ) {
@@ -1115,7 +1158,7 @@
       subtree: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['style', 'aria-expanded'],
+      attributeFilter: ['style', 'aria-expanded', 'class'],
     });
     loadPersistentTranslatorSettings();
     registerStatusbarTranslatorAdapter();
@@ -1190,6 +1233,9 @@
       });
       document.querySelectorAll('.cursor-edit[data-agy-ko-ready]').forEach((el) => {
         el.removeAttribute('data-agy-ko-ready');
+      });
+      document.querySelectorAll('[data-agy-auto-expanded]').forEach((el) => {
+        el.removeAttribute('data-agy-auto-expanded');
       });
       restoreAllMutatedNodes();
     }

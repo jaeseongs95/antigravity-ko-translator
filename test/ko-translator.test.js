@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.8';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.9';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.ok(bundleCode.includes("ensureVerboseConversationStepsEnabled"));
   assert.ok(bundleCode.includes("'verboseConversationSteps'"));
@@ -391,12 +391,24 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(origSpan.__agyOrigLabelText, 'Thinking for 1s');
   assert.equal(mockSpans[1].textContent, '1초 동안 생각하는 중');
 
-  // Simulate React updating origSpan.textContent to "Thought for 8s" on completion
+  // Simulate React updating origSpan.textContent to "Thought for 8s" and removing animate-shimmer-text on completion
+  origSpan.className = 'animate-shimmer-text text-muted-foreground';
+  triggerSandbox.__processTriggerButton(mockBtn);
+  assert.equal(mockSpans[1].className, 'animate-shimmer-text text-muted-foreground agy-ko-trigger-label');
+
+  origSpan.className = 'text-muted-foreground';
   origSpan.textContent = 'Thought for 8s';
   triggerSandbox.__processTriggerButton(mockBtn);
   assert.equal(origSpan.textContent, 'Thought for 8s', 'origSpan.textContent must remain intact after completion update');
   assert.equal(origSpan.__agyOrigLabelText, 'Thought for 8s');
   assert.equal(mockSpans[1].textContent, '8초 동안 생각함');
+  assert.equal(
+    mockSpans[1].className,
+    'text-muted-foreground agy-ko-trigger-label',
+    'must synchronize koSpan.className with origSpan.className to stop stale shimmer flicker after completion'
+  );
+  assert.ok(!mod08.includes("wrap.textContent = '';"), 'processCursorEdit must update slots in-place without clearing wrap.textContent (prevents streaming flicker)');
+  assert.ok(mod06.includes('data-agy-auto-expanded="1"'), 'STYLE_CSS must suppress enter transition flicker on auto-expanded collapsibles');
 
   // Simulate <CZb> (s_) 320ms slot transition ("Analyzing" out, "Analyzed" in)
   origSpan.textContent = 'AnalyzingAnalyzed';
@@ -424,12 +436,19 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   const makeCollapsibleBtn = (fiberKey, fiberVal, expanded = 'false') => ({
     [fiberKey]: fiberVal,
     expandedState: expanded,
+    attrs: {},
     querySelectorAll: () => [],
     closest() {
       return this;
     },
     getAttribute(k) {
-      return k === 'aria-expanded' ? this.expandedState : null;
+      return k === 'aria-expanded' ? this.expandedState : this.attrs[k] || null;
+    },
+    setAttribute(k, v) {
+      this.attrs[k] = v;
+    },
+    removeAttribute(k) {
+      delete this.attrs[k];
     },
     click() {
       clickedOrder.push(fiberKey);
@@ -487,9 +506,11 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
 
   // Simulate user manually clicking thinkingTriggerBtn while expanded ('true') -> records __agyUserCollapsed = true
   clickedOrder = [];
+  assert.equal(thinkingTriggerBtn.getAttribute('data-agy-auto-expanded'), '1');
   expandSandbox.__onTriggerClick({ target: thinkingTriggerBtn, isTrusted: true });
   thinkingTriggerBtn.expandedState = 'false';
   assert.equal(thinkingTriggerBtn.__agyUserCollapsed, true);
+  assert.equal(thinkingTriggerBtn.getAttribute('data-agy-auto-expanded'), null);
   expandSandbox.__scanTriggerButtonsSync();
   assert.deepEqual(clickedOrder, [], 'must respect manual user collapse and not re-open');
-});
+});
