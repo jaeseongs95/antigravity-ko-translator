@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.9';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.10';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.ok(bundleCode.includes("ensureVerboseConversationStepsEnabled"));
   assert.ok(bundleCode.includes("'verboseConversationSteps'"));
@@ -426,11 +426,13 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   const workedFnMatch = mod08.match(/function doesWorkedForButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const expandBtnFnMatch = mod08.match(/function expandTriggerButtonIfNeeded\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const clickCapFnMatch = mod08.match(/function onTriggerButtonClickCapture\(e\)\s*\{[\s\S]*?\r?\n  \}/);
-  const scanBtnsMatch = mod08.match(/function scanTriggerButtonsSync\(\)\s*\{[\s\S]*?\r?\n  \}/);
+  const collapseBtnFnMatch = mod08.match(/function collapseTriggerButtonIfNeeded\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
+  const scanBtnsMatch = mod08.match(/function scanTriggerButtonsSync\(forceCollapseAll = false\)\s*\{[\s\S]*?\r?\n  \}/);
   assert.ok(
-    toolGrpFnMatch && workedFnMatch && expandBtnFnMatch && clickCapFnMatch && scanBtnsMatch,
-    '3-tier collapsible and user-collapse tracking functions must exist in 08-dom-observer.js'
+    toolGrpFnMatch && workedFnMatch && expandBtnFnMatch && collapseBtnFnMatch && clickCapFnMatch && scanBtnsMatch,
+    '3-tier collapsible expand/collapse and user-collapse tracking functions must exist in 08-dom-observer.js'
   );
+  assert.ok(mod06.includes('html[data-agy-hide-thinking="1"]'), 'STYLE_CSS must hide thinking trigger and .cursor-edit when data-agy-hide-thinking="1"');
 
   let clickedOrder = [];
   const makeCollapsibleBtn = (fiberKey, fiberVal, expanded = 'false') => ({
@@ -467,10 +469,12 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   });
   const thinkingTriggerBtn = makeCollapsibleBtn('__reactFiber$thinking1', {});
 
+  let showThinkingFlag = true;
   const expandSandbox = {
     ensureStyle() {},
     processTriggerButton() {},
-    isShowThinkingEnabled: () => true,
+    syncShowThinkingDomAttribute() {},
+    isShowThinkingEnabled: () => showThinkingFlag,
     document: {
       querySelectorAll(sel) {
         if (sel.includes('worked-for-collapsible')) return [workedWithThinking];
@@ -481,7 +485,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     },
   };
   vm.runInNewContext(
-    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${expandBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
+    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${expandBtnFnMatch[0]}\n${collapseBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
     expandSandbox
   );
   assert.equal(expandSandbox.__doesToolGroupContainThinking(toolGroupWithThinking), true);
@@ -513,4 +517,18 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(thinkingTriggerBtn.getAttribute('data-agy-auto-expanded'), null);
   expandSandbox.__scanTriggerButtonsSync();
   assert.deepEqual(clickedOrder, [], 'must respect manual user collapse and not re-open');
+
+  // Simulate turning Show Thinking OFF (showThinkingFlag = false) -> must collapse expanded worked/toolGroup/thinking blocks
+  showThinkingFlag = false;
+  thinkingTriggerBtn.expandedState = 'true';
+  clickedOrder = [];
+  expandSandbox.__scanTriggerButtonsSync(true);
+  assert.deepEqual(
+    clickedOrder,
+    ['__reactFiber$worked1', '__reactFiber$toolGrp1', '__reactFiber$thinking1'],
+    'must automatically collapse expanded thinking/worked/tool-group blocks when Show Thinking is turned OFF'
+  );
+  assert.equal(workedWithThinking.expandedState, 'false');
+  assert.equal(toolGroupWithThinking.expandedState, 'false');
+  assert.equal(thinkingTriggerBtn.expandedState, 'false');
 });

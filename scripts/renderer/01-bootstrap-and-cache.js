@@ -1,8 +1,9 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.9';
+  const KO_LOCALIZER_VERSION = 'v13.10';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
+  const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -223,25 +224,64 @@
     return null;
   }
 
-  function isShowThinkingEnabled() {
-    const st = resolveUserSettingsStore();
-    if (st) {
-      const liveVal = st.getPrefValue('verboseConversationSteps');
-      if (typeof liveVal === 'boolean') {
-        return liveVal;
+  function syncShowThinkingDomAttribute() {
+    try {
+      const rootEl = document && document.documentElement;
+      if (rootEl && typeof rootEl.setAttribute === 'function') {
+        if (showThinkingEnabled) {
+          rootEl.removeAttribute('data-agy-hide-thinking');
+        } else {
+          rootEl.setAttribute('data-agy-hide-thinking', '1');
+        }
       }
-    }
+      const iframes = document && document.querySelectorAll ? document.querySelectorAll('iframe') : [];
+      for (const ifr of iframes) {
+        try {
+          const subRoot = ifr.contentDocument && ifr.contentDocument.documentElement;
+          if (subRoot && typeof subRoot.setAttribute === 'function') {
+            if (showThinkingEnabled) {
+              subRoot.removeAttribute('data-agy-hide-thinking');
+            } else {
+              subRoot.setAttribute('data-agy-hide-thinking', '1');
+            }
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+  }
+
+  function isShowThinkingEnabled() {
     return Boolean(showThinkingEnabled);
   }
 
   let verboseStepsEnsured = false;
   function ensureVerboseConversationStepsEnabled() {
+    syncShowThinkingDomAttribute();
     if (disposed || verboseStepsEnsured) return;
     try {
       const st = resolveUserSettingsStore();
       if (!st) return;
-      const targetVal = Boolean(showThinkingEnabled);
+      const alreadyInit = (() => {
+        try {
+          return localStorage.getItem(SHOW_THINKING_INIT_STORAGE_KEY) === '1';
+        } catch (e) {
+          return false;
+        }
+      })();
       const currentVal = st.getPrefValue('verboseConversationSteps');
+      if (alreadyInit && typeof currentVal === 'boolean' && currentVal !== showThinkingEnabled) {
+        showThinkingEnabled = currentVal;
+        try {
+          localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
+        } catch (e) {}
+        syncShowThinkingDomAttribute();
+        verboseStepsEnsured = true;
+        return;
+      }
+      const targetVal = Boolean(showThinkingEnabled);
+      try {
+        localStorage.setItem(SHOW_THINKING_INIT_STORAGE_KEY, '1');
+      } catch (e) {}
       if (currentVal === targetVal) {
         verboseStepsEnsured = true;
         return;

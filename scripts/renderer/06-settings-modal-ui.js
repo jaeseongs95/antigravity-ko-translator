@@ -22,6 +22,11 @@
       transform: none !important;
       transition: none !important;
     }
+    html[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"],
+    html[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"] + div,
+    html[data-agy-hide-thinking="1"] .cursor-edit {
+      display: none !important;
+    }
     .agy-ko-pill-group {
       display: inline-flex;
       align-items: center;

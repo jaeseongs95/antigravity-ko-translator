@@ -547,6 +547,24 @@
     return true;
   }
 
+  function collapseTriggerButtonIfNeeded(btn) {
+    if (!btn || btn.getAttribute('aria-expanded') !== 'true') {
+      return false;
+    }
+    delete btn.__agyAutoExpanded;
+    if (typeof btn.removeAttribute === 'function') {
+      btn.removeAttribute('data-agy-auto-expanded');
+    }
+    btn.__agyProgrammaticClick = true;
+    try {
+      btn.click();
+    } catch (e) {
+    } finally {
+      btn.__agyProgrammaticClick = false;
+    }
+    return true;
+  }
+
   function onTriggerButtonClickCapture(e) {
     try {
       if (!e || !e.target || typeof e.target.closest !== 'function') return;
@@ -566,38 +584,59 @@
     } catch (err) {}
   }
 
-  function scanTriggerButtonsSync() {
+  function scanTriggerButtonsSync(forceCollapseAll = false) {
     ensureStyle();
+    if (typeof syncShowThinkingDomAttribute === 'function') {
+      syncShowThinkingDomAttribute();
+    }
     const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
     const workedBtns = document.querySelectorAll('button[data-testid="worked-for-collapsible"]');
     for (const btn of workedBtns) {
       processTriggerButton(btn);
-      if (
-        autoExpand &&
-        btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyUserCollapsed &&
+      if (autoExpand) {
+        if (
+          btn.getAttribute('aria-expanded') === 'false' &&
+          !btn.__agyUserCollapsed &&
+          doesWorkedForButtonContainThinking(btn)
+        ) {
+          expandTriggerButtonIfNeeded(btn);
+        }
+      } else if (
+        btn.getAttribute('aria-expanded') === 'true' &&
+        (forceCollapseAll || btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
         doesWorkedForButtonContainThinking(btn)
       ) {
-        expandTriggerButtonIfNeeded(btn);
+        collapseTriggerButtonIfNeeded(btn);
       }
     }
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
     for (const btn of toolGroupBtns) {
       processTriggerButton(btn);
-      if (
-        autoExpand &&
-        btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyUserCollapsed &&
+      if (autoExpand) {
+        if (
+          btn.getAttribute('aria-expanded') === 'false' &&
+          !btn.__agyUserCollapsed &&
+          doesToolGroupButtonContainThinking(btn)
+        ) {
+          expandTriggerButtonIfNeeded(btn);
+        }
+      } else if (
+        btn.getAttribute('aria-expanded') === 'true' &&
+        (forceCollapseAll || btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
         doesToolGroupButtonContainThinking(btn)
       ) {
-        expandTriggerButtonIfNeeded(btn);
+        collapseTriggerButtonIfNeeded(btn);
       }
     }
     const thinkingBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
     for (const btn of thinkingBtns) {
       processTriggerButton(btn);
-      if (autoExpand && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
-        expandTriggerButtonIfNeeded(btn);
+      if (autoExpand) {
+        if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+          expandTriggerButtonIfNeeded(btn);
+        }
+      } else if (btn.getAttribute('aria-expanded') === 'true') {
+        collapseTriggerButtonIfNeeded(btn);
       }
     }
   }
@@ -1237,6 +1276,9 @@
       document.querySelectorAll('[data-agy-auto-expanded]').forEach((el) => {
         el.removeAttribute('data-agy-auto-expanded');
       });
+      if (document.documentElement) {
+        document.documentElement.removeAttribute('data-agy-hide-thinking');
+      }
       restoreAllMutatedNodes();
     }
   };

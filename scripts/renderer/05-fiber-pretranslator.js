@@ -176,12 +176,16 @@
   }
 
   window.__agyGetShowThinking = () => isShowThinkingEnabled();
-  window.__agySetShowThinking = (enabled) => {
+  window.__agySetShowThinking = (enabled, _fromCrossFrame = false) => {
     showThinkingEnabled = Boolean(enabled);
-    verboseStepsEnsured = false;
+    verboseStepsEnsured = true;
     try {
       localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
+      localStorage.setItem(SHOW_THINKING_INIT_STORAGE_KEY, '1');
     } catch (e) {}
+    if (typeof syncShowThinkingDomAttribute === 'function') {
+      syncShowThinkingDomAttribute();
+    }
     if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
       try {
         window.nativeStorage.updateItems({
@@ -193,33 +197,41 @@
     }
     const st = resolveUserSettingsStore();
     if (st && typeof st.setPrefValue === 'function') {
-      verboseStepsEnsured = true;
       Promise.resolve(st.setPrefValue('verboseConversationSteps', showThinkingEnabled))
         .then(() => {
           if (typeof refreshTranslatorSettingsUi === 'function') {
             refreshTranslatorSettingsUi();
           }
         })
-        .catch(() => {
-          verboseStepsEnsured = false;
-        });
+        .catch(() => {});
     }
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
-    if (showThinkingEnabled && typeof scanTriggerButtonsSync === 'function') {
-      scanTriggerButtonsSync();
+    if (typeof scanTriggerButtonsSync === 'function') {
+      scanTriggerButtonsSync(!showThinkingEnabled);
     }
-    try {
-      document.querySelectorAll('iframe').forEach((ifr) => {
-        try {
-          const cw = ifr.contentWindow;
-          if (cw && cw !== window && typeof cw.__agySetShowThinking === 'function') {
-            cw.__agySetShowThinking(showThinkingEnabled);
-          }
-        } catch (e) {}
-      });
-    } catch (e) {}
+    if (!_fromCrossFrame) {
+      try {
+        document.querySelectorAll('iframe').forEach((ifr) => {
+          try {
+            const cw = ifr.contentWindow;
+            if (cw && cw !== window && typeof cw.__agySetShowThinking === 'function') {
+              cw.__agySetShowThinking(showThinkingEnabled, true);
+            }
+          } catch (e) {}
+        });
+      } catch (e) {}
+      try {
+        if (
+          window.parent &&
+          window.parent !== window &&
+          typeof window.parent.__agySetShowThinking === 'function'
+        ) {
+          window.parent.__agySetShowThinking(showThinkingEnabled, true);
+        }
+      } catch (e) {}
+    }
     return {
       showThinkingEnabled,
     };

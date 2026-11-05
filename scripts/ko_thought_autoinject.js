@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.14
+// @version      1.2.15
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,9 +25,10 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.9';
+  const KO_LOCALIZER_VERSION = 'v13.10';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
+  const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
@@ -248,25 +249,64 @@
     return null;
   }
 
-  function isShowThinkingEnabled() {
-    const st = resolveUserSettingsStore();
-    if (st) {
-      const liveVal = st.getPrefValue('verboseConversationSteps');
-      if (typeof liveVal === 'boolean') {
-        return liveVal;
+  function syncShowThinkingDomAttribute() {
+    try {
+      const rootEl = document && document.documentElement;
+      if (rootEl && typeof rootEl.setAttribute === 'function') {
+        if (showThinkingEnabled) {
+          rootEl.removeAttribute('data-agy-hide-thinking');
+        } else {
+          rootEl.setAttribute('data-agy-hide-thinking', '1');
+        }
       }
-    }
+      const iframes = document && document.querySelectorAll ? document.querySelectorAll('iframe') : [];
+      for (const ifr of iframes) {
+        try {
+          const subRoot = ifr.contentDocument && ifr.contentDocument.documentElement;
+          if (subRoot && typeof subRoot.setAttribute === 'function') {
+            if (showThinkingEnabled) {
+              subRoot.removeAttribute('data-agy-hide-thinking');
+            } else {
+              subRoot.setAttribute('data-agy-hide-thinking', '1');
+            }
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+  }
+
+  function isShowThinkingEnabled() {
     return Boolean(showThinkingEnabled);
   }
 
   let verboseStepsEnsured = false;
   function ensureVerboseConversationStepsEnabled() {
+    syncShowThinkingDomAttribute();
     if (disposed || verboseStepsEnsured) return;
     try {
       const st = resolveUserSettingsStore();
       if (!st) return;
-      const targetVal = Boolean(showThinkingEnabled);
+      const alreadyInit = (() => {
+        try {
+          return localStorage.getItem(SHOW_THINKING_INIT_STORAGE_KEY) === '1';
+        } catch (e) {
+          return false;
+        }
+      })();
       const currentVal = st.getPrefValue('verboseConversationSteps');
+      if (alreadyInit && typeof currentVal === 'boolean' && currentVal !== showThinkingEnabled) {
+        showThinkingEnabled = currentVal;
+        try {
+          localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
+        } catch (e) {}
+        syncShowThinkingDomAttribute();
+        verboseStepsEnsured = true;
+        return;
+      }
+      const targetVal = Boolean(showThinkingEnabled);
+      try {
+        localStorage.setItem(SHOW_THINKING_INIT_STORAGE_KEY, '1');
+      } catch (e) {}
       if (currentVal === targetVal) {
         verboseStepsEnsured = true;
         return;
@@ -2314,12 +2354,16 @@
   }
 
   window.__agyGetShowThinking = () => isShowThinkingEnabled();
-  window.__agySetShowThinking = (enabled) => {
+  window.__agySetShowThinking = (enabled, _fromCrossFrame = false) => {
     showThinkingEnabled = Boolean(enabled);
-    verboseStepsEnsured = false;
+    verboseStepsEnsured = true;
     try {
       localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
+      localStorage.setItem(SHOW_THINKING_INIT_STORAGE_KEY, '1');
     } catch (e) {}
+    if (typeof syncShowThinkingDomAttribute === 'function') {
+      syncShowThinkingDomAttribute();
+    }
     if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
       try {
         window.nativeStorage.updateItems({
@@ -2331,33 +2375,41 @@
     }
     const st = resolveUserSettingsStore();
     if (st && typeof st.setPrefValue === 'function') {
-      verboseStepsEnsured = true;
       Promise.resolve(st.setPrefValue('verboseConversationSteps', showThinkingEnabled))
         .then(() => {
           if (typeof refreshTranslatorSettingsUi === 'function') {
             refreshTranslatorSettingsUi();
           }
         })
-        .catch(() => {
-          verboseStepsEnsured = false;
-        });
+        .catch(() => {});
     }
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
-    if (showThinkingEnabled && typeof scanTriggerButtonsSync === 'function') {
-      scanTriggerButtonsSync();
+    if (typeof scanTriggerButtonsSync === 'function') {
+      scanTriggerButtonsSync(!showThinkingEnabled);
     }
-    try {
-      document.querySelectorAll('iframe').forEach((ifr) => {
-        try {
-          const cw = ifr.contentWindow;
-          if (cw && cw !== window && typeof cw.__agySetShowThinking === 'function') {
-            cw.__agySetShowThinking(showThinkingEnabled);
-          }
-        } catch (e) {}
-      });
-    } catch (e) {}
+    if (!_fromCrossFrame) {
+      try {
+        document.querySelectorAll('iframe').forEach((ifr) => {
+          try {
+            const cw = ifr.contentWindow;
+            if (cw && cw !== window && typeof cw.__agySetShowThinking === 'function') {
+              cw.__agySetShowThinking(showThinkingEnabled, true);
+            }
+          } catch (e) {}
+        });
+      } catch (e) {}
+      try {
+        if (
+          window.parent &&
+          window.parent !== window &&
+          typeof window.parent.__agySetShowThinking === 'function'
+        ) {
+          window.parent.__agySetShowThinking(showThinkingEnabled, true);
+        }
+      } catch (e) {}
+    }
     return {
       showThinkingEnabled,
     };
@@ -2428,6 +2480,11 @@
       opacity: 1 !important;
       transform: none !important;
       transition: none !important;
+    }
+    html[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"],
+    html[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"] + div,
+    html[data-agy-hide-thinking="1"] .cursor-edit {
+      display: none !important;
     }
     .agy-ko-pill-group {
       display: inline-flex;
@@ -3919,6 +3976,24 @@
     return true;
   }
 
+  function collapseTriggerButtonIfNeeded(btn) {
+    if (!btn || btn.getAttribute('aria-expanded') !== 'true') {
+      return false;
+    }
+    delete btn.__agyAutoExpanded;
+    if (typeof btn.removeAttribute === 'function') {
+      btn.removeAttribute('data-agy-auto-expanded');
+    }
+    btn.__agyProgrammaticClick = true;
+    try {
+      btn.click();
+    } catch (e) {
+    } finally {
+      btn.__agyProgrammaticClick = false;
+    }
+    return true;
+  }
+
   function onTriggerButtonClickCapture(e) {
     try {
       if (!e || !e.target || typeof e.target.closest !== 'function') return;
@@ -3938,38 +4013,59 @@
     } catch (err) {}
   }
 
-  function scanTriggerButtonsSync() {
+  function scanTriggerButtonsSync(forceCollapseAll = false) {
     ensureStyle();
+    if (typeof syncShowThinkingDomAttribute === 'function') {
+      syncShowThinkingDomAttribute();
+    }
     const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
     const workedBtns = document.querySelectorAll('button[data-testid="worked-for-collapsible"]');
     for (const btn of workedBtns) {
       processTriggerButton(btn);
-      if (
-        autoExpand &&
-        btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyUserCollapsed &&
+      if (autoExpand) {
+        if (
+          btn.getAttribute('aria-expanded') === 'false' &&
+          !btn.__agyUserCollapsed &&
+          doesWorkedForButtonContainThinking(btn)
+        ) {
+          expandTriggerButtonIfNeeded(btn);
+        }
+      } else if (
+        btn.getAttribute('aria-expanded') === 'true' &&
+        (forceCollapseAll || btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
         doesWorkedForButtonContainThinking(btn)
       ) {
-        expandTriggerButtonIfNeeded(btn);
+        collapseTriggerButtonIfNeeded(btn);
       }
     }
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
     for (const btn of toolGroupBtns) {
       processTriggerButton(btn);
-      if (
-        autoExpand &&
-        btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyUserCollapsed &&
+      if (autoExpand) {
+        if (
+          btn.getAttribute('aria-expanded') === 'false' &&
+          !btn.__agyUserCollapsed &&
+          doesToolGroupButtonContainThinking(btn)
+        ) {
+          expandTriggerButtonIfNeeded(btn);
+        }
+      } else if (
+        btn.getAttribute('aria-expanded') === 'true' &&
+        (forceCollapseAll || btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
         doesToolGroupButtonContainThinking(btn)
       ) {
-        expandTriggerButtonIfNeeded(btn);
+        collapseTriggerButtonIfNeeded(btn);
       }
     }
     const thinkingBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
     for (const btn of thinkingBtns) {
       processTriggerButton(btn);
-      if (autoExpand && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
-        expandTriggerButtonIfNeeded(btn);
+      if (autoExpand) {
+        if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+          expandTriggerButtonIfNeeded(btn);
+        }
+      } else if (btn.getAttribute('aria-expanded') === 'true') {
+        collapseTriggerButtonIfNeeded(btn);
       }
     }
   }
@@ -4609,6 +4705,9 @@
       document.querySelectorAll('[data-agy-auto-expanded]').forEach((el) => {
         el.removeAttribute('data-agy-auto-expanded');
       });
+      if (document.documentElement) {
+        document.documentElement.removeAttribute('data-agy-hide-thinking');
+      }
       restoreAllMutatedNodes();
     }
   };
