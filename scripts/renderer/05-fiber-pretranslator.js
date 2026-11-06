@@ -324,7 +324,7 @@
   };
 
   window.__agyGetPretranslate = () => isPretranslateEnabled();
-  window.__agySetPretranslate = (enabled) => {
+  window.__agySetPretranslate = (enabled, _fromCrossFrame = false) => {
     pretranslateEnabled = Boolean(enabled);
     window.__agyPretranslateStats.enabled = pretranslateEnabled;
     try {
@@ -348,16 +348,27 @@
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
-    try {
-      document.querySelectorAll('iframe').forEach((ifr) => {
-        try {
-          const cw = ifr.contentWindow;
-          if (cw && cw !== window && typeof cw.__agySetPretranslate === 'function') {
-            cw.__agySetPretranslate(pretranslateEnabled);
-          }
-        } catch (e) {}
-      });
-    } catch (e) {}
+    if (!_fromCrossFrame) {
+      try {
+        document.querySelectorAll('iframe').forEach((ifr) => {
+          try {
+            const cw = ifr.contentWindow;
+            if (cw && cw !== window && typeof cw.__agySetPretranslate === 'function') {
+              cw.__agySetPretranslate(pretranslateEnabled, true);
+            }
+          } catch (e) {}
+        });
+      } catch (e) {}
+      try {
+        if (
+          window.parent &&
+          window.parent !== window &&
+          typeof window.parent.__agySetPretranslate === 'function'
+        ) {
+          window.parent.__agySetPretranslate(pretranslateEnabled, true);
+        }
+      } catch (e) {}
+    }
     return {
       pretranslateEnabled,
       stats: window.__agyPretranslateStats,

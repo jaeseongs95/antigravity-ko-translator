@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.14';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.15';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -35,7 +35,18 @@ test('modular SOLID structure and bundle assembly verification', () => {
   assert.ok(bundleCode.includes("'verboseConversationSteps'"));
   assert.ok(bundleCode.includes("doesWorkedForButtonContainThinking"));
   assert.ok(bundleCode.includes("doesToolGroupButtonContainThinking"));
-  assert.ok(fs.existsSync(path.join(ROOT, 'rules', 'AGENTS.md')), 'rules/AGENTS.md must exist to enforce structured <thought> output across all sessions/models');
+  assert.ok(
+    !fs.existsSync(path.join(ROOT, 'rules', 'AGENTS.md')),
+    'rules/AGENTS.md must NOT exist so UI translator never injects global LLM prompt rules'
+  );
+  assert.ok(
+    fs.existsSync(path.join(ROOT, 'dist', 'ko_thought_autoinject.js')),
+    'dist/ko_thought_autoinject.js mirror must be generated for statusbar remote companion fallback'
+  );
+  assert.ok(
+    fs.existsSync(path.join(ROOT, 'plugins', 'ko-thought-translator', 'scripts', 'ko_thought_autoinject.js')),
+    'plugins/ko-thought-translator/scripts/ko_thought_autoinject.js mirror must be generated for mcp-manager remote companion fallback'
+  );
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
 
@@ -614,18 +625,20 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.deepEqual(clickedOrder, [
     '__reactFiber$worked1',
     '__reactFiber$toolGrp1',
+    '__reactFiber$toolGrp2',
     '__reactFiber$thinking1',
   ]);
 
-  // Simulate React G_ collapsing toolGroupWithThinking & thinkingTriggerBtn when step finishes (isActive: true -> false)
+  // Simulate React G_ collapsing toolGroupWithThinking, toolGroupWithoutThinking & thinkingTriggerBtn when step finishes (isActive: true -> false)
   clickedOrder = [];
   toolGroupWithThinking.expandedState = 'false';
+  toolGroupWithoutThinking.expandedState = 'false';
   thinkingTriggerBtn.expandedState = 'false';
   expandSandbox.__scanTriggerButtonsSync();
   assert.deepEqual(
     clickedOrder,
-    ['__reactFiber$toolGrp1', '__reactFiber$thinking1'],
-    'must automatically re-expand when React G_ collapses active step on completion'
+    ['__reactFiber$toolGrp1', '__reactFiber$toolGrp2', '__reactFiber$thinking1'],
+    'must automatically re-expand all tool-group-collapsibles and thinkingTriggerBtn when React G_ collapses active step on completion'
   );
 
   // Simulate user manually clicking thinkingTriggerBtn while expanded ('true') -> records __agyUserCollapsed = true
@@ -660,6 +673,27 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   expandSandbox.__scanTriggerButtonsSync(false);
   assert.deepEqual(clickedOrder, ['__reactFiber$workedActiveHidden']);
   assert.equal(activeHiddenWorked.expandedState, 'true');
+
+  // Even if the latest worked-for button is visible (not .hidden) and has NO thinking step in its fiber,
+  // and toolGroupWithoutThinking is collapsed while Show Thinking is OFF, scanTriggerButtonsSync must expand both
+  // so the user's latest message work items (Analyzed/Ran/Edited) never disappear (D-0005).
+  const latestWorkedNoThinking = makeCollapsibleBtn('__reactFiber$workedLatestNoThinking', {
+    memoizedProps: { segment: { steps: [{ step: { value: { thinking: '' } } }] } },
+  });
+  toolGroupWithoutThinking.expandedState = 'false';
+  expandSandbox.document.querySelectorAll = (sel) => {
+    if (sel.includes('worked-for-collapsible')) return [workedWithThinking, latestWorkedNoThinking];
+    if (sel.includes('tool-group-collapsible')) return [toolGroupWithThinking, toolGroupWithoutThinking];
+    if (sel.includes('thinking-collapsible-trigger')) return [thinkingTriggerBtn];
+    return [];
+  };
+  clickedOrder = [];
+  expandSandbox.__scanTriggerButtonsSync(false);
+  assert.deepEqual(
+    clickedOrder,
+    ['__reactFiber$workedLatestNoThinking', '__reactFiber$toolGrp2'],
+    'D-0005: when Show Thinking is OFF, latest worked-for-collapsible and tool-group-collapsible without thinking must still expand so tool work items never unmount'
+  );
 
   // 7b. Translate Thinking ON/OFF toggle (__agySetTranslateThinking): restores original English .cursor-edit when OFF
   const restoreCursorFnMatch = mod08.match(/function restoreOriginalCursorEdits\(\)\s*\{[\s\S]*?\r?\n  \}/);
@@ -704,7 +738,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.14',
+      __agyKoLocalizerActive: 'v13.15',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -804,7 +838,12 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     querySelectorAll: (sel) => (sel.includes('.divide-y > div') ? [mockConvStepsRow] : []),
   };
 
+  let verboseRestoreCalls = 0;
   const menuSandbox = {
+    verboseStepsEnsured: true,
+    ensureVerboseConversationStepsEnabled() {
+      verboseRestoreCalls++;
+    },
     isShowThinkingEnabled: () => menuShowThinkingState,
     window: {
       __agySetShowThinking(next) {
@@ -860,4 +899,28 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(typeof defaultBtnClickCb === 'function');
   defaultBtnClickCb();
   assert.equal(menuShowThinkingState, false, 'clicking native Default (기본값) button in Appearance > Chat must sync showThinking to false');
+
+  // 10. D-0004 & D-0006 regression checks: dual marker blocks, cross-frame parent sync, and conditional remote companion loading
+  const { BEGIN_MARKER, END_MARKER, BEGIN_BLOCK_MARKER, END_BLOCK_MARKER } = require(path.join(HOST_DIR, 'paths.js'));
+  assert.equal(BEGIN_MARKER, '// === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 ===');
+  assert.equal(END_MARKER, '// === END_AGY_KO_THOUGHT_LOCALIZER_V2 ===');
+  assert.equal(BEGIN_BLOCK_MARKER, '/* === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 === */');
+  assert.equal(END_BLOCK_MARKER, '/* === END_AGY_KO_THOUGHT_LOCALIZER_V2 === */');
+  const modBundleInj = fs.readFileSync(BUNDLE_INJECTOR_PATH, 'utf8');
+  assert.ok(
+    modBundleInj.includes('BEGIN_BLOCK_MARKER') && modBundleInj.includes('END_BLOCK_MARKER'),
+    'D-0006: bundle-injector.js must emit both line and block markers so both statusbar and mcp-manager remote loaders extract koTranslatorCode'
+  );
+  assert.ok(
+    mod04.includes('window.parent.__agySetTranslationProvider(activeTranslationProvider, options, true)'),
+    'D-0004: __agySetTranslationProvider must propagate to window.parent when called inside remote workbench iframe'
+  );
+  assert.ok(
+    mod05.includes('window.parent.__agySetPretranslate(pretranslateEnabled, true)'),
+    'D-0004: __agySetPretranslate must propagate to window.parent when called inside remote workbench iframe'
+  );
+  assert.ok(
+    mod08.includes('probeHostCompanionPluginsForRemote') && mod08.includes('info.statusbarInstalled') && mod08.includes('info.mcpManagerInstalled'),
+    'D-0006: 08-dom-observer.js must verify host companion installation before loading statusbar or mcp-manager in Remote Control web'
+  );
 });

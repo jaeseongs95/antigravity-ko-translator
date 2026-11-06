@@ -974,16 +974,32 @@
             'click',
             () => {
               const bTxt = (btn.textContent || '').trim();
+              let nextShowThinking = null;
               if (bTxt === '기본값' || bTxt === 'Default') {
-                if (typeof window.__agySetShowThinking === 'function') {
-                  window.__agySetShowThinking(false);
-                }
+                nextShowThinking = false;
               } else if (bTxt === '상세히' || bTxt === 'Verbose') {
-                if (typeof window.__agySetShowThinking === 'function') {
-                  window.__agySetShowThinking(true);
-                }
+                nextShowThinking = true;
               }
-              syncThinkingDisplayMenuControls();
+              if (nextShowThinking !== null && typeof window.__agySetShowThinking === 'function') {
+                window.__agySetShowThinking(nextShowThinking);
+                // Native React onClick runs in the bubble phase right after this capture listener
+                // and sets `verboseConversationSteps = false` when "Default" is clicked.
+                // Immediately restore `verboseConversationSteps = true` on microtask & next ticks
+                // so tool-group-collapsible and worked-for-collapsible steps never unmount.
+                const restoreVerbose = () => {
+                  verboseStepsEnsured = false;
+                  ensureVerboseConversationStepsEnabled();
+                  if (typeof scanTriggerButtonsSync === 'function') {
+                    scanTriggerButtonsSync(!nextShowThinking);
+                  }
+                  syncThinkingDisplayMenuControls();
+                };
+                Promise.resolve().then(restoreVerbose);
+                setTimeout(restoreVerbose, 0);
+                setTimeout(restoreVerbose, 60);
+              } else {
+                syncThinkingDisplayMenuControls();
+              }
             },
             true
           );

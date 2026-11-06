@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.19
+// @version      1.2.20
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.14';
+  const KO_LOCALIZER_VERSION = 'v13.15';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -220,6 +220,18 @@
     return Boolean(translateThinkingEnabled);
   }
 
+  function extractSettingsStoreFromFiberNode(node) {
+    if (!node) return null;
+    const val = node.memoizedProps?.value;
+    if (val && typeof val.getState === 'function' && typeof val.onDidChange === 'function') {
+      const st = val.getState();
+      if (st && typeof st.getPrefValue === 'function' && typeof st.setPrefValue === 'function') {
+        return st;
+      }
+    }
+    return null;
+  }
+
   function resolveUserSettingsStoreFromDoc(doc) {
     if (!doc) return null;
     try {
@@ -229,21 +241,50 @@
         ) ||
         doc.querySelector('#root, #app')?.firstElementChild ||
         doc.body?.firstElementChild;
-      if (!anchor) return null;
-      const fk = Object.keys(anchor).find(
-        (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$')
-      );
-      if (!fk) return null;
-      let cur = anchor[fk];
-      for (let i = 0; i < 260 && cur; i++) {
-        const val = cur.memoizedProps?.value;
-        if (val && typeof val.getState === 'function' && typeof val.onDidChange === 'function') {
-          const st = val.getState();
-          if (st && typeof st.getPrefValue === 'function' && typeof st.setPrefValue === 'function') {
-            return st;
+      if (anchor) {
+        const fk = Object.keys(anchor).find(
+          (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$')
+        );
+        if (fk) {
+          let cur = anchor[fk];
+          for (let i = 0; i < 260 && cur; i++) {
+            const st = extractSettingsStoreFromFiberNode(cur);
+            if (st) return st;
+            cur = cur.return;
           }
         }
-        cur = cur.return;
+      }
+      const rootHost = doc.querySelector('#root, #app') || doc.body;
+      if (rootHost) {
+        const rfk = Object.keys(rootHost).find(
+          (k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$')
+        );
+        const startFiber =
+          (rfk && rootHost[rfk]) ||
+          (rootHost.firstElementChild &&
+            (() => {
+              const cfk = Object.keys(rootHost.firstElementChild).find((k) =>
+                k.startsWith('__reactFiber$')
+              );
+              return cfk ? rootHost.firstElementChild[cfk] : null;
+            })());
+        if (startFiber) {
+          let topFiber = startFiber;
+          for (let i = 0; i < 80 && topFiber.return; i++) {
+            topFiber = topFiber.return;
+          }
+          const queue = [topFiber];
+          let visited = 0;
+          while (queue.length > 0 && visited < 400) {
+            const node = queue.shift();
+            if (!node) continue;
+            visited++;
+            const st = extractSettingsStoreFromFiberNode(node);
+            if (st) return st;
+            if (node.child) queue.push(node.child);
+            if (node.sibling) queue.push(node.sibling);
+          }
+        }
       }
     } catch (e) {}
     return null;
@@ -298,9 +339,10 @@
   }
 
   let verboseStepsEnsured = false;
+  let verboseStepsSetInFlight = false;
   function ensureVerboseConversationStepsEnabled() {
     syncShowThinkingDomAttribute();
-    if (disposed || verboseStepsEnsured) return;
+    if (disposed) return;
     try {
       const st = resolveUserSettingsStore();
       if (!st) return;
@@ -312,11 +354,16 @@
         verboseStepsEnsured = true;
         return;
       }
-      if (typeof currentVal === 'boolean') {
+      if (typeof currentVal === 'boolean' && !verboseStepsSetInFlight) {
         verboseStepsEnsured = true;
-        Promise.resolve(st.setPrefValue('verboseConversationSteps', true)).catch(() => {
-          verboseStepsEnsured = false;
-        });
+        verboseStepsSetInFlight = true;
+        Promise.resolve(st.setPrefValue('verboseConversationSteps', true))
+          .catch(() => {
+            verboseStepsEnsured = false;
+          })
+          .finally(() => {
+            verboseStepsSetInFlight = false;
+          });
       }
     } catch (e) {}
   }
@@ -2418,7 +2465,7 @@
     }
     return Object.keys(TRANSLATION_ADAPTERS);
   };
-  window.__agySetTranslationProvider = (providerId, options = {}) => {
+  window.__agySetTranslationProvider = (providerId, options = {}, _fromCrossFrame = false) => {
     const norm = String(providerId || '').trim().toLowerCase();
     const mapped =
       norm === 'google' || norm === 'gtx' || norm === 'google-translate'
@@ -2432,14 +2479,12 @@
     const prev = activeTranslationProvider;
     activeTranslationProvider = mapped;
     try {
-      if (!window.nativeStorage || typeof window.nativeStorage.getItems !== 'function') localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+      localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     } catch (e) {}
-    try { localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider); } catch (e) {}
     if (options.persist !== false && window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
       try {
         window.nativeStorage.updateItems({
           [PROVIDER_STORAGE_KEY]: activeTranslationProvider,
-
         });
       } catch (e) {}
     }
@@ -2472,18 +2517,29 @@
       refreshTranslatorSettingsUi();
     }
     if (prev !== activeTranslationProvider && options.retranslate !== false && typeof retranslateVisibleThoughts === 'function') {
-      retranslateVisibleThoughts(false);
+      retranslateVisibleThoughts(false, _fromCrossFrame);
     }
-    try {
-      document.querySelectorAll('iframe').forEach((ifr) => {
-        try {
-          const cw = ifr.contentWindow;
-          if (cw && cw !== window && typeof cw.__agySetTranslationProvider === 'function') {
-            cw.__agySetTranslationProvider(activeTranslationProvider, options);
-          }
-        } catch (e) {}
-      });
-    } catch (e) {}
+    if (!_fromCrossFrame) {
+      try {
+        document.querySelectorAll('iframe').forEach((ifr) => {
+          try {
+            const cw = ifr.contentWindow;
+            if (cw && cw !== window && typeof cw.__agySetTranslationProvider === 'function') {
+              cw.__agySetTranslationProvider(activeTranslationProvider, options, true);
+            }
+          } catch (e) {}
+        });
+      } catch (e) {}
+      try {
+        if (
+          window.parent &&
+          window.parent !== window &&
+          typeof window.parent.__agySetTranslationProvider === 'function'
+        ) {
+          window.parent.__agySetTranslationProvider(activeTranslationProvider, options, true);
+        }
+      } catch (e) {}
+    }
     return {
       translationProvider: activeTranslationProvider,
       availableProviders: Object.keys(TRANSLATION_ADAPTERS),
@@ -2921,7 +2977,7 @@
   };
 
   window.__agyGetPretranslate = () => isPretranslateEnabled();
-  window.__agySetPretranslate = (enabled) => {
+  window.__agySetPretranslate = (enabled, _fromCrossFrame = false) => {
     pretranslateEnabled = Boolean(enabled);
     window.__agyPretranslateStats.enabled = pretranslateEnabled;
     try {
@@ -2945,16 +3001,27 @@
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
-    try {
-      document.querySelectorAll('iframe').forEach((ifr) => {
-        try {
-          const cw = ifr.contentWindow;
-          if (cw && cw !== window && typeof cw.__agySetPretranslate === 'function') {
-            cw.__agySetPretranslate(pretranslateEnabled);
-          }
-        } catch (e) {}
-      });
-    } catch (e) {}
+    if (!_fromCrossFrame) {
+      try {
+        document.querySelectorAll('iframe').forEach((ifr) => {
+          try {
+            const cw = ifr.contentWindow;
+            if (cw && cw !== window && typeof cw.__agySetPretranslate === 'function') {
+              cw.__agySetPretranslate(pretranslateEnabled, true);
+            }
+          } catch (e) {}
+        });
+      } catch (e) {}
+      try {
+        if (
+          window.parent &&
+          window.parent !== window &&
+          typeof window.parent.__agySetPretranslate === 'function'
+        ) {
+          window.parent.__agySetPretranslate(pretranslateEnabled, true);
+        }
+      } catch (e) {}
+    }
     return {
       pretranslateEnabled,
       stats: window.__agyPretranslateStats,
@@ -3937,16 +4004,32 @@
             'click',
             () => {
               const bTxt = (btn.textContent || '').trim();
+              let nextShowThinking = null;
               if (bTxt === '기본값' || bTxt === 'Default') {
-                if (typeof window.__agySetShowThinking === 'function') {
-                  window.__agySetShowThinking(false);
-                }
+                nextShowThinking = false;
               } else if (bTxt === '상세히' || bTxt === 'Verbose') {
-                if (typeof window.__agySetShowThinking === 'function') {
-                  window.__agySetShowThinking(true);
-                }
+                nextShowThinking = true;
               }
-              syncThinkingDisplayMenuControls();
+              if (nextShowThinking !== null && typeof window.__agySetShowThinking === 'function') {
+                window.__agySetShowThinking(nextShowThinking);
+                // Native React onClick runs in the bubble phase right after this capture listener
+                // and sets `verboseConversationSteps = false` when "Default" is clicked.
+                // Immediately restore `verboseConversationSteps = true` on microtask & next ticks
+                // so tool-group-collapsible and worked-for-collapsible steps never unmount.
+                const restoreVerbose = () => {
+                  verboseStepsEnsured = false;
+                  ensureVerboseConversationStepsEnabled();
+                  if (typeof scanTriggerButtonsSync === 'function') {
+                    scanTriggerButtonsSync(!nextShowThinking);
+                  }
+                  syncThinkingDisplayMenuControls();
+                };
+                Promise.resolve().then(restoreVerbose);
+                setTimeout(restoreVerbose, 0);
+                setTimeout(restoreVerbose, 60);
+              } else {
+                syncThinkingDisplayMenuControls();
+              }
             },
             true
           );
@@ -4858,40 +4941,32 @@
         continue;
       }
       if (autoExpand) {
-        if (
-          btn.getAttribute('aria-expanded') === 'false' &&
-          !btn.__agyUserCollapsed &&
-          doesWorkedForButtonContainThinking(btn)
-        ) {
+        if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+          expandTriggerButtonIfNeeded(btn);
+        }
+      } else if (isLastWorked) {
+        // Always keep the latest turn's worked-for-collapsible expanded (unless manually collapsed by the user)
+        // regardless of whether it contains a thinking step, so the latest message's tool/work items never disappear.
+        if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
           expandTriggerButtonIfNeeded(btn);
         }
       } else if (
-        !isLastWorked &&
         forceCollapseAll &&
         btn.getAttribute('aria-expanded') === 'true' &&
         (btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
         doesWorkedForButtonContainThinking(btn)
       ) {
         collapseTriggerButtonIfNeeded(btn);
-      } else if (
-        isLastWorked &&
-        btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyUserCollapsed &&
-        doesWorkedForButtonContainThinking(btn)
-      ) {
-        expandTriggerButtonIfNeeded(btn);
       }
     }
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
     for (const btn of toolGroupBtns) {
       processTriggerButton(btn);
-      // Tool group collapsibles contain actual work items (file analysis, edits, commands) alongside thoughts.
-      // Never auto-collapse tool groups when hiding thoughts; CSS hides thinking-collapsible-trigger & .cursor-edit directly.
-      if (
-        btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyUserCollapsed &&
-        doesToolGroupButtonContainThinking(btn)
-      ) {
+      // Tool group collapsibles (`G_` in v2.29+) auto-collapse on `isActive: true -> false` when a tool group finishes,
+      // which unmounts all child work rows (`분석함`, `실행함`, `편집함`).
+      // Always keep tool groups expanded (unless manually collapsed by the user);
+      // CSS (`html[data-agy-hide-thinking="1"]`) hides `thinking-collapsible-trigger` & `.cursor-edit` directly.
+      if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
         expandTriggerButtonIfNeeded(btn);
       }
     }
@@ -5025,51 +5100,196 @@
       : null;
   }
 
+  function extractCompanionBlock(text, startMarkers, endMarkers) {
+    if (!text || typeof text !== 'string') return '';
+    const starts = Array.isArray(startMarkers) ? startMarkers : [startMarkers];
+    const ends = Array.isArray(endMarkers) ? endMarkers : [endMarkers];
+    for (let i = 0; i < starts.length; i++) {
+      const s = text.indexOf(starts[i]);
+      const e = text.indexOf(ends[i] || ends[0]);
+      if (s !== -1 && e !== -1 && e > s) {
+        return text.slice(s + starts[i].length, e).trim();
+      }
+    }
+    return '';
+  }
+
+  function injectRemoteCompanionScript(code, onDone) {
+    if (!code || !document) return;
+    try {
+      const s = document.createElement('script');
+      const nonce = document.querySelector('script[nonce]')?.nonce;
+      const p = getTrustedPolicyForRemote();
+      if (nonce) s.nonce = nonce;
+      s.text = p ? p.createScript(code) : code;
+      (document.head || document.documentElement).appendChild(s);
+      if (typeof onDone === 'function') onDone();
+    } catch (e) {}
+  }
+
+  async function probeHostCompanionPluginsForRemote(rcEl) {
+    const info = {
+      resolved: false,
+      statusbarInstalled: Boolean(window.agyStatusBar),
+      mcpManagerInstalled: Boolean(window.agyMcpManager),
+      statusbarCode: '',
+      mcpManagerCode: '',
+    };
+    if (window.__agyHostInstalledPlugins && typeof window.__agyHostInstalledPlugins === 'object') {
+      const override = window.__agyHostInstalledPlugins;
+      info.resolved = true;
+      info.statusbarInstalled = Boolean(override.statusbar || override['antigravity-statusbar']);
+      info.mcpManagerInstalled = Boolean(override.mcpManager || override['antigravity-mcp-manager']);
+      info.statusbarCode = String(override.statusbarCode || '');
+      info.mcpManagerCode = String(override.mcpManagerCode || '');
+      return info;
+    }
+
+    const iframe = rcEl && rcEl.querySelector ? rcEl.querySelector('iframe') : null;
+    const cw = iframe && iframe.contentWindow ? iframe.contentWindow : null;
+    const lsClient =
+      window.__agyCapturedLsClient ||
+      (cw && cw.__agyCapturedLsClient) ||
+      null;
+    if (!lsClient) return info;
+
+    const callRpc = async (methods, payload = {}) => {
+      for (const m of methods) {
+        if (typeof lsClient[m] === 'function') {
+          try {
+            return await lsClient[m](payload);
+          } catch (e) {}
+        }
+      }
+      return null;
+    };
+
+    try {
+      const userRes = await callRpc(['getLocalUserInfo', 'GetLocalUserInfo'], {});
+      const homeDir = String(
+        userRes?.homeDir || userRes?.userHome || userRes?.userInfo?.homeDir || ''
+      ).replace(/\\/g, '/').replace(/\/+$/, '');
+      if (homeDir) {
+        const bundlePath = `${homeDir}/.gemini/antigravity/statusbar_autoinject.js`;
+        const fileRes = await callRpc(['readFile', 'ReadFile', 'viewFile', 'ViewFile'], {
+          path: bundlePath,
+          filePath: bundlePath,
+          absolutePath: bundlePath,
+        });
+        const rawText = String(fileRes?.content || fileRes?.text || fileRes?.data || '');
+        if (rawText) {
+          info.resolved = true;
+          const sbCode = extractCompanionBlock(
+            rawText,
+            ['/* === BEGIN_AGY_STATUSBAR === */', '// === BEGIN_AGY_STATUSBAR ==='],
+            ['/* === END_AGY_STATUSBAR === */', '// === END_AGY_STATUSBAR ===']
+          );
+          const mcpCode = extractCompanionBlock(
+            rawText,
+            ['// === BEGIN_AGY_MCP_MANAGER ===', '/* === BEGIN_AGY_MCP_MANAGER === */'],
+            ['// === END_AGY_MCP_MANAGER ===', '/* === END_AGY_MCP_MANAGER === */']
+          );
+          if (sbCode || rawText.includes('mountContextStatusBar') || rawText.includes('agy-ctx-statusbar')) {
+            info.statusbarInstalled = true;
+            info.statusbarCode = sbCode;
+          }
+          if (mcpCode || rawText.includes('mountMcpManager') || rawText.includes('agyMcpManager')) {
+            info.mcpManagerInstalled = true;
+            info.mcpManagerCode = mcpCode;
+          }
+        }
+      }
+      const pluginsRes = await callRpc(
+        ['getAllPlugins', 'GetAllPlugins', 'getCustomizationStates', 'GetCustomizationStates'],
+        {}
+      );
+      if (pluginsRes) {
+        info.resolved = true;
+        const rawJson = JSON.stringify(pluginsRes);
+        if (/antigravity-statusbar/i.test(rawJson)) info.statusbarInstalled = true;
+        if (/antigravity-mcp-manager/i.test(rawJson)) info.mcpManagerInstalled = true;
+      }
+    } catch (e) {}
+
+    return info;
+  }
+
+  function syncRemoteCompanionPlugins(rcEl) {
+    if (!rcEl || window.__agyKoSyncingCompanions) return;
+    const hasLsClient = Boolean(
+      window.__agyCapturedLsClient ||
+        rcEl.querySelector?.('iframe')?.contentWindow?.__agyCapturedLsClient ||
+        window.__agyHostInstalledPlugins
+    );
+    if (!hasLsClient) return;
+    if (window.__agyKoCompanionsSynced && window.__agyHostInstalledPlugins === window.__agyLastHostInstalledPluginsRef) {
+      return;
+    }
+    window.__agyKoSyncingCompanions = true;
+    window.__agyLastHostInstalledPluginsRef = window.__agyHostInstalledPlugins;
+
+    probeHostCompanionPluginsForRemote(rcEl)
+      .then((info) => {
+        if (!info || !info.resolved) return;
+        window.__agyKoCompanionsSynced = true;
+
+        // Only load antigravity-statusbar when actually installed on the host
+        if (info.statusbarInstalled && !window.agyStatusBar && !window.__agyKoFetchingStatusBar) {
+          window.__agyKoFetchingStatusBar = true;
+          if (info.statusbarCode) {
+            injectRemoteCompanionScript(info.statusbarCode, () => refreshStatusbarTranslatorAdapter());
+          } else if (typeof fetch === 'function') {
+            fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' + Date.now())
+              .then((r) => (r && r.ok ? r.text() : ''))
+              .then((code) => {
+                if (!code || window.agyStatusBar) return;
+                injectRemoteCompanionScript(code, () => refreshStatusbarTranslatorAdapter());
+              })
+              .catch(() => {});
+          }
+        }
+
+        // Only load antigravity-mcp-manager when actually installed on the host
+        if (info.mcpManagerInstalled && !window.agyMcpManager && !window.__agyKoFetchingMcpManager) {
+          window.__agyKoFetchingMcpManager = true;
+          const mountMcpIntoInnerFrame = () => {
+            try {
+              const innerFrame = rcEl.querySelector('iframe');
+              if (
+                innerFrame &&
+                innerFrame.contentWindow &&
+                innerFrame.contentDocument &&
+                typeof window.__agyMountMcpManager === 'function'
+              ) {
+                window.__agyMountMcpManager(innerFrame.contentWindow, innerFrame.contentDocument);
+              }
+            } catch (e) {}
+          };
+          if (info.mcpManagerCode) {
+            injectRemoteCompanionScript(info.mcpManagerCode, mountMcpIntoInnerFrame);
+          } else if (typeof fetch === 'function') {
+            fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' + Date.now())
+              .then((r) => (r && r.ok ? r.text() : ''))
+              .then((code) => {
+                if (!code || window.agyMcpManager) return;
+                injectRemoteCompanionScript(code, mountMcpIntoInnerFrame);
+              })
+              .catch(() => {});
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        window.__agyKoSyncingCompanions = false;
+      });
+  }
+
   function bridgeRemoteControlIframe() {
     if (!document || typeof window.__agyMountKoThoughtLocalizer !== 'function') return;
     const rcEl = document.querySelector('ga-remote-control');
     if (!rcEl) return;
 
-    // Auto-load antigravity-statusbar in Remote Control host if not yet active
-    if (!window.agyStatusBar && !window.__agyKoFetchingStatusBar && typeof fetch === 'function') {
-      window.__agyKoFetchingStatusBar = true;
-      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' + Date.now())
-        .then((r) => (r && r.ok ? r.text() : ''))
-        .then((code) => {
-          if (!code || window.agyStatusBar) return;
-          const s = document.createElement('script');
-          const nonce = document.querySelector('script[nonce]')?.nonce;
-          const p = getTrustedPolicyForRemote();
-          if (nonce) s.nonce = nonce;
-          s.text = p ? p.createScript(code) : code;
-          (document.head || document.documentElement).appendChild(s);
-          refreshStatusbarTranslatorAdapter();
-        })
-        .catch(() => {});
-    }
-
-    // Auto-load antigravity-mcp-manager in Remote Control host if not yet active
-    if (!window.agyMcpManager && !window.__agyKoFetchingMcpManager && typeof fetch === 'function') {
-      window.__agyKoFetchingMcpManager = true;
-      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' + Date.now())
-        .then((r) => (r && r.ok ? r.text() : ''))
-        .then((code) => {
-          if (!code || window.agyMcpManager) return;
-          const s = document.createElement('script');
-          const nonce = document.querySelector('script[nonce]')?.nonce;
-          const p = getTrustedPolicyForRemote();
-          if (nonce) s.nonce = nonce;
-          s.text = p ? p.createScript(code) : code;
-          (document.head || document.documentElement).appendChild(s);
-          try {
-            const innerFrame = rcEl.querySelector('iframe');
-            if (innerFrame && innerFrame.contentWindow && innerFrame.contentDocument && typeof window.__agyMountMcpManager === 'function') {
-              window.__agyMountMcpManager(innerFrame.contentWindow, innerFrame.contentDocument);
-            }
-          } catch (e) {}
-        })
-        .catch(() => {});
-    }
+    syncRemoteCompanionPlugins(rcEl);
 
     const iframe = rcEl.querySelector('iframe');
     if (!iframe) return;
@@ -5188,6 +5408,7 @@
             if (decorated && typeof decorated === 'object') {
               cw.__agyCapturedLsClient = decorated;
               window.__agyCapturedLsClient = decorated;
+              syncRemoteCompanionPlugins(rcEl);
             }
             return decorated;
           };

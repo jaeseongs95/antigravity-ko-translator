@@ -263,7 +263,7 @@
     }
     return Object.keys(TRANSLATION_ADAPTERS);
   };
-  window.__agySetTranslationProvider = (providerId, options = {}) => {
+  window.__agySetTranslationProvider = (providerId, options = {}, _fromCrossFrame = false) => {
     const norm = String(providerId || '').trim().toLowerCase();
     const mapped =
       norm === 'google' || norm === 'gtx' || norm === 'google-translate'
@@ -277,14 +277,12 @@
     const prev = activeTranslationProvider;
     activeTranslationProvider = mapped;
     try {
-      if (!window.nativeStorage || typeof window.nativeStorage.getItems !== 'function') localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+      localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     } catch (e) {}
-    try { localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider); } catch (e) {}
     if (options.persist !== false && window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
       try {
         window.nativeStorage.updateItems({
           [PROVIDER_STORAGE_KEY]: activeTranslationProvider,
-
         });
       } catch (e) {}
     }
@@ -317,18 +315,29 @@
       refreshTranslatorSettingsUi();
     }
     if (prev !== activeTranslationProvider && options.retranslate !== false && typeof retranslateVisibleThoughts === 'function') {
-      retranslateVisibleThoughts(false);
+      retranslateVisibleThoughts(false, _fromCrossFrame);
     }
-    try {
-      document.querySelectorAll('iframe').forEach((ifr) => {
-        try {
-          const cw = ifr.contentWindow;
-          if (cw && cw !== window && typeof cw.__agySetTranslationProvider === 'function') {
-            cw.__agySetTranslationProvider(activeTranslationProvider, options);
-          }
-        } catch (e) {}
-      });
-    } catch (e) {}
+    if (!_fromCrossFrame) {
+      try {
+        document.querySelectorAll('iframe').forEach((ifr) => {
+          try {
+            const cw = ifr.contentWindow;
+            if (cw && cw !== window && typeof cw.__agySetTranslationProvider === 'function') {
+              cw.__agySetTranslationProvider(activeTranslationProvider, options, true);
+            }
+          } catch (e) {}
+        });
+      } catch (e) {}
+      try {
+        if (
+          window.parent &&
+          window.parent !== window &&
+          typeof window.parent.__agySetTranslationProvider === 'function'
+        ) {
+          window.parent.__agySetTranslationProvider(activeTranslationProvider, options, true);
+        }
+      } catch (e) {}
+    }
     return {
       translationProvider: activeTranslationProvider,
       availableProviders: Object.keys(TRANSLATION_ADAPTERS),

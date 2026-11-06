@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.14';
+  const KO_LOCALIZER_VERSION = 'v13.15';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -195,6 +195,18 @@
     return Boolean(translateThinkingEnabled);
   }
 
+  function extractSettingsStoreFromFiberNode(node) {
+    if (!node) return null;
+    const val = node.memoizedProps?.value;
+    if (val && typeof val.getState === 'function' && typeof val.onDidChange === 'function') {
+      const st = val.getState();
+      if (st && typeof st.getPrefValue === 'function' && typeof st.setPrefValue === 'function') {
+        return st;
+      }
+    }
+    return null;
+  }
+
   function resolveUserSettingsStoreFromDoc(doc) {
     if (!doc) return null;
     try {
@@ -204,21 +216,50 @@
         ) ||
         doc.querySelector('#root, #app')?.firstElementChild ||
         doc.body?.firstElementChild;
-      if (!anchor) return null;
-      const fk = Object.keys(anchor).find(
-        (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$')
-      );
-      if (!fk) return null;
-      let cur = anchor[fk];
-      for (let i = 0; i < 260 && cur; i++) {
-        const val = cur.memoizedProps?.value;
-        if (val && typeof val.getState === 'function' && typeof val.onDidChange === 'function') {
-          const st = val.getState();
-          if (st && typeof st.getPrefValue === 'function' && typeof st.setPrefValue === 'function') {
-            return st;
+      if (anchor) {
+        const fk = Object.keys(anchor).find(
+          (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$')
+        );
+        if (fk) {
+          let cur = anchor[fk];
+          for (let i = 0; i < 260 && cur; i++) {
+            const st = extractSettingsStoreFromFiberNode(cur);
+            if (st) return st;
+            cur = cur.return;
           }
         }
-        cur = cur.return;
+      }
+      const rootHost = doc.querySelector('#root, #app') || doc.body;
+      if (rootHost) {
+        const rfk = Object.keys(rootHost).find(
+          (k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$')
+        );
+        const startFiber =
+          (rfk && rootHost[rfk]) ||
+          (rootHost.firstElementChild &&
+            (() => {
+              const cfk = Object.keys(rootHost.firstElementChild).find((k) =>
+                k.startsWith('__reactFiber$')
+              );
+              return cfk ? rootHost.firstElementChild[cfk] : null;
+            })());
+        if (startFiber) {
+          let topFiber = startFiber;
+          for (let i = 0; i < 80 && topFiber.return; i++) {
+            topFiber = topFiber.return;
+          }
+          const queue = [topFiber];
+          let visited = 0;
+          while (queue.length > 0 && visited < 400) {
+            const node = queue.shift();
+            if (!node) continue;
+            visited++;
+            const st = extractSettingsStoreFromFiberNode(node);
+            if (st) return st;
+            if (node.child) queue.push(node.child);
+            if (node.sibling) queue.push(node.sibling);
+          }
+        }
       }
     } catch (e) {}
     return null;
@@ -273,9 +314,10 @@
   }
 
   let verboseStepsEnsured = false;
+  let verboseStepsSetInFlight = false;
   function ensureVerboseConversationStepsEnabled() {
     syncShowThinkingDomAttribute();
-    if (disposed || verboseStepsEnsured) return;
+    if (disposed) return;
     try {
       const st = resolveUserSettingsStore();
       if (!st) return;
@@ -287,11 +329,16 @@
         verboseStepsEnsured = true;
         return;
       }
-      if (typeof currentVal === 'boolean') {
+      if (typeof currentVal === 'boolean' && !verboseStepsSetInFlight) {
         verboseStepsEnsured = true;
-        Promise.resolve(st.setPrefValue('verboseConversationSteps', true)).catch(() => {
-          verboseStepsEnsured = false;
-        });
+        verboseStepsSetInFlight = true;
+        Promise.resolve(st.setPrefValue('verboseConversationSteps', true))
+          .catch(() => {
+            verboseStepsEnsured = false;
+          })
+          .finally(() => {
+            verboseStepsSetInFlight = false;
+          });
       }
     } catch (e) {}
   }

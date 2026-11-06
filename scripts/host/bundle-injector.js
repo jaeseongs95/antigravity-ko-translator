@@ -10,11 +10,31 @@ const {
   RENDERER_DIR,
   RENDERER_MODULE_FILES,
   KO_SCRIPT_PATH,
+  DIST_KO_SCRIPT_PATH,
+  LEGACY_PLUGIN_KO_SCRIPT_PATH,
   STATUSBAR_AUTOINJECT_PATH,
   BEGIN_MARKER,
   END_MARKER,
+  BEGIN_BLOCK_MARKER,
+  END_BLOCK_MARKER,
 } = require('./paths');
-const { isPluginEnabled, getOrSetTranslatorOptions } = require('./settings-storage');
+const {
+  isPluginEnabled,
+  getOrSetTranslatorOptions,
+  writeFileAtomicSync,
+} = require('./settings-storage');
+
+function syncMirrorScriptFile(targetPath, content) {
+  if (!targetPath) return;
+  try {
+    const current = fs.existsSync(targetPath)
+      ? fs.readFileSync(targetPath, 'utf8').replace(/\r\n/g, '\n')
+      : '';
+    if (current !== content) {
+      writeFileAtomicSync(targetPath, content);
+    }
+  } catch {}
+}
 
 function assembleRendererSourceFromModules() {
   const missing = RENDERER_MODULE_FILES.filter((f) => !fs.existsSync(path.join(RENDERER_DIR, f)));
@@ -38,7 +58,7 @@ function assembleRendererSourceFromModules() {
     `// ==UserScript==\n` +
     `// @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)\n` +
     `// @namespace    https://github.com/jaeseongs95/antigravity-ko-translator\n` +
-    `// @version      1.2.19\n` +
+    `// @version      1.2.20\n` +
     `// @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.\n` +
     `// @match        https://antigravity.google.com/*\n` +
     `// @match        https://*.antigravity.google.com/*\n` +
@@ -63,15 +83,10 @@ function assembleRendererSourceFromModules() {
 
   const assembled = `${userscriptHeader}(function mountKoThoughtLocalizer(__agyWin, __agyDoc) {\n${runtimePrelude}\n\n${body}\n})(typeof window !== 'undefined' ? window : undefined, typeof document !== 'undefined' ? document : undefined);\n`;
 
-  // Keep `scripts/ko_thought_autoinject.js` in sync with canonical default constants when modular sources change
-  const currentDisk = fs.existsSync(KO_SCRIPT_PATH)
-    ? fs.readFileSync(KO_SCRIPT_PATH, 'utf8').replace(/\r\n/g, '\n')
-    : '';
-  if (currentDisk !== assembled) {
-    try {
-      fs.writeFileSync(KO_SCRIPT_PATH, assembled, 'utf8');
-    } catch {}
-  }
+  // Keep canonical and remote companion fallback paths (`scripts/`, `dist/`, `plugins/ko-thought-translator/scripts/`) in sync
+  syncMirrorScriptFile(KO_SCRIPT_PATH, assembled);
+  syncMirrorScriptFile(DIST_KO_SCRIPT_PATH, assembled);
+  syncMirrorScriptFile(LEGACY_PLUGIN_KO_SCRIPT_PATH, assembled);
 
   return assembled;
 }
@@ -108,33 +123,54 @@ function buildRuntimeConfiguredBundle(pretranslateEnabled = null, translationPro
     );
 }
 
+function stripExistingKoBlock(sourceText) {
+  let text = String(sourceText || '');
+  const lineStart = text.indexOf(BEGIN_MARKER);
+  const lineEnd = text.indexOf(END_MARKER);
+  if (lineStart !== -1 && lineEnd !== -1 && lineEnd > lineStart) {
+    const before = text.slice(0, lineStart).trimEnd();
+    const after = text.slice(lineEnd + END_MARKER.length).trim();
+    text = after ? `${before}\n\n${after}` : before;
+  }
+  const blockStart = text.indexOf(BEGIN_BLOCK_MARKER);
+  const blockEnd = text.indexOf(END_BLOCK_MARKER);
+  if (blockStart !== -1 && blockEnd !== -1 && blockEnd > blockStart) {
+    const before = text.slice(0, blockStart).trimEnd();
+    const after = text.slice(blockEnd + END_BLOCK_MARKER.length).trim();
+    text = after ? `${before}\n\n${after}` : before;
+  }
+  return text.trimEnd();
+}
+
 function syncCombinedAutoinject(pretranslateEnabled = null, translationProvider = null) {
-  if (!fs.existsSync(STATUSBAR_AUTOINJECT_PATH)) {
-    return false;
-  }
-  const rawStatusbar = fs.readFileSync(STATUSBAR_AUTOINJECT_PATH, 'utf8');
+  const rawStatusbar = fs.existsSync(STATUSBAR_AUTOINJECT_PATH)
+    ? fs.readFileSync(STATUSBAR_AUTOINJECT_PATH, 'utf8')
+    : '';
   const koCode = buildRuntimeConfiguredBundle(pretranslateEnabled, translationProvider);
+  const baseCode = stripExistingKoBlock(rawStatusbar);
 
-  let baseCode = rawStatusbar;
-  const bIdx = baseCode.indexOf(BEGIN_MARKER);
-  const eIdx = baseCode.indexOf(END_MARKER);
-  if (bIdx !== -1 && eIdx !== -1 && eIdx > bIdx) {
-    const before = baseCode.slice(0, bIdx).trimEnd();
-    const after = baseCode.slice(eIdx + END_MARKER.length).trim();
-    baseCode = after ? `${before}\n\n${after}` : before;
-  } else {
-    baseCode = baseCode.trimEnd();
-  }
-
-  let nextCombined = baseCode + '\n';
+  const prefix = baseCode ? `${baseCode}\n\n` : '';
+  let nextCombined;
   if (isPluginEnabled()) {
-    nextCombined += `\n${BEGIN_MARKER}\n${koCode}\n${END_MARKER}\n`;
+    nextCombined =
+      `${prefix}${BEGIN_MARKER}\n` +
+      `${BEGIN_BLOCK_MARKER}\n` +
+      `${koCode}\n` +
+      `${END_BLOCK_MARKER}\n` +
+      `${END_MARKER}\n`;
   } else {
-    nextCombined += `\n${BEGIN_MARKER}\nif (window.__agyKoThoughtCleanup) { try { window.__agyKoThoughtCleanup(true); } catch (e) {} }\n${END_MARKER}\n`;
+    const cleanupStub =
+      `if (window.__agyKoThoughtCleanup) { try { window.__agyKoThoughtCleanup(true); } catch (e) {} }`;
+    nextCombined =
+      `${prefix}${BEGIN_MARKER}\n` +
+      `${BEGIN_BLOCK_MARKER}\n` +
+      `${cleanupStub}\n` +
+      `${END_BLOCK_MARKER}\n` +
+      `${END_MARKER}\n`;
   }
 
   if (rawStatusbar !== nextCombined) {
-    fs.writeFileSync(STATUSBAR_AUTOINJECT_PATH, nextCombined, 'utf8');
+    writeFileAtomicSync(STATUSBAR_AUTOINJECT_PATH, nextCombined);
     return true;
   }
   return false;

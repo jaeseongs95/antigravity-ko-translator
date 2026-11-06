@@ -701,40 +701,32 @@
         continue;
       }
       if (autoExpand) {
-        if (
-          btn.getAttribute('aria-expanded') === 'false' &&
-          !btn.__agyUserCollapsed &&
-          doesWorkedForButtonContainThinking(btn)
-        ) {
+        if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+          expandTriggerButtonIfNeeded(btn);
+        }
+      } else if (isLastWorked) {
+        // Always keep the latest turn's worked-for-collapsible expanded (unless manually collapsed by the user)
+        // regardless of whether it contains a thinking step, so the latest message's tool/work items never disappear.
+        if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
           expandTriggerButtonIfNeeded(btn);
         }
       } else if (
-        !isLastWorked &&
         forceCollapseAll &&
         btn.getAttribute('aria-expanded') === 'true' &&
         (btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
         doesWorkedForButtonContainThinking(btn)
       ) {
         collapseTriggerButtonIfNeeded(btn);
-      } else if (
-        isLastWorked &&
-        btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyUserCollapsed &&
-        doesWorkedForButtonContainThinking(btn)
-      ) {
-        expandTriggerButtonIfNeeded(btn);
       }
     }
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
     for (const btn of toolGroupBtns) {
       processTriggerButton(btn);
-      // Tool group collapsibles contain actual work items (file analysis, edits, commands) alongside thoughts.
-      // Never auto-collapse tool groups when hiding thoughts; CSS hides thinking-collapsible-trigger & .cursor-edit directly.
-      if (
-        btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyUserCollapsed &&
-        doesToolGroupButtonContainThinking(btn)
-      ) {
+      // Tool group collapsibles (`G_` in v2.29+) auto-collapse on `isActive: true -> false` when a tool group finishes,
+      // which unmounts all child work rows (`분석함`, `실행함`, `편집함`).
+      // Always keep tool groups expanded (unless manually collapsed by the user);
+      // CSS (`html[data-agy-hide-thinking="1"]`) hides `thinking-collapsible-trigger` & `.cursor-edit` directly.
+      if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
         expandTriggerButtonIfNeeded(btn);
       }
     }
@@ -868,51 +860,196 @@
       : null;
   }
 
+  function extractCompanionBlock(text, startMarkers, endMarkers) {
+    if (!text || typeof text !== 'string') return '';
+    const starts = Array.isArray(startMarkers) ? startMarkers : [startMarkers];
+    const ends = Array.isArray(endMarkers) ? endMarkers : [endMarkers];
+    for (let i = 0; i < starts.length; i++) {
+      const s = text.indexOf(starts[i]);
+      const e = text.indexOf(ends[i] || ends[0]);
+      if (s !== -1 && e !== -1 && e > s) {
+        return text.slice(s + starts[i].length, e).trim();
+      }
+    }
+    return '';
+  }
+
+  function injectRemoteCompanionScript(code, onDone) {
+    if (!code || !document) return;
+    try {
+      const s = document.createElement('script');
+      const nonce = document.querySelector('script[nonce]')?.nonce;
+      const p = getTrustedPolicyForRemote();
+      if (nonce) s.nonce = nonce;
+      s.text = p ? p.createScript(code) : code;
+      (document.head || document.documentElement).appendChild(s);
+      if (typeof onDone === 'function') onDone();
+    } catch (e) {}
+  }
+
+  async function probeHostCompanionPluginsForRemote(rcEl) {
+    const info = {
+      resolved: false,
+      statusbarInstalled: Boolean(window.agyStatusBar),
+      mcpManagerInstalled: Boolean(window.agyMcpManager),
+      statusbarCode: '',
+      mcpManagerCode: '',
+    };
+    if (window.__agyHostInstalledPlugins && typeof window.__agyHostInstalledPlugins === 'object') {
+      const override = window.__agyHostInstalledPlugins;
+      info.resolved = true;
+      info.statusbarInstalled = Boolean(override.statusbar || override['antigravity-statusbar']);
+      info.mcpManagerInstalled = Boolean(override.mcpManager || override['antigravity-mcp-manager']);
+      info.statusbarCode = String(override.statusbarCode || '');
+      info.mcpManagerCode = String(override.mcpManagerCode || '');
+      return info;
+    }
+
+    const iframe = rcEl && rcEl.querySelector ? rcEl.querySelector('iframe') : null;
+    const cw = iframe && iframe.contentWindow ? iframe.contentWindow : null;
+    const lsClient =
+      window.__agyCapturedLsClient ||
+      (cw && cw.__agyCapturedLsClient) ||
+      null;
+    if (!lsClient) return info;
+
+    const callRpc = async (methods, payload = {}) => {
+      for (const m of methods) {
+        if (typeof lsClient[m] === 'function') {
+          try {
+            return await lsClient[m](payload);
+          } catch (e) {}
+        }
+      }
+      return null;
+    };
+
+    try {
+      const userRes = await callRpc(['getLocalUserInfo', 'GetLocalUserInfo'], {});
+      const homeDir = String(
+        userRes?.homeDir || userRes?.userHome || userRes?.userInfo?.homeDir || ''
+      ).replace(/\\/g, '/').replace(/\/+$/, '');
+      if (homeDir) {
+        const bundlePath = `${homeDir}/.gemini/antigravity/statusbar_autoinject.js`;
+        const fileRes = await callRpc(['readFile', 'ReadFile', 'viewFile', 'ViewFile'], {
+          path: bundlePath,
+          filePath: bundlePath,
+          absolutePath: bundlePath,
+        });
+        const rawText = String(fileRes?.content || fileRes?.text || fileRes?.data || '');
+        if (rawText) {
+          info.resolved = true;
+          const sbCode = extractCompanionBlock(
+            rawText,
+            ['/* === BEGIN_AGY_STATUSBAR === */', '// === BEGIN_AGY_STATUSBAR ==='],
+            ['/* === END_AGY_STATUSBAR === */', '// === END_AGY_STATUSBAR ===']
+          );
+          const mcpCode = extractCompanionBlock(
+            rawText,
+            ['// === BEGIN_AGY_MCP_MANAGER ===', '/* === BEGIN_AGY_MCP_MANAGER === */'],
+            ['// === END_AGY_MCP_MANAGER ===', '/* === END_AGY_MCP_MANAGER === */']
+          );
+          if (sbCode || rawText.includes('mountContextStatusBar') || rawText.includes('agy-ctx-statusbar')) {
+            info.statusbarInstalled = true;
+            info.statusbarCode = sbCode;
+          }
+          if (mcpCode || rawText.includes('mountMcpManager') || rawText.includes('agyMcpManager')) {
+            info.mcpManagerInstalled = true;
+            info.mcpManagerCode = mcpCode;
+          }
+        }
+      }
+      const pluginsRes = await callRpc(
+        ['getAllPlugins', 'GetAllPlugins', 'getCustomizationStates', 'GetCustomizationStates'],
+        {}
+      );
+      if (pluginsRes) {
+        info.resolved = true;
+        const rawJson = JSON.stringify(pluginsRes);
+        if (/antigravity-statusbar/i.test(rawJson)) info.statusbarInstalled = true;
+        if (/antigravity-mcp-manager/i.test(rawJson)) info.mcpManagerInstalled = true;
+      }
+    } catch (e) {}
+
+    return info;
+  }
+
+  function syncRemoteCompanionPlugins(rcEl) {
+    if (!rcEl || window.__agyKoSyncingCompanions) return;
+    const hasLsClient = Boolean(
+      window.__agyCapturedLsClient ||
+        rcEl.querySelector?.('iframe')?.contentWindow?.__agyCapturedLsClient ||
+        window.__agyHostInstalledPlugins
+    );
+    if (!hasLsClient) return;
+    if (window.__agyKoCompanionsSynced && window.__agyHostInstalledPlugins === window.__agyLastHostInstalledPluginsRef) {
+      return;
+    }
+    window.__agyKoSyncingCompanions = true;
+    window.__agyLastHostInstalledPluginsRef = window.__agyHostInstalledPlugins;
+
+    probeHostCompanionPluginsForRemote(rcEl)
+      .then((info) => {
+        if (!info || !info.resolved) return;
+        window.__agyKoCompanionsSynced = true;
+
+        // Only load antigravity-statusbar when actually installed on the host
+        if (info.statusbarInstalled && !window.agyStatusBar && !window.__agyKoFetchingStatusBar) {
+          window.__agyKoFetchingStatusBar = true;
+          if (info.statusbarCode) {
+            injectRemoteCompanionScript(info.statusbarCode, () => refreshStatusbarTranslatorAdapter());
+          } else if (typeof fetch === 'function') {
+            fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' + Date.now())
+              .then((r) => (r && r.ok ? r.text() : ''))
+              .then((code) => {
+                if (!code || window.agyStatusBar) return;
+                injectRemoteCompanionScript(code, () => refreshStatusbarTranslatorAdapter());
+              })
+              .catch(() => {});
+          }
+        }
+
+        // Only load antigravity-mcp-manager when actually installed on the host
+        if (info.mcpManagerInstalled && !window.agyMcpManager && !window.__agyKoFetchingMcpManager) {
+          window.__agyKoFetchingMcpManager = true;
+          const mountMcpIntoInnerFrame = () => {
+            try {
+              const innerFrame = rcEl.querySelector('iframe');
+              if (
+                innerFrame &&
+                innerFrame.contentWindow &&
+                innerFrame.contentDocument &&
+                typeof window.__agyMountMcpManager === 'function'
+              ) {
+                window.__agyMountMcpManager(innerFrame.contentWindow, innerFrame.contentDocument);
+              }
+            } catch (e) {}
+          };
+          if (info.mcpManagerCode) {
+            injectRemoteCompanionScript(info.mcpManagerCode, mountMcpIntoInnerFrame);
+          } else if (typeof fetch === 'function') {
+            fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' + Date.now())
+              .then((r) => (r && r.ok ? r.text() : ''))
+              .then((code) => {
+                if (!code || window.agyMcpManager) return;
+                injectRemoteCompanionScript(code, mountMcpIntoInnerFrame);
+              })
+              .catch(() => {});
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        window.__agyKoSyncingCompanions = false;
+      });
+  }
+
   function bridgeRemoteControlIframe() {
     if (!document || typeof window.__agyMountKoThoughtLocalizer !== 'function') return;
     const rcEl = document.querySelector('ga-remote-control');
     if (!rcEl) return;
 
-    // Auto-load antigravity-statusbar in Remote Control host if not yet active
-    if (!window.agyStatusBar && !window.__agyKoFetchingStatusBar && typeof fetch === 'function') {
-      window.__agyKoFetchingStatusBar = true;
-      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' + Date.now())
-        .then((r) => (r && r.ok ? r.text() : ''))
-        .then((code) => {
-          if (!code || window.agyStatusBar) return;
-          const s = document.createElement('script');
-          const nonce = document.querySelector('script[nonce]')?.nonce;
-          const p = getTrustedPolicyForRemote();
-          if (nonce) s.nonce = nonce;
-          s.text = p ? p.createScript(code) : code;
-          (document.head || document.documentElement).appendChild(s);
-          refreshStatusbarTranslatorAdapter();
-        })
-        .catch(() => {});
-    }
-
-    // Auto-load antigravity-mcp-manager in Remote Control host if not yet active
-    if (!window.agyMcpManager && !window.__agyKoFetchingMcpManager && typeof fetch === 'function') {
-      window.__agyKoFetchingMcpManager = true;
-      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' + Date.now())
-        .then((r) => (r && r.ok ? r.text() : ''))
-        .then((code) => {
-          if (!code || window.agyMcpManager) return;
-          const s = document.createElement('script');
-          const nonce = document.querySelector('script[nonce]')?.nonce;
-          const p = getTrustedPolicyForRemote();
-          if (nonce) s.nonce = nonce;
-          s.text = p ? p.createScript(code) : code;
-          (document.head || document.documentElement).appendChild(s);
-          try {
-            const innerFrame = rcEl.querySelector('iframe');
-            if (innerFrame && innerFrame.contentWindow && innerFrame.contentDocument && typeof window.__agyMountMcpManager === 'function') {
-              window.__agyMountMcpManager(innerFrame.contentWindow, innerFrame.contentDocument);
-            }
-          } catch (e) {}
-        })
-        .catch(() => {});
-    }
+    syncRemoteCompanionPlugins(rcEl);
 
     const iframe = rcEl.querySelector('iframe');
     if (!iframe) return;
@@ -1031,6 +1168,7 @@
             if (decorated && typeof decorated === 'object') {
               cw.__agyCapturedLsClient = decorated;
               window.__agyCapturedLsClient = decorated;
+              syncRemoteCompanionPlugins(rcEl);
             }
             return decorated;
           };

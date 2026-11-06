@@ -67,6 +67,31 @@ function parseProviderCliArg(args) {
   return null;
 }
 
+function writeFileAtomicSync(targetPath, content) {
+  const dir = path.dirname(targetPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
+  try {
+    fs.writeFileSync(tmpPath, content, 'utf8');
+    try {
+      fs.renameSync(tmpPath, targetPath);
+    } catch {
+      fs.copyFileSync(tmpPath, targetPath);
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {}
+    }
+  } finally {
+    if (fs.existsSync(tmpPath)) {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {}
+    }
+  }
+}
+
 function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider = null) {
   let enabled = false;
   let provider = 'google-translate';
@@ -85,6 +110,9 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
       cfg = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf8'));
     }
     const existingEntry = cfg?.plugins?.['ko-thought-translator'] || {};
+    const configPre =
+      typeof existingEntry.pretranslate === 'boolean' ? existingEntry.pretranslate : null;
+    const configProv = normalizeProviderName(existingEntry.provider);
     const storagePre =
       appStorage && appStorage['agy-ko-thought-pretranslate'] !== undefined
         ? appStorage['agy-ko-thought-pretranslate'] === '1' || appStorage['agy-ko-thought-pretranslate'] === true
@@ -94,16 +122,19 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
         ? normalizeProviderName(appStorage['agy-ko-thought-provider'])
         : null;
 
+    // Canonical priority: explicit CLI/UI override > config.json SSOT > app_storage.json fallback > default
     enabled =
       explicitPretranslate !== null
         ? Boolean(explicitPretranslate)
+        : configPre !== null
+        ? configPre
         : storagePre !== null
         ? storagePre
-        : existingEntry.pretranslate === true;
+        : false;
     provider =
       explicitProvider !== null
         ? explicitProvider
-        : storageProv || normalizeProviderName(existingEntry.provider) || 'google-translate';
+        : configProv || storageProv || 'google-translate';
 
     if (
       explicitPretranslate !== null ||
@@ -118,19 +149,20 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
         pretranslate: enabled,
         provider,
       };
-      fs.writeFileSync(CONFIG_JSON_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+      writeFileAtomicSync(CONFIG_JSON_PATH, JSON.stringify(cfg, null, 2) + '\n');
     }
 
+    const desiredPreStr = enabled ? '1' : '0';
     if (
       appStorage &&
       (explicitPretranslate !== null ||
         explicitProvider !== null ||
-        appStorage['agy-ko-thought-pretranslate'] === undefined ||
-        appStorage['agy-ko-thought-provider'] === undefined)
+        appStorage['agy-ko-thought-pretranslate'] !== desiredPreStr ||
+        appStorage['agy-ko-thought-provider'] !== provider)
     ) {
-      appStorage['agy-ko-thought-pretranslate'] = enabled ? '1' : '0';
+      appStorage['agy-ko-thought-pretranslate'] = desiredPreStr;
       appStorage['agy-ko-thought-provider'] = provider;
-      fs.writeFileSync(APP_STORAGE_PATH, JSON.stringify(appStorage, null, 2), 'utf8');
+      writeFileAtomicSync(APP_STORAGE_PATH, JSON.stringify(appStorage, null, 2));
     }
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] config sync error: ${err.message}\n`);
@@ -248,8 +280,9 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] watcher pid write error: ${err.message}\n`);
   }
-  let lastProvider = null;
-  let lastPretranslate = null;
+  const initialCanonical = getOrSetTranslatorOptions(null, null);
+  let lastProvider = initialCanonical.translationProvider;
+  let lastPretranslate = initialCanonical.pretranslateEnabled;
   let lastDevToolsPort = readCurrentDevToolsPort();
   let tickCount = 0;
   let busy = false;
@@ -323,11 +356,12 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
   setInterval(checkStorageAndAppHealth, 400);
 }
 
-module.exports = {
+  module.exports = {
   isPluginEnabled,
   parsePretranslateCliArg,
   normalizeProviderName,
   parseProviderCliArg,
+  writeFileAtomicSync,
   getOrSetTranslatorOptions,
   ensureStorageWatcher,
   runStorageWatcherLoop,

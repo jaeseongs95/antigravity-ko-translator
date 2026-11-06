@@ -19,6 +19,15 @@ const PLUGIN_ROOT = path.resolve(__dirname, '..', '..');
 const SCRIPTS_DIR = path.join(PLUGIN_ROOT, 'scripts');
 const RENDERER_DIR = path.join(SCRIPTS_DIR, 'renderer');
 const KO_SCRIPT_PATH = path.join(SCRIPTS_DIR, 'ko_thought_autoinject.js');
+const DIST_KO_SCRIPT_PATH = path.join(PLUGIN_ROOT, 'dist', 'ko_thought_autoinject.js');
+const LEGACY_PLUGIN_KO_SCRIPT_PATH = path.join(
+  PLUGIN_ROOT,
+  'plugins',
+  'ko-thought-translator',
+  'scripts',
+  'ko_thought_autoinject.js'
+);
+const BUNDLED_ENSURE_STATUSBAR_PATCH_PATH = path.join(__dirname, 'ensure_statusbar_patch.js');
 
 const STATUSBAR_AUTOINJECT_PATH = path.join(AGY_DIR, 'statusbar_autoinject.js');
 const ENSURE_STATUSBAR_PATCH_PATH = path.join(AGY_DIR, 'ensure_statusbar_patch.js');
@@ -27,6 +36,8 @@ const LLM_BASE_URL = process.env.AGY_LOCAL_LLM_BASE_URL || 'http://127.0.0.1:114
 
 const BEGIN_MARKER = '// === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 ===';
 const END_MARKER = '// === END_AGY_KO_THOUGHT_LOCALIZER_V2 ===';
+const BEGIN_BLOCK_MARKER = '/* === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 === */';
+const END_BLOCK_MARKER = '/* === END_AGY_KO_THOUGHT_LOCALIZER_V2 === */';
 
 const RENDERER_MODULE_FILES = [
   '01-bootstrap-and-cache.js',
@@ -52,11 +63,16 @@ module.exports = {
   SCRIPTS_DIR,
   RENDERER_DIR,
   KO_SCRIPT_PATH,
+  DIST_KO_SCRIPT_PATH,
+  LEGACY_PLUGIN_KO_SCRIPT_PATH,
+  BUNDLED_ENSURE_STATUSBAR_PATCH_PATH,
   STATUSBAR_AUTOINJECT_PATH,
   ENSURE_STATUSBAR_PATCH_PATH,
   WATCHER_PID_PATH,
   LLM_BASE_URL,
   BEGIN_MARKER,
   END_MARKER,
+  BEGIN_BLOCK_MARKER,
+  END_BLOCK_MARKER,
   RENDERER_MODULE_FILES,
 };

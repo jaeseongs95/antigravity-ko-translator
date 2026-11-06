@@ -10,8 +10,12 @@
  */
 
 const fs = require('fs');
+const path = require('path');
 const { spawnSync } = require('child_process');
-const { ENSURE_STATUSBAR_PATCH_PATH } = require('./host/paths');
+const {
+  ENSURE_STATUSBAR_PATCH_PATH,
+  BUNDLED_ENSURE_STATUSBAR_PATCH_PATH,
+} = require('./host/paths');
 const { ensureLocalLlmServer, stopLocalLlmServer } = require('./host/local-llm-service');
 const {
   isPluginEnabled,
@@ -23,6 +27,22 @@ const {
 } = require('./host/settings-storage');
 const { syncCombinedAutoinject } = require('./host/bundle-injector');
 
+function ensureHostStatusbarPatcherInstalled() {
+  try {
+    if (fs.existsSync(ENSURE_STATUSBAR_PATCH_PATH)) {
+      return ENSURE_STATUSBAR_PATCH_PATH;
+    }
+    if (fs.existsSync(BUNDLED_ENSURE_STATUSBAR_PATCH_PATH)) {
+      fs.mkdirSync(path.dirname(ENSURE_STATUSBAR_PATCH_PATH), { recursive: true });
+      fs.copyFileSync(BUNDLED_ENSURE_STATUSBAR_PATCH_PATH, ENSURE_STATUSBAR_PATCH_PATH);
+      return ENSURE_STATUSBAR_PATCH_PATH;
+    }
+  } catch {}
+  return fs.existsSync(BUNDLED_ENSURE_STATUSBAR_PATCH_PATH)
+    ? BUNDLED_ENSURE_STATUSBAR_PATCH_PATH
+    : null;
+}
+
 async function applyProviderRuntimePolicy(translationProvider, forceStopScan = false) {
   if (translationProvider === 'local-llm') {
     await ensureLocalLlmServer(isPluginEnabled());
@@ -32,10 +52,11 @@ async function applyProviderRuntimePolicy(translationProvider, forceStopScan = f
 }
 
 function runStatusbarPatchWorker() {
-  if (!fs.existsSync(ENSURE_STATUSBAR_PATCH_PATH)) {
+  const patcherPath = ensureHostStatusbarPatcherInstalled();
+  if (!patcherPath || !fs.existsSync(patcherPath)) {
     return false;
   }
-  spawnSync(process.execPath, [ENSURE_STATUSBAR_PATCH_PATH, '--worker'], {
+  spawnSync(process.execPath, [patcherPath, '--worker'], {
     stdio: 'ignore',
     windowsHide: true,
   });
@@ -80,9 +101,10 @@ async function main() {
 
   syncCombinedAutoinject(pretranslateEnabled, translationProvider);
 
-  if (fs.existsSync(ENSURE_STATUSBAR_PATCH_PATH)) {
+  const patcherPath = ensureHostStatusbarPatcherInstalled();
+  if (patcherPath && fs.existsSync(patcherPath)) {
     if (args.includes('--status')) {
-      const res = spawnSync(process.execPath, [ENSURE_STATUSBAR_PATCH_PATH, '--status'], {
+      const res = spawnSync(process.execPath, [patcherPath, '--status'], {
         encoding: 'utf8',
         windowsHide: true,
       });
