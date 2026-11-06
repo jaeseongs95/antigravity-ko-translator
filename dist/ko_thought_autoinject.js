@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.22
+// @version      1.2.23
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.17';
+  const KO_LOCALIZER_VERSION = 'v13.18';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -380,6 +380,11 @@
     ) {
       if (typeof window.__agySyncPersistentSettings === 'function') {
         window.__agySyncPersistentSettings();
+      }
+      if (typeof window.__agyForceRescanAll === 'function') {
+        try {
+          window.__agyForceRescanAll();
+        } catch (e) {}
       }
       if (
         window.__agyLastDefaultPretranslate !== undefined &&
@@ -5179,6 +5184,19 @@
         if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) continue;
         if (rcEl) {
           try {
+            if (typeof mod.getDebugNode === 'function') {
+              const dbgNode = mod.getDebugNode(rcEl);
+              const dbgComp = dbgNode?.componentInstance || dbgNode?.context;
+              if (isRcInstance(dbgComp)) {
+                window.__agyRemoteControlInstance = dbgComp;
+                return dbgComp;
+              }
+              const foundFromDbg = searchNgContext(dbgComp || dbgNode);
+              if (foundFromDbg) {
+                window.__agyRemoteControlInstance = foundFromDbg;
+                return foundFromDbg;
+              }
+            }
             if (typeof mod.getComponent === 'function') {
               const comp = mod.getComponent(rcEl);
               if (isRcInstance(comp)) {
@@ -5213,6 +5231,12 @@
               'onIframeLoad',
               'onWindowOnline',
               'onWindowOffline',
+              'isOffline',
+              'isDirectIngressMode',
+              'isTabHidden',
+              'getSelectedInstance',
+              'instanceInfos',
+              'remoteConversationsInfos',
             ]) {
               if (typeof RC.prototype[mName] === 'function') {
                 const origFn = RC.prototype[mName];
@@ -5227,7 +5251,10 @@
             }
           }
           try {
-            if (typeof MessageEvent === 'function') {
+            if (!window.__agyRemoteControlInstance && typeof document?.dispatchEvent === 'function') {
+              document.dispatchEvent(new Event('visibilitychange'));
+            }
+            if (!window.__agyRemoteControlInstance && typeof MessageEvent === 'function') {
               window.dispatchEvent(new MessageEvent('message', { data: '__agy_ko_probe__' }));
             }
           } catch (e) {}
@@ -5922,6 +5949,7 @@
       observer.takeRecords();
     }
   }
+  window.__agyForceRescanAll = scanAll;
 
   // Fast pre-paint pass for Thinking/Worked triggers and .cursor-edit blocks (prevents session-switch FOUC)
   // paired with a 16ms coalesced timer for full-document static UI localization (prevents main-thread starvation/freeze).

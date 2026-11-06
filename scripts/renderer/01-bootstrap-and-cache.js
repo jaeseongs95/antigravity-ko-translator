@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.17';
+  const KO_LOCALIZER_VERSION = 'v13.18';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -355,6 +355,11 @@
     ) {
       if (typeof window.__agySyncPersistentSettings === 'function') {
         window.__agySyncPersistentSettings();
+      }
+      if (typeof window.__agyForceRescanAll === 'function') {
+        try {
+          window.__agyForceRescanAll();
+        } catch (e) {}
       }
       if (
         window.__agyLastDefaultPretranslate !== undefined &&

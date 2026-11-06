@@ -881,6 +881,19 @@
         if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) continue;
         if (rcEl) {
           try {
+            if (typeof mod.getDebugNode === 'function') {
+              const dbgNode = mod.getDebugNode(rcEl);
+              const dbgComp = dbgNode?.componentInstance || dbgNode?.context;
+              if (isRcInstance(dbgComp)) {
+                window.__agyRemoteControlInstance = dbgComp;
+                return dbgComp;
+              }
+              const foundFromDbg = searchNgContext(dbgComp || dbgNode);
+              if (foundFromDbg) {
+                window.__agyRemoteControlInstance = foundFromDbg;
+                return foundFromDbg;
+              }
+            }
             if (typeof mod.getComponent === 'function') {
               const comp = mod.getComponent(rcEl);
               if (isRcInstance(comp)) {
@@ -915,6 +928,12 @@
               'onIframeLoad',
               'onWindowOnline',
               'onWindowOffline',
+              'isOffline',
+              'isDirectIngressMode',
+              'isTabHidden',
+              'getSelectedInstance',
+              'instanceInfos',
+              'remoteConversationsInfos',
             ]) {
               if (typeof RC.prototype[mName] === 'function') {
                 const origFn = RC.prototype[mName];
@@ -929,7 +948,10 @@
             }
           }
           try {
-            if (typeof MessageEvent === 'function') {
+            if (!window.__agyRemoteControlInstance && typeof document?.dispatchEvent === 'function') {
+              document.dispatchEvent(new Event('visibilitychange'));
+            }
+            if (!window.__agyRemoteControlInstance && typeof MessageEvent === 'function') {
               window.dispatchEvent(new MessageEvent('message', { data: '__agy_ko_probe__' }));
             }
           } catch (e) {}
@@ -1624,6 +1646,7 @@
       observer.takeRecords();
     }
   }
+  window.__agyForceRescanAll = scanAll;
 
   // Fast pre-paint pass for Thinking/Worked triggers and .cursor-edit blocks (prevents session-switch FOUC)
   // paired with a 16ms coalesced timer for full-document static UI localization (prevents main-thread starvation/freeze).
