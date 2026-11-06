@@ -571,7 +571,7 @@
     const showThinkingDesc = document.createElement('span');
     showThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
     showThinkingDesc.textContent =
-      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계(Worked for / 도구 그룹 접힘 블록 포함)를 스트리밍 단계 전환 후에도 접히지 않게 자동으로 펼쳐 화면에 상시 표시합니다. (기본값: 켜짐 · 사용자가 직접 클릭해 접은 블록은 수동 상태를 유지합니다)';
+      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계를 자동으로 펼쳐 상시 표시합니다. 끄면 작업 내용(파일 분석·수정·명령 실행)은 그대로 표시하고 추론 블록만 숨깁니다. (기본값: 켜짐 · 직접 클릭해 접은 블록은 수동 상태를 유지합니다)';
     showThinkingInfo.appendChild(showThinkingTitle);
     showThinkingInfo.appendChild(showThinkingDesc);
 
@@ -605,6 +605,55 @@
     rowShowThinking.appendChild(showThinkingInfo);
     rowShowThinking.appendChild(showThinkingSwitchWrap);
     card.appendChild(rowShowThinking);
+
+    // Row 3: Translate Thinking (추론 과정 한국어 번역) Toggle Switch
+    const translateThinkingOn =
+      typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true;
+    const rowTranslateThinking = document.createElement('div');
+    rowTranslateThinking.className =
+      'agy-ko-row agy-ko-row-inline py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center';
+    const transThinkingInfo = document.createElement('div');
+    transThinkingInfo.className = 'agy-ko-info flex-1 flex flex-col gap-0.5';
+    const transThinkingTitle = document.createElement('span');
+    transThinkingTitle.className = 'agy-ko-title text-sm font-medium text-foreground';
+    transThinkingTitle.textContent = 'Thinking (추론 과정) 한국어 번역';
+    const transThinkingDesc = document.createElement('span');
+    transThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
+    transThinkingDesc.textContent =
+      '대화 중 에이전트의 추론 과정(Thinking 본문)을 한국어로 실시간 번역합니다. 끄면 추론 본문은 원문(영어) 그대로 표시하고 UI 한글화만 유지합니다. (기본값: 켜짐)';
+    transThinkingInfo.appendChild(transThinkingTitle);
+    transThinkingInfo.appendChild(transThinkingDesc);
+
+    const transThinkingSwitchWrap = document.createElement('div');
+    transThinkingSwitchWrap.className = 'agy-ko-switch-wrap shrink-0 flex items-center gap-2';
+    const transThinkingSwitchLbl = document.createElement('span');
+    transThinkingSwitchLbl.className = 'agy-ko-switch-lbl text-xs font-medium text-muted-foreground';
+    transThinkingSwitchLbl.textContent = translateThinkingOn ? '켜짐' : '꺼짐';
+    const transThinkingSwitchBtn = document.createElement('button');
+    transThinkingSwitchBtn.type = 'button';
+    transThinkingSwitchBtn.setAttribute('role', 'switch');
+    transThinkingSwitchBtn.setAttribute('data-testid', 'agy-ko-translate-thinking-switch');
+    transThinkingSwitchBtn.setAttribute('aria-checked', translateThinkingOn ? 'true' : 'false');
+    transThinkingSwitchBtn.className = 'agy-ko-switch';
+    const transThinkingThumb = document.createElement('span');
+    transThinkingThumb.className = 'agy-ko-switch-thumb';
+    transThinkingSwitchBtn.appendChild(transThinkingThumb);
+    transThinkingSwitchBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = !(typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true);
+      if (typeof window.__agySetTranslateThinking === 'function') {
+        window.__agySetTranslateThinking(next);
+      }
+      showSettingsFeedback(
+        `✓ Thinking(추론 과정) 한국어 번역이 '${next ? '켜짐 (ON)' : '꺼짐 (OFF — 원문 표시)'}'(으)로 설정되었습니다.`
+      );
+    };
+    transThinkingSwitchWrap.appendChild(transThinkingSwitchLbl);
+    transThinkingSwitchWrap.appendChild(transThinkingSwitchBtn);
+    rowTranslateThinking.appendChild(transThinkingInfo);
+    rowTranslateThinking.appendChild(transThinkingSwitchWrap);
+    card.appendChild(rowTranslateThinking);
 
     // Row 3: Pre-translate Toggle Switch
     const rowPre = document.createElement('div');

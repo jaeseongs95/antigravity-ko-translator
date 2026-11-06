@@ -94,7 +94,67 @@
     }
   }
 
+  function restoreOriginalCursorEdits() {
+    while (adapterQueue.length > 0) {
+      const item = adapterQueue.shift();
+      try {
+        item.reject(new Error('TRANSLATE_THINKING_DISABLED'));
+      } catch (e) {}
+    }
+    document.querySelectorAll('.cursor-edit').forEach((el) => {
+      if (el.__agyAbortCtrl) {
+        try {
+          el.__agyAbortCtrl.abort();
+        } catch (e) {}
+        delete el.__agyAbortCtrl;
+      }
+      if (el.__agyStreamDebounce) {
+        clearTimeout(el.__agyStreamDebounce);
+        delete el.__agyStreamDebounce;
+      }
+      delete el.__agyLastSnapshot;
+      delete el.__agyPendingSnapshot;
+      const wrap = el.querySelector(':scope > .agy-ko-thought-wrap');
+      if (wrap) wrap.remove();
+      el.removeAttribute('data-agy-ko-ready');
+    });
+  }
+
+  function applyTranslateThinkingStateToDom() {
+    const enabled = typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true;
+    if (!enabled) {
+      restoreOriginalCursorEdits();
+    } else {
+      scanThoughtBlocks();
+    }
+  }
+
   function processCursorEdit(cursorEdit, triggerBtn) {
+    if (typeof isTranslateThinkingEnabled === 'function' && !isTranslateThinkingEnabled()) {
+      if (
+        cursorEdit.getAttribute('data-agy-ko-ready') === '1' ||
+        cursorEdit.querySelector(':scope > .agy-ko-thought-wrap')
+      ) {
+        if (cursorEdit.__agyAbortCtrl) {
+          try {
+            cursorEdit.__agyAbortCtrl.abort();
+          } catch (e) {}
+          delete cursorEdit.__agyAbortCtrl;
+        }
+        if (cursorEdit.__agyStreamDebounce) {
+          clearTimeout(cursorEdit.__agyStreamDebounce);
+          delete cursorEdit.__agyStreamDebounce;
+        }
+        const oldWrap = cursorEdit.querySelector(':scope > .agy-ko-thought-wrap');
+        if (oldWrap) oldWrap.remove();
+        cursorEdit.removeAttribute('data-agy-ko-ready');
+        delete cursorEdit.__agyLastSnapshot;
+        delete cursorEdit.__agyPendingSnapshot;
+      }
+      if (triggerBtn) processTriggerButton(triggerBtn);
+      return;
+    }
+
     const origContainer = Array.from(cursorEdit.children).find(
       (ch) => ch.tagName === 'DIV' && !ch.classList.contains('agy-ko-thought-wrap')
     );
@@ -363,7 +423,7 @@
         txt !== '(플러그인에서 관리됨)' &&
         txt !== '(empty command)' &&
         txt !== '(빈 명령어)' &&
-        !/\[🔑\s*(?:Auth Header Configured|인증 헤더 설정됨)\]/.test(txt)
+        !/\[(?:🔑\s*(?:Auth Header Configured|인증 헤더 설정됨)|🔗\s*OAuth(?:\s*Connected|\s*연결됨)?)\]/.test(txt)
       ) {
         return true;
       }
@@ -603,15 +663,43 @@
     } catch (err) {}
   }
 
+  function isHiddenActiveWorkedForButton(btn) {
+    if (!btn) return false;
+    if (btn.classList && btn.classList.contains('hidden')) return true;
+    try {
+      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+      let cur = fk ? btn[fk] : null;
+      for (let i = 0; i < 8 && cur; i++) {
+        if (cur.memoizedProps && cur.memoizedProps.triggerVisible === false) {
+          return true;
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    return false;
+  }
+
   function scanTriggerButtonsSync(forceCollapseAll = false) {
     ensureStyle();
     if (typeof syncShowThinkingDomAttribute === 'function') {
       syncShowThinkingDomAttribute();
     }
     const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
-    const workedBtns = document.querySelectorAll('button[data-testid="worked-for-collapsible"]');
-    for (const btn of workedBtns) {
+    const workedBtns = Array.from(document.querySelectorAll('button[data-testid="worked-for-collapsible"]'));
+    for (let i = 0; i < workedBtns.length; i++) {
+      const btn = workedBtns[i];
+      const isLastWorked = i === workedBtns.length - 1;
       processTriggerButton(btn);
+      if (isHiddenActiveWorkedForButton(btn)) {
+        // Active/latest turn has triggerVisible=false (.hidden on the button).
+        // If collapsed, its entire body (all tool & work steps) unmounts while the trigger button itself is hidden!
+        // Always keep it expanded regardless of showThinkingEnabled.
+        if (btn.getAttribute('aria-expanded') === 'false') {
+          btn.__agyUserCollapsed = false;
+          expandTriggerButtonIfNeeded(btn);
+        }
+        continue;
+      }
       if (autoExpand) {
         if (
           btn.getAttribute('aria-expanded') === 'false' &&
@@ -621,30 +709,33 @@
           expandTriggerButtonIfNeeded(btn);
         }
       } else if (
+        !isLastWorked &&
+        forceCollapseAll &&
         btn.getAttribute('aria-expanded') === 'true' &&
-        (forceCollapseAll || btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
+        (btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
         doesWorkedForButtonContainThinking(btn)
       ) {
         collapseTriggerButtonIfNeeded(btn);
+      } else if (
+        isLastWorked &&
+        btn.getAttribute('aria-expanded') === 'false' &&
+        !btn.__agyUserCollapsed &&
+        doesWorkedForButtonContainThinking(btn)
+      ) {
+        expandTriggerButtonIfNeeded(btn);
       }
     }
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
     for (const btn of toolGroupBtns) {
       processTriggerButton(btn);
-      if (autoExpand) {
-        if (
-          btn.getAttribute('aria-expanded') === 'false' &&
-          !btn.__agyUserCollapsed &&
-          doesToolGroupButtonContainThinking(btn)
-        ) {
-          expandTriggerButtonIfNeeded(btn);
-        }
-      } else if (
-        btn.getAttribute('aria-expanded') === 'true' &&
-        (forceCollapseAll || btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
+      // Tool group collapsibles contain actual work items (file analysis, edits, commands) alongside thoughts.
+      // Never auto-collapse tool groups when hiding thoughts; CSS hides thinking-collapsible-trigger & .cursor-edit directly.
+      if (
+        btn.getAttribute('aria-expanded') === 'false' &&
+        !btn.__agyUserCollapsed &&
         doesToolGroupButtonContainThinking(btn)
       ) {
-        collapseTriggerButtonIfNeeded(btn);
+        expandTriggerButtonIfNeeded(btn);
       }
     }
     const thinkingBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
@@ -800,6 +891,29 @@
         .catch(() => {});
     }
 
+    // Auto-load antigravity-mcp-manager in Remote Control host if not yet active
+    if (!window.agyMcpManager && !window.__agyKoFetchingMcpManager && typeof fetch === 'function') {
+      window.__agyKoFetchingMcpManager = true;
+      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' + Date.now())
+        .then((r) => (r && r.ok ? r.text() : ''))
+        .then((code) => {
+          if (!code || window.agyMcpManager) return;
+          const s = document.createElement('script');
+          const nonce = document.querySelector('script[nonce]')?.nonce;
+          const p = getTrustedPolicyForRemote();
+          if (nonce) s.nonce = nonce;
+          s.text = p ? p.createScript(code) : code;
+          (document.head || document.documentElement).appendChild(s);
+          try {
+            const innerFrame = rcEl.querySelector('iframe');
+            if (innerFrame && innerFrame.contentWindow && innerFrame.contentDocument && typeof window.__agyMountMcpManager === 'function') {
+              window.__agyMountMcpManager(innerFrame.contentWindow, innerFrame.contentDocument);
+            }
+          } catch (e) {}
+        })
+        .catch(() => {});
+    }
+
     const iframe = rcEl.querySelector('iframe');
     if (!iframe) return;
 
@@ -817,6 +931,11 @@
       ) {
         if (cw.__agyKoLocalizerActive !== KO_LOCALIZER_VERSION) {
           window.__agyMountKoThoughtLocalizer(cw, cd);
+        }
+        if (typeof window.__agyMountMcpManager === 'function') {
+          try {
+            window.__agyMountMcpManager(cw, cd);
+          } catch (e) {}
         }
         return;
       }
@@ -1026,6 +1145,11 @@
             }
           } catch (e) {}
           window.__agyMountKoThoughtLocalizer(cw, cd);
+          if (typeof window.__agyMountMcpManager === 'function') {
+            try {
+              window.__agyMountMcpManager(cw, cd);
+            } catch (e) {}
+          }
         };
         mainScript.onerror = () => {
           delete iframe.__agyKoPromoted;
@@ -1108,6 +1232,10 @@
       if (mcpModal) localizeStaticUiInRoot(mcpModal);
       const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');
       if (mcpEditPopup) localizeStaticUiInRoot(mcpEditPopup);
+      const mcpOAuthModal = document.getElementById('agy-mcp-oauth-connect-backdrop');
+      if (mcpOAuthModal) localizeStaticUiInRoot(mcpOAuthModal);
+      const mcpSettingsPane = document.getElementById('agy-mcp-settings-pane');
+      if (mcpSettingsPane) localizeStaticUiInRoot(mcpSettingsPane);
       if (document.querySelectorAll) {
         document.querySelectorAll('[data-agy-custom-mcp-btn]').forEach((el) => localizeStaticUiInRoot(el));
       }

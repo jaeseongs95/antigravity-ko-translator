@@ -851,8 +851,11 @@
       '~/.gemini/config/mcp_config.json에서 커스텀 MCP 서버 추가 및 관리',
     'Custom Stdio (npx / uvx / node / python) or HTTP MCP server:':
       '커스텀 Stdio (npx / uvx / node / python) 또는 HTTP MCP 서버:',
-    '+ Add Custom MCP Server': '+ 커스텀 MCP 서버 추가',
+    '+ Add Custom MCP Server': '+ 사용자 지정 MCP 서버 추가',
+    'Add Custom MCP Server': '사용자 지정 MCP 서버 추가',
+    'Add or Edit Custom MCP Server': '사용자 지정 MCP 서버 추가 또는 수정',
     'Manage Custom Servers': '커스텀 서버 관리',
+    'Manage Servers': '서버 목록 관리',
     '{ } Edit mcp_config.json': '{ } mcp_config.json 편집',
     '⚡ Quick Auto-Add (Enter MCP Server URL, GitHub/npm Address, Command, or JSON):':
       '⚡ 빠른 자동 추가 (MCP 서버 URL, GitHub/npm 주소, 명령어 또는 JSON 입력):',
@@ -1001,6 +1004,76 @@
     'Server name is required.': '서버 이름은 필수입니다.',
     'No matching HTTP custom servers found to update authentication.':
       '인증을 업데이트할 일치하는 HTTP 커스텀 서버가 없습니다.',
+    // Antigravity Custom MCP Server Manager v1.4.0 (OAuth Portal, Settings Tab & Top Menu Bar)
+    '⚙️ Edit Custom MCP Server Settings': '⚙️ 사용자 지정 MCP 서버 설정 수정',
+    '⚙️ Edit Server Settings': '⚙️ 서버 설정 수정',
+    '⚙️ Edit Settings / Connect OAuth': '⚙️ 설정 수정 / OAuth 연결',
+    '⚙️ OAuth Settings': '⚙️ OAuth 설정',
+    '🔗 OAuth / Auth Settings': '🔗 OAuth / 인증 설정',
+    '🔗 Connect OAuth / Auth': '🔗 OAuth 연결 / 인증',
+    'OAuth & Custom MCP': 'OAuth 및 사용자 지정 MCP',
+    '↻ Refresh': '↻ 새로고침',
+    '+ Add Custom MCP Server (New Custom MCP Server)': '+ 사용자 지정 MCP 서버 추가 (새 커스텀 MCP 서버)',
+    'Register, authenticate, and manage remote OAuth MCP portals and local (Stdio) custom MCP servers.':
+      '원격 OAuth MCP 포털 및 로컬(Stdio) 사용자 지정 MCP 서버를 등록, 인증 및 관리합니다.',
+    'Custom OAuth MCP portal (https://.../mcp) or local Stdio (npx / uvx / node / python) server:':
+      '사용자 지정 OAuth MCP 포털(https://.../mcp) 또는 로컬 Stdio(npx / uvx / node / python) 서버:',
+    '⚡ Quick Auto-Add (Enter Remote OAuth MCP URL, GitHub/npm Address, Command, or JSON):':
+      '⚡ 빠른 자동 추가 (원격 OAuth MCP URL, GitHub/npm 주소, 명령어 또는 JSON 입력):',
+    'https://mcp.example.com/mcp, https://github.com/owner/repo, @playwright/mcp, or npx -y ...':
+      'https://mcp.example.com/mcp, https://github.com/owner/repo, @playwright/mcp 또는 npx -y ...',
+    'No custom MCP servers configured yet. Click "+ Add Custom MCP Server" to register a remote OAuth MCP portal or local Stdio server.':
+      '아직 설정된 사용자 지정 MCP 서버가 없습니다. "+ 사용자 지정 MCP 서버 추가"를 클릭해 원격 OAuth MCP 포털 또는 로컬 Stdio 서버를 등록하세요.',
+    '☁️ Remote OAuth MCP': '☁️ 원격 OAuth MCP',
+    'Remote Streamable HTTP / OAuth MCP portal (MCP spec 2025-03-26).':
+      '원격 Streamable HTTP / OAuth MCP 포털 (MCP 사양 2025-03-26).',
+    'Name': '이름',
+    'Custom tool name (auto-generated from Server URL if left blank)':
+      '사용자 지정 도구 이름 (비워 두면 서버 URL에서 자동 생성됨)',
+    'Description (Optional)': '설명 (선택 사항)',
+    'Briefly describe what this server does': '이 서버의 역할을 간단히 입력하세요',
+    'Connection': '연결',
+    'Server URL': '서버 URL',
+    'Local / Tunnel (Stdio)': '로컬 / 터널 (Stdio)',
+    'Authentication': '인증',
+    'No Authentication': '인증 없음',
+    'OAuth or No Authentication': 'OAuth 또는 인증 없음',
+    'Automatically detects MCP portal OAuth settings and opens the sign-in window after saving.':
+      '저장 후 MCP 포털의 OAuth 설정을 자동으로 감지하여 로그인 창을 엽니다.',
+    'Advanced OAuth Settings': '고급 OAuth 설정',
+    'Review auto-detected OAuth settings or enter custom credentials, select client configuration mode, and set default scopes.':
+      '자동 감지된 OAuth 설정을 확인하거나 직접 자격 증명을 입력하고, 클라이언트 설정 방식 및 기본 권한 범위(Scopes)를 지정합니다.',
+    'Client Configuration': '클라이언트 설정 방식',
+    'Automatic Discovery & Dynamic Client Registration': '자동 감지 및 동적 클라이언트 등록',
+    'Custom Client ID & Secret': 'Client ID 및 Secret 직접 입력',
+    'Client ID': 'Client ID',
+    'OAuth Client ID': 'OAuth Client ID',
+    'Client Secret (Optional)': 'Client Secret (선택 사항)',
+    'OAuth Client Secret (optional)': 'OAuth Client Secret (선택 사항)',
+    'Default Scopes (Optional)': '기본 권한 범위 / Scopes (선택 사항)',
+    'Auto-detected (e.g. openid profile mcp:tools)': '자동 감지됨 (예: openid profile mcp:tools)',
+    'Enter authorization code manually (optional)...': '인증 코드 직접 입력 (선택 사항)...',
+    '⚠️ Custom MCP servers carry risks. Only connect to MCP servers you trust.':
+      '⚠️ 사용자 지정 MCP 서버는 보안 위험이 있을 수 있습니다. 신뢰할 수 있는 MCP 서버만 연결하세요.',
+    'Create & Connect': '플러그인으로 생성',
+    'Close OAuth Connect Modal': 'OAuth 연결 모달 닫기',
+    'If the browser completes callback automatically, this window closes automatically — or paste the authorization code below:':
+      '브라우저에서 콜백이 자동 완료되면 이 창이 자동으로 닫히며, 수동 코드가 발급된 경우 아래에 붙여넣으세요:',
+    'Paste authorization code here (if prompted)...': '여기에 인증 코드를 붙여넣으세요 (수동 입력 시)...',
+    'Submit Code': '코드 제출',
+    'Opening OAuth sign-in page in your browser...': '브라우저에서 OAuth 로그인 페이지를 여는 중...',
+    'Browser sign-in window opened. Complete authentication in your browser (status updates automatically).':
+      '브라우저 로그인 창이 열렸습니다. 브라우저에서 인증을 완료하세요 (완료 시 상태가 자동 갱신됩니다).',
+    'OAuth authentication completed!': 'OAuth 인증이 완료되었습니다!',
+    'Please enter the authorization code from your browser.': '브라우저에서 발급된 인증 코드를 입력해 주세요.',
+    'No OAuth URL is currently reported by the server. Click below to refresh and detect OAuth settings.':
+      '현재 서버에서 보고된 OAuth URL이 없습니다. 아래 버튼을 눌러 새로고침하고 OAuth 설정을 감지하세요.',
+    'Detecting OAuth settings from server...': '서버에서 OAuth 설정을 감지하는 중...',
+    'Still no OAuth prompt from server. Check the Server URL or switch to Custom Client ID.':
+      '서버에서 OAuth 요청이 감지되지 않았습니다. 서버 URL을 확인하거나 Client ID 직접 입력을 사용해 보세요.',
+    '↻ Detect OAuth & Sign In': '↻ OAuth 감지 및 로그인',
+    'Configure Custom Client ID / Advanced OAuth': 'Client ID 직접 입력 / 고급 OAuth 설정',
+    'Add or manage custom OAuth / Stdio MCP servers': '사용자 지정 OAuth / Stdio MCP 서버 추가 및 관리',
   };
 
   function formatDurationKo(rawDur) {
@@ -1451,6 +1524,50 @@
 
     m = t.match(/^Edit settings for\s+"(.+)"$/i);
     if (m) return `"${m[1]}" 설정 수정`;
+
+    // Antigravity Custom MCP Server Manager v1.4.0 dynamic patterns
+    m = t.match(/^HTTP\s+(.+?)\s+\[🔗 OAuth Connected\]$/i);
+    if (m) return `HTTP ${m[1]}  [🔗 OAuth 연결됨]`;
+
+    m = t.match(/^HTTP\s+(.+?)\s+\[🔗 OAuth\]$/i);
+    if (m) return `HTTP ${m[1]}  [🔗 OAuth]`;
+
+    m = t.match(/^●\s*OAuth Connected\s*\((.+)\)$/i);
+    if (m) return `● OAuth 연결됨 (${m[1]})`;
+
+    m = t.match(/^🔗\s*OAuth Ready\s*—\s*Sign in to\s+"(.+)"\s+in your browser\.$/i);
+    if (m) return `🔗 OAuth 준비됨 — 브라우저에서 "${m[1]}"에 로그인하세요.`;
+
+    m = t.match(/^🔗\s*Connect\s+(.+?)\s*↗$/i);
+    if (m) return `🔗 ${m[1]} 연결 ↗`;
+
+    m = t.match(/^Connect\s+(.+?)\s*↗$/i);
+    if (m) return `${m[1]} 연결 ↗`;
+
+    m = t.match(/^Connect\s+(.+)$/i);
+    if (m) return `${m[1]} 연결`;
+
+    m = t.match(
+      /^Antigravity uses browser OAuth authentication to interact with the\s+"(.+)"\s+MCP server\.?\s*Click Connect below to sign in with your account and authorize access\.$/i
+    );
+    if (m) {
+      return `Antigravity는 브라우저 OAuth 인증을 사용하여 "${m[1]}" MCP 서버와 연동합니다. 아래 연결 버튼을 클릭해 계정으로 로그인하고 접근 권한을 승인하세요.`;
+    }
+
+    m = t.match(/^OAuth sign-in window is ready for\s+"(.+)"\.$/i);
+    if (m) return `"${m[1]}" 서버의 OAuth 로그인 창이 준비되었습니다.`;
+
+    m = t.match(/^Disconnected OAuth for\s+"(.+)"\.$/i);
+    if (m) return `"${m[1]}" 서버의 OAuth 연결을 해제했습니다.`;
+
+    m = t.match(/^Auto-filled form for\s+"(.+)"\.\s*Review OAuth \/ connection settings below\.$/i);
+    if (m) return `"${m[1]}" 서버 폼을 자동으로 채웠습니다. 아래에서 OAuth 및 연결 설정을 확인하세요.`;
+
+    m = t.match(/^Loaded preset\s+"(.+)"\.$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `"${inner}" 프리셋을 불러왔습니다.`;
+    }
 
     // Thinking / Worked duration headers
     m = t.match(/^Thought for\s+(.+)$/i);

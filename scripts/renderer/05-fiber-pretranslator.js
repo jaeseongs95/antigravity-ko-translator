@@ -51,6 +51,24 @@
               localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
             } catch (e) {}
             ensureVerboseConversationStepsEnabled();
+            if (typeof scanTriggerButtonsSync === 'function') {
+              scanTriggerButtonsSync(!showThinkingEnabled);
+            }
+            changed = true;
+          }
+        }
+        const savedTransThinking = items[TRANSLATE_THINKING_STORAGE_KEY];
+        if (savedTransThinking !== undefined) {
+          const nextTrans =
+            savedTransThinking === '1' || savedTransThinking === 'true' || savedTransThinking === true;
+          if (nextTrans !== translateThinkingEnabled) {
+            translateThinkingEnabled = nextTrans;
+            try {
+              localStorage.setItem(TRANSLATE_THINKING_STORAGE_KEY, translateThinkingEnabled ? '1' : '0');
+            } catch (e) {}
+            if (typeof applyTranslateThinkingStateToDom === 'function') {
+              applyTranslateThinkingStateToDom();
+            }
             changed = true;
           }
         }
@@ -85,7 +103,9 @@
   };
 
   function isPretranslateEnabled() {
-    return Boolean(pretranslateEnabled);
+    return Boolean(
+      pretranslateEnabled && (typeof isTranslateThinkingEnabled !== 'function' || isTranslateThinkingEnabled())
+    );
   }
 
   function collectHiddenThinkingStringsFromFiber() {
@@ -211,7 +231,7 @@
     }
     const st = resolveUserSettingsStore();
     if (st && typeof st.setPrefValue === 'function') {
-      Promise.resolve(st.setPrefValue('verboseConversationSteps', showThinkingEnabled))
+      Promise.resolve(st.setPrefValue('verboseConversationSteps', true))
         .then(() => {
           if (typeof refreshTranslatorSettingsUi === 'function') {
             refreshTranslatorSettingsUi();
@@ -224,6 +244,9 @@
     }
     if (typeof scanTriggerButtonsSync === 'function') {
       scanTriggerButtonsSync(!showThinkingEnabled);
+    }
+    if (showThinkingEnabled && typeof scanThoughtBlocks === 'function') {
+      scanThoughtBlocks();
     }
     if (!_fromCrossFrame) {
       try {
@@ -248,6 +271,55 @@
     }
     return {
       showThinkingEnabled,
+    };
+  };
+
+  window.__agyGetTranslateThinking = () => isTranslateThinkingEnabled();
+  window.__agySetTranslateThinking = (enabled, _fromCrossFrame = false) => {
+    translateThinkingEnabled = Boolean(enabled);
+    try {
+      localStorage.setItem(TRANSLATE_THINKING_STORAGE_KEY, translateThinkingEnabled ? '1' : '0');
+    } catch (e) {}
+    if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
+      try {
+        window.nativeStorage.updateItems({
+          [TRANSLATE_THINKING_STORAGE_KEY]: translateThinkingEnabled ? '1' : '0',
+        });
+      } catch (e) {}
+    }
+    if (!translateThinkingEnabled && thoughtDebounceTimer) {
+      clearTimeout(thoughtDebounceTimer);
+      thoughtDebounceTimer = null;
+    }
+    if (typeof applyTranslateThinkingStateToDom === 'function') {
+      applyTranslateThinkingStateToDom();
+    }
+    if (typeof refreshTranslatorSettingsUi === 'function') {
+      refreshTranslatorSettingsUi();
+    }
+    if (!_fromCrossFrame) {
+      try {
+        document.querySelectorAll('iframe').forEach((ifr) => {
+          try {
+            const cw = ifr.contentWindow;
+            if (cw && cw !== window && typeof cw.__agySetTranslateThinking === 'function') {
+              cw.__agySetTranslateThinking(translateThinkingEnabled, true);
+            }
+          } catch (e) {}
+        });
+      } catch (e) {}
+      try {
+        if (
+          window.parent &&
+          window.parent !== window &&
+          typeof window.parent.__agySetTranslateThinking === 'function'
+        ) {
+          window.parent.__agySetTranslateThinking(translateThinkingEnabled, true);
+        }
+      } catch (e) {}
+    }
+    return {
+      translateThinkingEnabled,
     };
   };
 

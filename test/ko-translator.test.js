@@ -27,8 +27,9 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.12';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.13';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
+  assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.ok(bundleCode.includes("ensureVerboseConversationStepsEnabled"));
   assert.ok(bundleCode.includes("'verboseConversationSteps'"));
@@ -228,8 +229,10 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(dictSandbox.translateStaticUiSync('+ Add / Edit Server'), '+ 서버 추가 / 편집');
   assert.equal(dictSandbox.translateStaticUiSync('{ } Raw mcp_config.json'), '{ } mcp_config.json 원문');
   assert.equal(dictSandbox.translateStaticUiSync('+ Custom MCP'), '+ 커스텀 MCP');
-  assert.equal(dictSandbox.translateStaticUiSync('+ Add Custom MCP Server'), '+ 커스텀 MCP 서버 추가');
+  assert.equal(dictSandbox.translateStaticUiSync('+ Add Custom MCP Server'), '+ 사용자 지정 MCP 서버 추가');
+  assert.equal(dictSandbox.translateStaticUiSync('Add Custom MCP Server'), '사용자 지정 MCP 서버 추가');
   assert.equal(dictSandbox.translateStaticUiSync('Manage Custom Servers'), '커스텀 서버 관리');
+  assert.equal(dictSandbox.translateStaticUiSync('Manage Servers'), '서버 목록 관리');
   assert.equal(dictSandbox.translateStaticUiSync('{ } Edit mcp_config.json'), '{ } mcp_config.json 편집');
   assert.equal(
     dictSandbox.translateStaticUiSync('⚡ Quick Auto-Add (Enter MCP Server URL, GitHub/npm Address, Command, or JSON):'),
@@ -277,6 +280,32 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(
     dictSandbox.translateStaticUiSync('Connected (12 tools available)'),
     '연결됨 (사용 가능한 도구 12개)'
+  );
+  // 3d. Antigravity Custom MCP Server Manager v1.4.0 (OAuth Portal, Settings Tab & Top Menu Bar)
+  assert.equal(dictSandbox.translateStaticUiSync('MCP Servers'), 'MCP 서버');
+  assert.equal(dictSandbox.translateStaticUiSync('⚙️ Edit Custom MCP Server Settings'), '⚙️ 사용자 지정 MCP 서버 설정 수정');
+  assert.equal(dictSandbox.translateStaticUiSync('⚙️ Edit Server Settings'), '⚙️ 서버 설정 수정');
+  assert.equal(dictSandbox.translateStaticUiSync('🔗 OAuth / Auth Settings'), '🔗 OAuth / 인증 설정');
+  assert.equal(dictSandbox.translateStaticUiSync('🔗 Connect OAuth / Auth'), '🔗 OAuth 연결 / 인증');
+  assert.equal(dictSandbox.translateStaticUiSync('Advanced OAuth Settings'), '고급 OAuth 설정');
+  assert.equal(
+    dictSandbox.translateStaticUiSync('Automatic Discovery & Dynamic Client Registration'),
+    '자동 감지 및 동적 클라이언트 등록'
+  );
+  assert.equal(dictSandbox.translateStaticUiSync('Custom Client ID & Secret'), 'Client ID 및 Secret 직접 입력');
+  assert.equal(dictSandbox.translateStaticUiSync('Create & Connect'), '플러그인으로 생성');
+  assert.equal(dictSandbox.translateStaticUiSync('Submit Code'), '코드 제출');
+  assert.equal(dictSandbox.translateStaticUiSync('Connect github ↗'), 'github 연결 ↗');
+  assert.equal(dictSandbox.translateStaticUiSync('🔗 Connect github ↗'), '🔗 github 연결 ↗');
+  assert.equal(
+    dictSandbox.translateStaticUiSync('HTTP https://mcp.example.com/mcp  [🔗 OAuth Connected]'),
+    'HTTP https://mcp.example.com/mcp  [🔗 OAuth 연결됨]'
+  );
+  assert.equal(
+    dictSandbox.translateStaticUiSync(
+      'Antigravity uses browser OAuth authentication to interact with the "github" MCP server. Click Connect below to sign in with your account and authorize access.'
+    ),
+    'Antigravity는 브라우저 OAuth 인증을 사용하여 "github" MCP 서버와 연동합니다. 아래 연결 버튼을 클릭해 계정으로 로그인하고 접근 권한을 승인하세요.'
   );
 
   // 4. Remote Control defaults to google-translate and local-llm falls back to google-translate when unreachable
@@ -335,7 +364,11 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(mod08.includes("el.classList.contains('agy-mcp-tool-chip')"), 'must exclude .agy-mcp-tool-chip from static UI text node translation');
   assert.ok(mod08.includes("const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');"), 'must localize #agy-mcp-manager-modal-backdrop synchronously in fast scan');
   assert.ok(mod08.includes("const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');"), 'must localize #agy-mcp-edit-popup-backdrop synchronously in fast scan');
+  assert.ok(mod08.includes("const mcpOAuthModal = document.getElementById('agy-mcp-oauth-connect-backdrop');"), 'must localize #agy-mcp-oauth-connect-backdrop synchronously in fast scan');
+  assert.ok(mod08.includes('mcp_manager_autoinject.js'), 'must auto-load mcp_manager_autoinject.js on Remote Control web when bookmarklet runs');
   const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
+  assert.ok(mod06.includes('agy-ko-translate-thinking-switch'), 'modal must include Thinking Korean translation ON/OFF toggle switch');
+  assert.ok(mod06.includes('window.__agySetTranslateThinking'), 'modal Thinking translation toggle must invoke window.__agySetTranslateThinking');
   assert.ok(mod06.includes('@media (max-width: 640px)'), 'must include mobile responsive rules for translator modal');
   assert.ok(mod06.includes('.agy-ko-card') && mod06.includes('.agy-ko-title') && mod06.includes('.agy-ko-desc'), 'must use self-contained CSS layout classes for Tailwind-less Remote Control host');
   assert.ok(mod06.includes('.agy-ko-row.agy-ko-row-inline') && mod06.includes('.agy-ko-row.agy-ko-row-top'), 'must override .agy-ko-row column direction with flex-direction: row on inline/top rows');
@@ -487,21 +520,25 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 7. doesToolGroupButtonContainThinking, 3-tier collapsible auto-expand, and re-expand after React G_ auto-collapse (unless user-collapsed)
   const toolGrpFnMatch = mod08.match(/function doesToolGroupButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const workedFnMatch = mod08.match(/function doesWorkedForButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
+  const hiddenActiveFnMatch = mod08.match(/function isHiddenActiveWorkedForButton\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const expandBtnFnMatch = mod08.match(/function expandTriggerButtonIfNeeded\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const clickCapFnMatch = mod08.match(/function onTriggerButtonClickCapture\(e\)\s*\{[\s\S]*?\r?\n  \}/);
   const collapseBtnFnMatch = mod08.match(/function collapseTriggerButtonIfNeeded\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const scanBtnsMatch = mod08.match(/function scanTriggerButtonsSync\(forceCollapseAll = false\)\s*\{[\s\S]*?\r?\n  \}/);
   assert.ok(
-    toolGrpFnMatch && workedFnMatch && expandBtnFnMatch && collapseBtnFnMatch && clickCapFnMatch && scanBtnsMatch,
-    '3-tier collapsible expand/collapse and user-collapse tracking functions must exist in 08-dom-observer.js'
+    toolGrpFnMatch && workedFnMatch && hiddenActiveFnMatch && expandBtnFnMatch && collapseBtnFnMatch && clickCapFnMatch && scanBtnsMatch,
+    '3-tier collapsible expand/collapse and active-turn hidden worked-for protection functions must exist in 08-dom-observer.js'
   );
   assert.ok(mod06.includes('html[data-agy-hide-thinking="1"]'), 'STYLE_CSS must hide thinking trigger and .cursor-edit when data-agy-hide-thinking="1"');
 
   let clickedOrder = [];
-  const makeCollapsibleBtn = (fiberKey, fiberVal, expanded = 'false') => ({
+  const makeCollapsibleBtn = (fiberKey, fiberVal, expanded = 'false', isHidden = false) => ({
     [fiberKey]: fiberVal,
     expandedState: expanded,
     attrs: {},
+    classList: {
+      contains: (c) => (c === 'hidden' ? isHidden : false),
+    },
     querySelectorAll: () => [],
     closest() {
       return this;
@@ -524,6 +561,14 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   const workedWithThinking = makeCollapsibleBtn('__reactFiber$worked1', {
     memoizedProps: { segment: { steps: [{ step: { value: { thinking: 'Step 1 thought' } } }] } },
   });
+  const activeHiddenWorked = makeCollapsibleBtn(
+    '__reactFiber$workedActiveHidden',
+    {
+      memoizedProps: { triggerVisible: false, segment: { steps: [{ step: { value: { thinking: 'Active turn thought' } } }] } },
+    },
+    'true',
+    true
+  );
   const toolGroupWithThinking = makeCollapsibleBtn('__reactFiber$toolGrp1', {
     memoizedProps: { steps: [{ step: { value: { thinking: 'Intermediate tool thought' } } }] },
   });
@@ -540,7 +585,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     isShowThinkingEnabled: () => showThinkingFlag,
     document: {
       querySelectorAll(sel) {
-        if (sel.includes('worked-for-collapsible')) return [workedWithThinking];
+        if (sel.includes('worked-for-collapsible')) return [workedWithThinking, activeHiddenWorked];
         if (sel.includes('tool-group-collapsible')) return [toolGroupWithThinking, toolGroupWithoutThinking];
         if (sel.includes('thinking-collapsible-trigger')) return [thinkingTriggerBtn];
         return [];
@@ -548,7 +593,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     },
   };
   vm.runInNewContext(
-    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${expandBtnFnMatch[0]}\n${collapseBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
+    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${hiddenActiveFnMatch[0]}\n${expandBtnFnMatch[0]}\n${collapseBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
     expandSandbox
   );
   assert.equal(expandSandbox.__doesToolGroupContainThinking(toolGroupWithThinking), true);
@@ -581,19 +626,55 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   expandSandbox.__scanTriggerButtonsSync();
   assert.deepEqual(clickedOrder, [], 'must respect manual user collapse and not re-open');
 
-  // Simulate turning Show Thinking OFF (showThinkingFlag = false) -> must collapse expanded worked/toolGroup/thinking blocks
+  // Simulate turning Show Thinking OFF (showThinkingFlag = false) ->
+  // MUST NEVER collapse activeHiddenWorked (.hidden) or toolGroup buttons (which hold work items like Analyzed/Ran/Edited),
+  // and must only collapse thinkingTriggerBtn (plus older non-active worked-for if forceCollapseAll=true).
   showThinkingFlag = false;
   thinkingTriggerBtn.expandedState = 'true';
   clickedOrder = [];
   expandSandbox.__scanTriggerButtonsSync(true);
   assert.deepEqual(
     clickedOrder,
-    ['__reactFiber$worked1', '__reactFiber$toolGrp1', '__reactFiber$thinking1'],
-    'must automatically collapse expanded thinking/worked/tool-group blocks when Show Thinking is turned OFF'
+    ['__reactFiber$worked1', '__reactFiber$thinking1'],
+    'when Show Thinking is OFF, must collapse thinkingTriggerBtn and older worked-for, but NEVER collapse activeHiddenWorked or tool-group-collapsible'
   );
-  assert.equal(workedWithThinking.expandedState, 'false');
-  assert.equal(toolGroupWithThinking.expandedState, 'false');
-  assert.equal(thinkingTriggerBtn.expandedState, 'false');
+  assert.equal(activeHiddenWorked.expandedState, 'true', 'active hidden worked-for button must remain expanded so latest message work steps never disappear');
+  assert.equal(toolGroupWithThinking.expandedState, 'true', 'tool-group-collapsible must remain expanded so Analyzed/Ran/Edited work steps remain visible');
+  assert.equal(thinkingTriggerBtn.expandedState, 'false', 'thinking-collapsible-trigger must be collapsed when Show Thinking is OFF');
+
+  // Even if activeHiddenWorked was accidentally collapsed ('false') while Show Thinking is OFF, scanTriggerButtonsSync must immediately re-expand it
+  activeHiddenWorked.expandedState = 'false';
+  clickedOrder = [];
+  expandSandbox.__scanTriggerButtonsSync(false);
+  assert.deepEqual(clickedOrder, ['__reactFiber$workedActiveHidden']);
+  assert.equal(activeHiddenWorked.expandedState, 'true');
+
+  // 7b. Translate Thinking ON/OFF toggle (__agySetTranslateThinking): restores original English .cursor-edit when OFF
+  const restoreCursorFnMatch = mod08.match(/function restoreOriginalCursorEdits\(\)\s*\{[\s\S]*?\r?\n  \}/);
+  assert.ok(restoreCursorFnMatch, 'restoreOriginalCursorEdits must exist in 08-dom-observer.js');
+  let wrapRemoved = false;
+  const mockCursorEdit = {
+    __agyAbortCtrl: { abort() {} },
+    __agyLastSnapshot: 'cached',
+    __agyPendingSnapshot: 'pending',
+    attrs: { 'data-agy-ko-ready': '1' },
+    querySelector: (sel) => (sel.includes('.agy-ko-thought-wrap') ? { remove() { wrapRemoved = true; } } : null),
+    querySelectorAll: (sel) => (sel === '.agy-ko-thought-wrap' ? [{ remove() { wrapRemoved = true; } }] : []),
+    removeAttribute(k) {
+      delete this.attrs[k];
+    },
+  };
+  const restoreSandbox = {
+    adapterQueue: [],
+    document: {
+      querySelectorAll: (sel) => (sel === '.cursor-edit' ? [mockCursorEdit] : []),
+    },
+    clearTimeout,
+  };
+  vm.runInNewContext(`${restoreCursorFnMatch[0]}\n;globalThis.__restoreOriginalCursorEdits = restoreOriginalCursorEdits;`, restoreSandbox);
+  restoreSandbox.__restoreOriginalCursorEdits();
+  assert.equal(wrapRemoved, true, 'restoreOriginalCursorEdits must remove .agy-ko-thought-wrap');
+  assert.equal(mockCursorEdit.attrs['data-agy-ko-ready'], undefined, 'restoreOriginalCursorEdits must remove data-agy-ko-ready so original English children become visible');
 
   // 8. Translation provider persistence guard: never overwrite user-selected provider with local-llm on reinjection or showThinking/pretranslate toggles
   const mod05 = fs.readFileSync(path.join(RENDERER_DIR, '05-fiber-pretranslator.js'), 'utf8');
@@ -611,7 +692,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.12',
+      __agyKoLocalizerActive: 'v13.13',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.17
+// @version      1.2.18
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,10 +25,12 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.12';
+  const KO_LOCALIZER_VERSION = 'v13.13';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
+  const DEFAULT_TRANSLATE_THINKING_ENABLED = true;
+  const TRANSLATE_THINKING_STORAGE_KEY = 'agy-ko-thought-translate-thinking';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
   const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';
@@ -202,6 +204,22 @@
     }
   } catch (e) {}
 
+  let translateThinkingEnabled = DEFAULT_TRANSLATE_THINKING_ENABLED;
+  try {
+    const savedTranslateThinking = localStorage.getItem(TRANSLATE_THINKING_STORAGE_KEY);
+    if (savedTranslateThinking === '0' || savedTranslateThinking === 'false') {
+      translateThinkingEnabled = false;
+    } else if (savedTranslateThinking === '1' || savedTranslateThinking === 'true') {
+      translateThinkingEnabled = true;
+    } else {
+      localStorage.setItem(TRANSLATE_THINKING_STORAGE_KEY, translateThinkingEnabled ? '1' : '0');
+    }
+  } catch (e) {}
+
+  function isTranslateThinkingEnabled() {
+    return Boolean(translateThinkingEnabled);
+  }
+
   function resolveUserSettingsStoreFromDoc(doc) {
     if (!doc) return null;
     try {
@@ -286,34 +304,17 @@
     try {
       const st = resolveUserSettingsStore();
       if (!st) return;
-      const alreadyInit = (() => {
-        try {
-          return localStorage.getItem(SHOW_THINKING_INIT_STORAGE_KEY) === '1';
-        } catch (e) {
-          return false;
-        }
-      })();
-      const currentVal = st.getPrefValue('verboseConversationSteps');
-      if (alreadyInit && typeof currentVal === 'boolean' && currentVal !== showThinkingEnabled) {
-        showThinkingEnabled = currentVal;
-        try {
-          localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
-        } catch (e) {}
-        syncShowThinkingDomAttribute();
-        verboseStepsEnsured = true;
-        return;
-      }
-      const targetVal = Boolean(showThinkingEnabled);
       try {
         localStorage.setItem(SHOW_THINKING_INIT_STORAGE_KEY, '1');
       } catch (e) {}
-      if (currentVal === targetVal) {
+      const currentVal = st.getPrefValue('verboseConversationSteps');
+      if (currentVal === true) {
         verboseStepsEnsured = true;
         return;
       }
       if (typeof currentVal === 'boolean') {
         verboseStepsEnsured = true;
-        Promise.resolve(st.setPrefValue('verboseConversationSteps', targetVal)).catch(() => {
+        Promise.resolve(st.setPrefValue('verboseConversationSteps', true)).catch(() => {
           verboseStepsEnsured = false;
         });
       }
@@ -1228,8 +1229,11 @@
       '~/.gemini/config/mcp_config.json에서 커스텀 MCP 서버 추가 및 관리',
     'Custom Stdio (npx / uvx / node / python) or HTTP MCP server:':
       '커스텀 Stdio (npx / uvx / node / python) 또는 HTTP MCP 서버:',
-    '+ Add Custom MCP Server': '+ 커스텀 MCP 서버 추가',
+    '+ Add Custom MCP Server': '+ 사용자 지정 MCP 서버 추가',
+    'Add Custom MCP Server': '사용자 지정 MCP 서버 추가',
+    'Add or Edit Custom MCP Server': '사용자 지정 MCP 서버 추가 또는 수정',
     'Manage Custom Servers': '커스텀 서버 관리',
+    'Manage Servers': '서버 목록 관리',
     '{ } Edit mcp_config.json': '{ } mcp_config.json 편집',
     '⚡ Quick Auto-Add (Enter MCP Server URL, GitHub/npm Address, Command, or JSON):':
       '⚡ 빠른 자동 추가 (MCP 서버 URL, GitHub/npm 주소, 명령어 또는 JSON 입력):',
@@ -1378,6 +1382,76 @@
     'Server name is required.': '서버 이름은 필수입니다.',
     'No matching HTTP custom servers found to update authentication.':
       '인증을 업데이트할 일치하는 HTTP 커스텀 서버가 없습니다.',
+    // Antigravity Custom MCP Server Manager v1.4.0 (OAuth Portal, Settings Tab & Top Menu Bar)
+    '⚙️ Edit Custom MCP Server Settings': '⚙️ 사용자 지정 MCP 서버 설정 수정',
+    '⚙️ Edit Server Settings': '⚙️ 서버 설정 수정',
+    '⚙️ Edit Settings / Connect OAuth': '⚙️ 설정 수정 / OAuth 연결',
+    '⚙️ OAuth Settings': '⚙️ OAuth 설정',
+    '🔗 OAuth / Auth Settings': '🔗 OAuth / 인증 설정',
+    '🔗 Connect OAuth / Auth': '🔗 OAuth 연결 / 인증',
+    'OAuth & Custom MCP': 'OAuth 및 사용자 지정 MCP',
+    '↻ Refresh': '↻ 새로고침',
+    '+ Add Custom MCP Server (New Custom MCP Server)': '+ 사용자 지정 MCP 서버 추가 (새 커스텀 MCP 서버)',
+    'Register, authenticate, and manage remote OAuth MCP portals and local (Stdio) custom MCP servers.':
+      '원격 OAuth MCP 포털 및 로컬(Stdio) 사용자 지정 MCP 서버를 등록, 인증 및 관리합니다.',
+    'Custom OAuth MCP portal (https://.../mcp) or local Stdio (npx / uvx / node / python) server:':
+      '사용자 지정 OAuth MCP 포털(https://.../mcp) 또는 로컬 Stdio(npx / uvx / node / python) 서버:',
+    '⚡ Quick Auto-Add (Enter Remote OAuth MCP URL, GitHub/npm Address, Command, or JSON):':
+      '⚡ 빠른 자동 추가 (원격 OAuth MCP URL, GitHub/npm 주소, 명령어 또는 JSON 입력):',
+    'https://mcp.example.com/mcp, https://github.com/owner/repo, @playwright/mcp, or npx -y ...':
+      'https://mcp.example.com/mcp, https://github.com/owner/repo, @playwright/mcp 또는 npx -y ...',
+    'No custom MCP servers configured yet. Click "+ Add Custom MCP Server" to register a remote OAuth MCP portal or local Stdio server.':
+      '아직 설정된 사용자 지정 MCP 서버가 없습니다. "+ 사용자 지정 MCP 서버 추가"를 클릭해 원격 OAuth MCP 포털 또는 로컬 Stdio 서버를 등록하세요.',
+    '☁️ Remote OAuth MCP': '☁️ 원격 OAuth MCP',
+    'Remote Streamable HTTP / OAuth MCP portal (MCP spec 2025-03-26).':
+      '원격 Streamable HTTP / OAuth MCP 포털 (MCP 사양 2025-03-26).',
+    'Name': '이름',
+    'Custom tool name (auto-generated from Server URL if left blank)':
+      '사용자 지정 도구 이름 (비워 두면 서버 URL에서 자동 생성됨)',
+    'Description (Optional)': '설명 (선택 사항)',
+    'Briefly describe what this server does': '이 서버의 역할을 간단히 입력하세요',
+    'Connection': '연결',
+    'Server URL': '서버 URL',
+    'Local / Tunnel (Stdio)': '로컬 / 터널 (Stdio)',
+    'Authentication': '인증',
+    'No Authentication': '인증 없음',
+    'OAuth or No Authentication': 'OAuth 또는 인증 없음',
+    'Automatically detects MCP portal OAuth settings and opens the sign-in window after saving.':
+      '저장 후 MCP 포털의 OAuth 설정을 자동으로 감지하여 로그인 창을 엽니다.',
+    'Advanced OAuth Settings': '고급 OAuth 설정',
+    'Review auto-detected OAuth settings or enter custom credentials, select client configuration mode, and set default scopes.':
+      '자동 감지된 OAuth 설정을 확인하거나 직접 자격 증명을 입력하고, 클라이언트 설정 방식 및 기본 권한 범위(Scopes)를 지정합니다.',
+    'Client Configuration': '클라이언트 설정 방식',
+    'Automatic Discovery & Dynamic Client Registration': '자동 감지 및 동적 클라이언트 등록',
+    'Custom Client ID & Secret': 'Client ID 및 Secret 직접 입력',
+    'Client ID': 'Client ID',
+    'OAuth Client ID': 'OAuth Client ID',
+    'Client Secret (Optional)': 'Client Secret (선택 사항)',
+    'OAuth Client Secret (optional)': 'OAuth Client Secret (선택 사항)',
+    'Default Scopes (Optional)': '기본 권한 범위 / Scopes (선택 사항)',
+    'Auto-detected (e.g. openid profile mcp:tools)': '자동 감지됨 (예: openid profile mcp:tools)',
+    'Enter authorization code manually (optional)...': '인증 코드 직접 입력 (선택 사항)...',
+    '⚠️ Custom MCP servers carry risks. Only connect to MCP servers you trust.':
+      '⚠️ 사용자 지정 MCP 서버는 보안 위험이 있을 수 있습니다. 신뢰할 수 있는 MCP 서버만 연결하세요.',
+    'Create & Connect': '플러그인으로 생성',
+    'Close OAuth Connect Modal': 'OAuth 연결 모달 닫기',
+    'If the browser completes callback automatically, this window closes automatically — or paste the authorization code below:':
+      '브라우저에서 콜백이 자동 완료되면 이 창이 자동으로 닫히며, 수동 코드가 발급된 경우 아래에 붙여넣으세요:',
+    'Paste authorization code here (if prompted)...': '여기에 인증 코드를 붙여넣으세요 (수동 입력 시)...',
+    'Submit Code': '코드 제출',
+    'Opening OAuth sign-in page in your browser...': '브라우저에서 OAuth 로그인 페이지를 여는 중...',
+    'Browser sign-in window opened. Complete authentication in your browser (status updates automatically).':
+      '브라우저 로그인 창이 열렸습니다. 브라우저에서 인증을 완료하세요 (완료 시 상태가 자동 갱신됩니다).',
+    'OAuth authentication completed!': 'OAuth 인증이 완료되었습니다!',
+    'Please enter the authorization code from your browser.': '브라우저에서 발급된 인증 코드를 입력해 주세요.',
+    'No OAuth URL is currently reported by the server. Click below to refresh and detect OAuth settings.':
+      '현재 서버에서 보고된 OAuth URL이 없습니다. 아래 버튼을 눌러 새로고침하고 OAuth 설정을 감지하세요.',
+    'Detecting OAuth settings from server...': '서버에서 OAuth 설정을 감지하는 중...',
+    'Still no OAuth prompt from server. Check the Server URL or switch to Custom Client ID.':
+      '서버에서 OAuth 요청이 감지되지 않았습니다. 서버 URL을 확인하거나 Client ID 직접 입력을 사용해 보세요.',
+    '↻ Detect OAuth & Sign In': '↻ OAuth 감지 및 로그인',
+    'Configure Custom Client ID / Advanced OAuth': 'Client ID 직접 입력 / 고급 OAuth 설정',
+    'Add or manage custom OAuth / Stdio MCP servers': '사용자 지정 OAuth / Stdio MCP 서버 추가 및 관리',
   };
 
   function formatDurationKo(rawDur) {
@@ -1828,6 +1902,50 @@
 
     m = t.match(/^Edit settings for\s+"(.+)"$/i);
     if (m) return `"${m[1]}" 설정 수정`;
+
+    // Antigravity Custom MCP Server Manager v1.4.0 dynamic patterns
+    m = t.match(/^HTTP\s+(.+?)\s+\[🔗 OAuth Connected\]$/i);
+    if (m) return `HTTP ${m[1]}  [🔗 OAuth 연결됨]`;
+
+    m = t.match(/^HTTP\s+(.+?)\s+\[🔗 OAuth\]$/i);
+    if (m) return `HTTP ${m[1]}  [🔗 OAuth]`;
+
+    m = t.match(/^●\s*OAuth Connected\s*\((.+)\)$/i);
+    if (m) return `● OAuth 연결됨 (${m[1]})`;
+
+    m = t.match(/^🔗\s*OAuth Ready\s*—\s*Sign in to\s+"(.+)"\s+in your browser\.$/i);
+    if (m) return `🔗 OAuth 준비됨 — 브라우저에서 "${m[1]}"에 로그인하세요.`;
+
+    m = t.match(/^🔗\s*Connect\s+(.+?)\s*↗$/i);
+    if (m) return `🔗 ${m[1]} 연결 ↗`;
+
+    m = t.match(/^Connect\s+(.+?)\s*↗$/i);
+    if (m) return `${m[1]} 연결 ↗`;
+
+    m = t.match(/^Connect\s+(.+)$/i);
+    if (m) return `${m[1]} 연결`;
+
+    m = t.match(
+      /^Antigravity uses browser OAuth authentication to interact with the\s+"(.+)"\s+MCP server\.?\s*Click Connect below to sign in with your account and authorize access\.$/i
+    );
+    if (m) {
+      return `Antigravity는 브라우저 OAuth 인증을 사용하여 "${m[1]}" MCP 서버와 연동합니다. 아래 연결 버튼을 클릭해 계정으로 로그인하고 접근 권한을 승인하세요.`;
+    }
+
+    m = t.match(/^OAuth sign-in window is ready for\s+"(.+)"\.$/i);
+    if (m) return `"${m[1]}" 서버의 OAuth 로그인 창이 준비되었습니다.`;
+
+    m = t.match(/^Disconnected OAuth for\s+"(.+)"\.$/i);
+    if (m) return `"${m[1]}" 서버의 OAuth 연결을 해제했습니다.`;
+
+    m = t.match(/^Auto-filled form for\s+"(.+)"\.\s*Review OAuth \/ connection settings below\.$/i);
+    if (m) return `"${m[1]}" 서버 폼을 자동으로 채웠습니다. 아래에서 OAuth 및 연결 설정을 확인하세요.`;
+
+    m = t.match(/^Loaded preset\s+"(.+)"\.$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `"${inner}" 프리셋을 불러왔습니다.`;
+    }
 
     // Thinking / Worked duration headers
     m = t.match(/^Thought for\s+(.+)$/i);
@@ -2530,6 +2648,24 @@
               localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
             } catch (e) {}
             ensureVerboseConversationStepsEnabled();
+            if (typeof scanTriggerButtonsSync === 'function') {
+              scanTriggerButtonsSync(!showThinkingEnabled);
+            }
+            changed = true;
+          }
+        }
+        const savedTransThinking = items[TRANSLATE_THINKING_STORAGE_KEY];
+        if (savedTransThinking !== undefined) {
+          const nextTrans =
+            savedTransThinking === '1' || savedTransThinking === 'true' || savedTransThinking === true;
+          if (nextTrans !== translateThinkingEnabled) {
+            translateThinkingEnabled = nextTrans;
+            try {
+              localStorage.setItem(TRANSLATE_THINKING_STORAGE_KEY, translateThinkingEnabled ? '1' : '0');
+            } catch (e) {}
+            if (typeof applyTranslateThinkingStateToDom === 'function') {
+              applyTranslateThinkingStateToDom();
+            }
             changed = true;
           }
         }
@@ -2564,7 +2700,9 @@
   };
 
   function isPretranslateEnabled() {
-    return Boolean(pretranslateEnabled);
+    return Boolean(
+      pretranslateEnabled && (typeof isTranslateThinkingEnabled !== 'function' || isTranslateThinkingEnabled())
+    );
   }
 
   function collectHiddenThinkingStringsFromFiber() {
@@ -2690,7 +2828,7 @@
     }
     const st = resolveUserSettingsStore();
     if (st && typeof st.setPrefValue === 'function') {
-      Promise.resolve(st.setPrefValue('verboseConversationSteps', showThinkingEnabled))
+      Promise.resolve(st.setPrefValue('verboseConversationSteps', true))
         .then(() => {
           if (typeof refreshTranslatorSettingsUi === 'function') {
             refreshTranslatorSettingsUi();
@@ -2703,6 +2841,9 @@
     }
     if (typeof scanTriggerButtonsSync === 'function') {
       scanTriggerButtonsSync(!showThinkingEnabled);
+    }
+    if (showThinkingEnabled && typeof scanThoughtBlocks === 'function') {
+      scanThoughtBlocks();
     }
     if (!_fromCrossFrame) {
       try {
@@ -2727,6 +2868,55 @@
     }
     return {
       showThinkingEnabled,
+    };
+  };
+
+  window.__agyGetTranslateThinking = () => isTranslateThinkingEnabled();
+  window.__agySetTranslateThinking = (enabled, _fromCrossFrame = false) => {
+    translateThinkingEnabled = Boolean(enabled);
+    try {
+      localStorage.setItem(TRANSLATE_THINKING_STORAGE_KEY, translateThinkingEnabled ? '1' : '0');
+    } catch (e) {}
+    if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
+      try {
+        window.nativeStorage.updateItems({
+          [TRANSLATE_THINKING_STORAGE_KEY]: translateThinkingEnabled ? '1' : '0',
+        });
+      } catch (e) {}
+    }
+    if (!translateThinkingEnabled && thoughtDebounceTimer) {
+      clearTimeout(thoughtDebounceTimer);
+      thoughtDebounceTimer = null;
+    }
+    if (typeof applyTranslateThinkingStateToDom === 'function') {
+      applyTranslateThinkingStateToDom();
+    }
+    if (typeof refreshTranslatorSettingsUi === 'function') {
+      refreshTranslatorSettingsUi();
+    }
+    if (!_fromCrossFrame) {
+      try {
+        document.querySelectorAll('iframe').forEach((ifr) => {
+          try {
+            const cw = ifr.contentWindow;
+            if (cw && cw !== window && typeof cw.__agySetTranslateThinking === 'function') {
+              cw.__agySetTranslateThinking(translateThinkingEnabled, true);
+            }
+          } catch (e) {}
+        });
+      } catch (e) {}
+      try {
+        if (
+          window.parent &&
+          window.parent !== window &&
+          typeof window.parent.__agySetTranslateThinking === 'function'
+        ) {
+          window.parent.__agySetTranslateThinking(translateThinkingEnabled, true);
+        }
+      } catch (e) {}
+    }
+    return {
+      translateThinkingEnabled,
     };
   };
 
@@ -3344,7 +3534,7 @@
     const showThinkingDesc = document.createElement('span');
     showThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
     showThinkingDesc.textContent =
-      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계(Worked for / 도구 그룹 접힘 블록 포함)를 스트리밍 단계 전환 후에도 접히지 않게 자동으로 펼쳐 화면에 상시 표시합니다. (기본값: 켜짐 · 사용자가 직접 클릭해 접은 블록은 수동 상태를 유지합니다)';
+      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계를 자동으로 펼쳐 상시 표시합니다. 끄면 작업 내용(파일 분석·수정·명령 실행)은 그대로 표시하고 추론 블록만 숨깁니다. (기본값: 켜짐 · 직접 클릭해 접은 블록은 수동 상태를 유지합니다)';
     showThinkingInfo.appendChild(showThinkingTitle);
     showThinkingInfo.appendChild(showThinkingDesc);
 
@@ -3378,6 +3568,55 @@
     rowShowThinking.appendChild(showThinkingInfo);
     rowShowThinking.appendChild(showThinkingSwitchWrap);
     card.appendChild(rowShowThinking);
+
+    // Row 3: Translate Thinking (추론 과정 한국어 번역) Toggle Switch
+    const translateThinkingOn =
+      typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true;
+    const rowTranslateThinking = document.createElement('div');
+    rowTranslateThinking.className =
+      'agy-ko-row agy-ko-row-inline py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center';
+    const transThinkingInfo = document.createElement('div');
+    transThinkingInfo.className = 'agy-ko-info flex-1 flex flex-col gap-0.5';
+    const transThinkingTitle = document.createElement('span');
+    transThinkingTitle.className = 'agy-ko-title text-sm font-medium text-foreground';
+    transThinkingTitle.textContent = 'Thinking (추론 과정) 한국어 번역';
+    const transThinkingDesc = document.createElement('span');
+    transThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
+    transThinkingDesc.textContent =
+      '대화 중 에이전트의 추론 과정(Thinking 본문)을 한국어로 실시간 번역합니다. 끄면 추론 본문은 원문(영어) 그대로 표시하고 UI 한글화만 유지합니다. (기본값: 켜짐)';
+    transThinkingInfo.appendChild(transThinkingTitle);
+    transThinkingInfo.appendChild(transThinkingDesc);
+
+    const transThinkingSwitchWrap = document.createElement('div');
+    transThinkingSwitchWrap.className = 'agy-ko-switch-wrap shrink-0 flex items-center gap-2';
+    const transThinkingSwitchLbl = document.createElement('span');
+    transThinkingSwitchLbl.className = 'agy-ko-switch-lbl text-xs font-medium text-muted-foreground';
+    transThinkingSwitchLbl.textContent = translateThinkingOn ? '켜짐' : '꺼짐';
+    const transThinkingSwitchBtn = document.createElement('button');
+    transThinkingSwitchBtn.type = 'button';
+    transThinkingSwitchBtn.setAttribute('role', 'switch');
+    transThinkingSwitchBtn.setAttribute('data-testid', 'agy-ko-translate-thinking-switch');
+    transThinkingSwitchBtn.setAttribute('aria-checked', translateThinkingOn ? 'true' : 'false');
+    transThinkingSwitchBtn.className = 'agy-ko-switch';
+    const transThinkingThumb = document.createElement('span');
+    transThinkingThumb.className = 'agy-ko-switch-thumb';
+    transThinkingSwitchBtn.appendChild(transThinkingThumb);
+    transThinkingSwitchBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = !(typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true);
+      if (typeof window.__agySetTranslateThinking === 'function') {
+        window.__agySetTranslateThinking(next);
+      }
+      showSettingsFeedback(
+        `✓ Thinking(추론 과정) 한국어 번역이 '${next ? '켜짐 (ON)' : '꺼짐 (OFF — 원문 표시)'}'(으)로 설정되었습니다.`
+      );
+    };
+    transThinkingSwitchWrap.appendChild(transThinkingSwitchLbl);
+    transThinkingSwitchWrap.appendChild(transThinkingSwitchBtn);
+    rowTranslateThinking.appendChild(transThinkingInfo);
+    rowTranslateThinking.appendChild(transThinkingSwitchWrap);
+    card.appendChild(rowTranslateThinking);
 
     // Row 3: Pre-translate Toggle Switch
     const rowPre = document.createElement('div');
@@ -3837,7 +4076,67 @@
     }
   }
 
+  function restoreOriginalCursorEdits() {
+    while (adapterQueue.length > 0) {
+      const item = adapterQueue.shift();
+      try {
+        item.reject(new Error('TRANSLATE_THINKING_DISABLED'));
+      } catch (e) {}
+    }
+    document.querySelectorAll('.cursor-edit').forEach((el) => {
+      if (el.__agyAbortCtrl) {
+        try {
+          el.__agyAbortCtrl.abort();
+        } catch (e) {}
+        delete el.__agyAbortCtrl;
+      }
+      if (el.__agyStreamDebounce) {
+        clearTimeout(el.__agyStreamDebounce);
+        delete el.__agyStreamDebounce;
+      }
+      delete el.__agyLastSnapshot;
+      delete el.__agyPendingSnapshot;
+      const wrap = el.querySelector(':scope > .agy-ko-thought-wrap');
+      if (wrap) wrap.remove();
+      el.removeAttribute('data-agy-ko-ready');
+    });
+  }
+
+  function applyTranslateThinkingStateToDom() {
+    const enabled = typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true;
+    if (!enabled) {
+      restoreOriginalCursorEdits();
+    } else {
+      scanThoughtBlocks();
+    }
+  }
+
   function processCursorEdit(cursorEdit, triggerBtn) {
+    if (typeof isTranslateThinkingEnabled === 'function' && !isTranslateThinkingEnabled()) {
+      if (
+        cursorEdit.getAttribute('data-agy-ko-ready') === '1' ||
+        cursorEdit.querySelector(':scope > .agy-ko-thought-wrap')
+      ) {
+        if (cursorEdit.__agyAbortCtrl) {
+          try {
+            cursorEdit.__agyAbortCtrl.abort();
+          } catch (e) {}
+          delete cursorEdit.__agyAbortCtrl;
+        }
+        if (cursorEdit.__agyStreamDebounce) {
+          clearTimeout(cursorEdit.__agyStreamDebounce);
+          delete cursorEdit.__agyStreamDebounce;
+        }
+        const oldWrap = cursorEdit.querySelector(':scope > .agy-ko-thought-wrap');
+        if (oldWrap) oldWrap.remove();
+        cursorEdit.removeAttribute('data-agy-ko-ready');
+        delete cursorEdit.__agyLastSnapshot;
+        delete cursorEdit.__agyPendingSnapshot;
+      }
+      if (triggerBtn) processTriggerButton(triggerBtn);
+      return;
+    }
+
     const origContainer = Array.from(cursorEdit.children).find(
       (ch) => ch.tagName === 'DIV' && !ch.classList.contains('agy-ko-thought-wrap')
     );
@@ -4106,7 +4405,7 @@
         txt !== '(플러그인에서 관리됨)' &&
         txt !== '(empty command)' &&
         txt !== '(빈 명령어)' &&
-        !/\[🔑\s*(?:Auth Header Configured|인증 헤더 설정됨)\]/.test(txt)
+        !/\[(?:🔑\s*(?:Auth Header Configured|인증 헤더 설정됨)|🔗\s*OAuth(?:\s*Connected|\s*연결됨)?)\]/.test(txt)
       ) {
         return true;
       }
@@ -4346,15 +4645,43 @@
     } catch (err) {}
   }
 
+  function isHiddenActiveWorkedForButton(btn) {
+    if (!btn) return false;
+    if (btn.classList && btn.classList.contains('hidden')) return true;
+    try {
+      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+      let cur = fk ? btn[fk] : null;
+      for (let i = 0; i < 8 && cur; i++) {
+        if (cur.memoizedProps && cur.memoizedProps.triggerVisible === false) {
+          return true;
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    return false;
+  }
+
   function scanTriggerButtonsSync(forceCollapseAll = false) {
     ensureStyle();
     if (typeof syncShowThinkingDomAttribute === 'function') {
       syncShowThinkingDomAttribute();
     }
     const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
-    const workedBtns = document.querySelectorAll('button[data-testid="worked-for-collapsible"]');
-    for (const btn of workedBtns) {
+    const workedBtns = Array.from(document.querySelectorAll('button[data-testid="worked-for-collapsible"]'));
+    for (let i = 0; i < workedBtns.length; i++) {
+      const btn = workedBtns[i];
+      const isLastWorked = i === workedBtns.length - 1;
       processTriggerButton(btn);
+      if (isHiddenActiveWorkedForButton(btn)) {
+        // Active/latest turn has triggerVisible=false (.hidden on the button).
+        // If collapsed, its entire body (all tool & work steps) unmounts while the trigger button itself is hidden!
+        // Always keep it expanded regardless of showThinkingEnabled.
+        if (btn.getAttribute('aria-expanded') === 'false') {
+          btn.__agyUserCollapsed = false;
+          expandTriggerButtonIfNeeded(btn);
+        }
+        continue;
+      }
       if (autoExpand) {
         if (
           btn.getAttribute('aria-expanded') === 'false' &&
@@ -4364,30 +4691,33 @@
           expandTriggerButtonIfNeeded(btn);
         }
       } else if (
+        !isLastWorked &&
+        forceCollapseAll &&
         btn.getAttribute('aria-expanded') === 'true' &&
-        (forceCollapseAll || btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
+        (btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
         doesWorkedForButtonContainThinking(btn)
       ) {
         collapseTriggerButtonIfNeeded(btn);
+      } else if (
+        isLastWorked &&
+        btn.getAttribute('aria-expanded') === 'false' &&
+        !btn.__agyUserCollapsed &&
+        doesWorkedForButtonContainThinking(btn)
+      ) {
+        expandTriggerButtonIfNeeded(btn);
       }
     }
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
     for (const btn of toolGroupBtns) {
       processTriggerButton(btn);
-      if (autoExpand) {
-        if (
-          btn.getAttribute('aria-expanded') === 'false' &&
-          !btn.__agyUserCollapsed &&
-          doesToolGroupButtonContainThinking(btn)
-        ) {
-          expandTriggerButtonIfNeeded(btn);
-        }
-      } else if (
-        btn.getAttribute('aria-expanded') === 'true' &&
-        (forceCollapseAll || btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
+      // Tool group collapsibles contain actual work items (file analysis, edits, commands) alongside thoughts.
+      // Never auto-collapse tool groups when hiding thoughts; CSS hides thinking-collapsible-trigger & .cursor-edit directly.
+      if (
+        btn.getAttribute('aria-expanded') === 'false' &&
+        !btn.__agyUserCollapsed &&
         doesToolGroupButtonContainThinking(btn)
       ) {
-        collapseTriggerButtonIfNeeded(btn);
+        expandTriggerButtonIfNeeded(btn);
       }
     }
     const thinkingBtns = document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]');
@@ -4543,6 +4873,29 @@
         .catch(() => {});
     }
 
+    // Auto-load antigravity-mcp-manager in Remote Control host if not yet active
+    if (!window.agyMcpManager && !window.__agyKoFetchingMcpManager && typeof fetch === 'function') {
+      window.__agyKoFetchingMcpManager = true;
+      fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' + Date.now())
+        .then((r) => (r && r.ok ? r.text() : ''))
+        .then((code) => {
+          if (!code || window.agyMcpManager) return;
+          const s = document.createElement('script');
+          const nonce = document.querySelector('script[nonce]')?.nonce;
+          const p = getTrustedPolicyForRemote();
+          if (nonce) s.nonce = nonce;
+          s.text = p ? p.createScript(code) : code;
+          (document.head || document.documentElement).appendChild(s);
+          try {
+            const innerFrame = rcEl.querySelector('iframe');
+            if (innerFrame && innerFrame.contentWindow && innerFrame.contentDocument && typeof window.__agyMountMcpManager === 'function') {
+              window.__agyMountMcpManager(innerFrame.contentWindow, innerFrame.contentDocument);
+            }
+          } catch (e) {}
+        })
+        .catch(() => {});
+    }
+
     const iframe = rcEl.querySelector('iframe');
     if (!iframe) return;
 
@@ -4560,6 +4913,11 @@
       ) {
         if (cw.__agyKoLocalizerActive !== KO_LOCALIZER_VERSION) {
           window.__agyMountKoThoughtLocalizer(cw, cd);
+        }
+        if (typeof window.__agyMountMcpManager === 'function') {
+          try {
+            window.__agyMountMcpManager(cw, cd);
+          } catch (e) {}
         }
         return;
       }
@@ -4769,6 +5127,11 @@
             }
           } catch (e) {}
           window.__agyMountKoThoughtLocalizer(cw, cd);
+          if (typeof window.__agyMountMcpManager === 'function') {
+            try {
+              window.__agyMountMcpManager(cw, cd);
+            } catch (e) {}
+          }
         };
         mainScript.onerror = () => {
           delete iframe.__agyKoPromoted;
@@ -4851,6 +5214,10 @@
       if (mcpModal) localizeStaticUiInRoot(mcpModal);
       const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');
       if (mcpEditPopup) localizeStaticUiInRoot(mcpEditPopup);
+      const mcpOAuthModal = document.getElementById('agy-mcp-oauth-connect-backdrop');
+      if (mcpOAuthModal) localizeStaticUiInRoot(mcpOAuthModal);
+      const mcpSettingsPane = document.getElementById('agy-mcp-settings-pane');
+      if (mcpSettingsPane) localizeStaticUiInRoot(mcpSettingsPane);
       if (document.querySelectorAll) {
         document.querySelectorAll('[data-agy-custom-mcp-btn]').forEach((el) => localizeStaticUiInRoot(el));
       }
