@@ -879,6 +879,26 @@
       for (const k of Object.keys(nsRoot)) {
         const mod = nsRoot[k];
         if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) continue;
+        if (rcEl) {
+          try {
+            if (typeof mod.getComponent === 'function') {
+              const comp = mod.getComponent(rcEl);
+              if (isRcInstance(comp)) {
+                window.__agyRemoteControlInstance = comp;
+                return comp;
+              }
+            }
+            const getLCtx = mod['\u0275getLContext'] || mod.getLContext;
+            if (typeof getLCtx === 'function') {
+              const lCtx = getLCtx(rcEl);
+              const foundFromLCtx = searchNgContext(lCtx?.lView || lCtx);
+              if (foundFromLCtx) {
+                window.__agyRemoteControlInstance = foundFromLCtx;
+                return foundFromLCtx;
+              }
+            }
+          } catch (e) {}
+        }
         const RC = mod.RemoteControlComponent || (typeof mod.prototype?.proxyCommand === 'function' ? mod : null);
         if (RC && RC.prototype) {
           if (!RC.prototype.__agyKoProbeHooked) {
@@ -893,6 +913,8 @@
               'loadInstances',
               'isDisconnected',
               'onIframeLoad',
+              'onWindowOnline',
+              'onWindowOffline',
             ]) {
               if (typeof RC.prototype[mName] === 'function') {
                 const origFn = RC.prototype[mName];
@@ -1018,7 +1040,10 @@
           const reqBytes = TE
             ? TE.encode(reqStr)
             : Uint8Array.from(reqStr.split('').map((c) => c.charCodeAt(0) & 0xff));
-          const res = await rcInst.proxyCommand(rpcPath, reqBytes);
+          const res = await rcInst.proxyCommand(rpcPath, reqBytes, {
+            'content-type': 'application/json',
+            'x-is-streaming': 'false',
+          });
           if (res && res.payload) {
             const text = TD
               ? TD.decode(res.payload)
@@ -1285,11 +1310,12 @@
     const rcInst = getRemoteControlComponentInstance(rcEl);
     if (!rcInst) return;
 
-    const rawSrc =
-      (typeof rcInst.iframeSrc === 'function' ? String(rcInst.iframeSrc() || '') : '') ||
+    const rawCandidate =
       iframe.getAttribute('src') ||
       iframe.src ||
+      (typeof rcInst.iframeSrc === 'function' ? String(rcInst.iframeSrc() || '') : '') ||
       '';
+    const rawSrc = rawCandidate.match(/https?:\/\/[^\s"'<>)+]+/)?.[0] || rawCandidate;
     if (!rawSrc || !rawSrc.includes('?iframe=true')) return;
 
     let parsedUrl;
@@ -1483,18 +1509,33 @@
             rcInst.__agyOrigOnIframeLoad ||
             rcProto?.__agyOrigOnIframeLoad ||
             rcInst.onIframeLoad;
+          let initialConfigInFlight = false;
           const ensureInitialConfigSent = () => {
-            if (typeof origLoad === 'function' && !cw.__initialConfigReceived) {
+            if (typeof origLoad === 'function' && !cw.__initialConfigReceived && !initialConfigInFlight) {
+              initialConfigInFlight = true;
               if (savedChildPath) rcInst.initialChildPath = savedChildPath;
               try {
-                origLoad.call(rcInst);
-              } catch (e) {}
+                const res = origLoad.call(rcInst);
+                Promise.resolve(res)
+                  .catch(() => {})
+                  .finally(() => {
+                    setTimeout(() => {
+                      initialConfigInFlight = false;
+                      if (!cw.__initialConfigReceived && typeof origLoad === 'function') {
+                        try {
+                          origLoad.call(rcInst);
+                        } catch (e) {}
+                      }
+                    }, 600);
+                  });
+              } catch (e) {
+                initialConfigInFlight = false;
+              }
             }
           };
           ensureInitialConfigSent();
           [120, 400, 1000].forEach((delay) => {
             setTimeout(() => {
-              ensureInitialConfigSent();
               if (savedChildPath && typeof rcInst.navigateIframeToChildPath === 'function') {
                 try {
                   rcInst.navigateIframeToChildPath(savedChildPath);

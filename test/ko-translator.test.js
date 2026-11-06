@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.16';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.17';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -738,7 +738,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.16',
+      __agyKoLocalizerActive: 'v13.17',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -938,9 +938,19 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     rcDictSandbox.__translateStatic('Configure what the agent can do in local and remote conversations.'),
     '로컬 및 원격 대화에서 에이전트가 수행할 수 있는 작업 권한을 설정합니다.'
   );
+  assert.equal(rcDictSandbox.__translateStatic('Learn more.'), '자세히 알아보기.');
+  assert.equal(rcDictSandbox.__translateStatic('Advanced >'), '고급 >');
+  assert.equal(
+    rcDictSandbox.__translateStatic('Ask anything, @ to mention, / for actions'),
+    '무엇이든 물어보세요 (@로 멘션, /로 작업 실행)'
+  );
   assert.ok(
     mod08.includes('buildInitialIframeHistoryUrl') && mod08.includes('navigateIframeToChildPath'),
     'D-0007: bridgeRemoteControlIframe must preserve savedChildPath query params (?settingsOpen=true&settingsScreen=General) during same-origin promotion'
+  );
+  assert.ok(
+    mod08.includes('\\u0275getLContext') && mod08.includes('initialConfigInFlight'),
+    'D-0007: getRemoteControlComponentInstance must resolve numeric Angular 19 __ngContext__ via ɵgetLContext and guard onIframeLoad against duplicate teardownProxyPort()'
   );
   assert.ok(
     mod08.includes('decodeBase64Utf8') && mod08.includes('/exa.language_server_pb.LanguageServerService/ReadFile'),

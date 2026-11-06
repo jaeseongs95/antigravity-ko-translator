@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.21
+// @version      1.2.22
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.16';
+  const KO_LOCALIZER_VERSION = 'v13.17';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -690,10 +690,22 @@
       '에이전트 실행, 대기열 메시지 전송 방식 및 권한을 설정합니다.',
     'Configure what the agent can do in local and remote conversations. ':
       '로컬 및 원격 대화에서 에이전트가 수행할 수 있는 작업 권한을 설정합니다. ',
+    'Learn more.': '자세히 알아보기.',
+    'Advanced >': '고급 >',
     'This Computer': '이 컴퓨터',
     'Remote': '원격',
     'Remote Conversations': '원격 대화',
     'Controls permissions for remote conversations.': '원격 대화에 대한 권한을 제어합니다.',
+    'Configure the browser subagent. It requires Google Chrome to be installed. The browser subagent can be invoked by typing /browser in the conversation input box.':
+      '브라우저 서브에이전트를 설정합니다. 사용하려면 Google Chrome 설치가 필요합니다. 대화 입력창에 /browser를 입력해 브라우저 서브에이전트를 호출할 수 있습니다.',
+    'Ask anything, @ to mention, / for actions': '무엇이든 물어보세요 (@로 멘션, /로 작업 실행)',
+    'Ask anything, @ to mention': '무엇이든 물어보세요 (@로 멘션)',
+    'Message subagent, @ to mention, / for actions': '서브에이전트에게 메시지 보내기 (@로 멘션, /로 작업 실행)',
+    'Message subagent, @ to mention': '서브에이전트에게 메시지 보내기 (@로 멘션)',
+    'Listening. Ask anything.': '듣고 있습니다. 무엇이든 물어보세요.',
+    'Active Skills': '활성 스킬',
+    'Loading skills…': '스킬 불러오는 중…',
+    'No skills available': '사용 가능한 스킬 없음',
     'Local Permissions': '로컬 권한',
     'Permission Details': '권한 세부 정보',
     'Your agent’s ability to execute commands is also controlled by enterprise security policies.':
@@ -5165,6 +5177,26 @@
       for (const k of Object.keys(nsRoot)) {
         const mod = nsRoot[k];
         if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) continue;
+        if (rcEl) {
+          try {
+            if (typeof mod.getComponent === 'function') {
+              const comp = mod.getComponent(rcEl);
+              if (isRcInstance(comp)) {
+                window.__agyRemoteControlInstance = comp;
+                return comp;
+              }
+            }
+            const getLCtx = mod['\u0275getLContext'] || mod.getLContext;
+            if (typeof getLCtx === 'function') {
+              const lCtx = getLCtx(rcEl);
+              const foundFromLCtx = searchNgContext(lCtx?.lView || lCtx);
+              if (foundFromLCtx) {
+                window.__agyRemoteControlInstance = foundFromLCtx;
+                return foundFromLCtx;
+              }
+            }
+          } catch (e) {}
+        }
         const RC = mod.RemoteControlComponent || (typeof mod.prototype?.proxyCommand === 'function' ? mod : null);
         if (RC && RC.prototype) {
           if (!RC.prototype.__agyKoProbeHooked) {
@@ -5179,6 +5211,8 @@
               'loadInstances',
               'isDisconnected',
               'onIframeLoad',
+              'onWindowOnline',
+              'onWindowOffline',
             ]) {
               if (typeof RC.prototype[mName] === 'function') {
                 const origFn = RC.prototype[mName];
@@ -5304,7 +5338,10 @@
           const reqBytes = TE
             ? TE.encode(reqStr)
             : Uint8Array.from(reqStr.split('').map((c) => c.charCodeAt(0) & 0xff));
-          const res = await rcInst.proxyCommand(rpcPath, reqBytes);
+          const res = await rcInst.proxyCommand(rpcPath, reqBytes, {
+            'content-type': 'application/json',
+            'x-is-streaming': 'false',
+          });
           if (res && res.payload) {
             const text = TD
               ? TD.decode(res.payload)
@@ -5571,11 +5608,12 @@
     const rcInst = getRemoteControlComponentInstance(rcEl);
     if (!rcInst) return;
 
-    const rawSrc =
-      (typeof rcInst.iframeSrc === 'function' ? String(rcInst.iframeSrc() || '') : '') ||
+    const rawCandidate =
       iframe.getAttribute('src') ||
       iframe.src ||
+      (typeof rcInst.iframeSrc === 'function' ? String(rcInst.iframeSrc() || '') : '') ||
       '';
+    const rawSrc = rawCandidate.match(/https?:\/\/[^\s"'<>)+]+/)?.[0] || rawCandidate;
     if (!rawSrc || !rawSrc.includes('?iframe=true')) return;
 
     let parsedUrl;
@@ -5769,18 +5807,33 @@
             rcInst.__agyOrigOnIframeLoad ||
             rcProto?.__agyOrigOnIframeLoad ||
             rcInst.onIframeLoad;
+          let initialConfigInFlight = false;
           const ensureInitialConfigSent = () => {
-            if (typeof origLoad === 'function' && !cw.__initialConfigReceived) {
+            if (typeof origLoad === 'function' && !cw.__initialConfigReceived && !initialConfigInFlight) {
+              initialConfigInFlight = true;
               if (savedChildPath) rcInst.initialChildPath = savedChildPath;
               try {
-                origLoad.call(rcInst);
-              } catch (e) {}
+                const res = origLoad.call(rcInst);
+                Promise.resolve(res)
+                  .catch(() => {})
+                  .finally(() => {
+                    setTimeout(() => {
+                      initialConfigInFlight = false;
+                      if (!cw.__initialConfigReceived && typeof origLoad === 'function') {
+                        try {
+                          origLoad.call(rcInst);
+                        } catch (e) {}
+                      }
+                    }, 600);
+                  });
+              } catch (e) {
+                initialConfigInFlight = false;
+              }
             }
           };
           ensureInitialConfigSent();
           [120, 400, 1000].forEach((delay) => {
             setTimeout(() => {
-              ensureInitialConfigSent();
               if (savedChildPath && typeof rcInst.navigateIframeToChildPath === 'function') {
                 try {
                   rcInst.navigateIframeToChildPath(savedChildPath);

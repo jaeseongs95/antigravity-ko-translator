@@ -34,7 +34,7 @@ Antigravity 2.0 네이티브 앱에서 영어로 스트리밍되는 **Thinking(�
 ## 모듈 구조 (SOLID Architecture)
 
 - **렌더러 계층 (`scripts/renderer/`)**:
-  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.16`), `remove-conversation-history: false`(`대화 기록` 메뉴) 및 `verboseConversationSteps: true`(`대화 단계 표시: 상세히`, 작업 및 추론 단계 마운트 보장) 자동 활성화, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
+  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.17`), `remove-conversation-history: false`(`대화 기록` 메뉴) 및 `verboseConversationSteps: true`(`대화 단계 표시: 상세히`, 작업 및 추론 단계 마운트 보장) 자동 활성화, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
   - `02-static-ui-dict.js`: 0ms 정적 UI 한국어 사전(`STATIC_UI_MAP`) 및 동기 패턴 매처
   - `03-text-tokenizer.js`: 코드(`⟦C0⟧`)·식별자/인용구(`⟦T0⟧`) 보호 토크나이저, 조사 교정, 마크다운 세그먼트 추출
   - `04-translation-adapters.js`: Port & Adapter 번역 엔진(`local-llm`, `google-translate`, 커스텀 어댑터) 및 동시성/취소 큐

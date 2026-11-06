@@ -265,10 +265,22 @@
       '에이전트 실행, 대기열 메시지 전송 방식 및 권한을 설정합니다.',
     'Configure what the agent can do in local and remote conversations. ':
       '로컬 및 원격 대화에서 에이전트가 수행할 수 있는 작업 권한을 설정합니다. ',
+    'Learn more.': '자세히 알아보기.',
+    'Advanced >': '고급 >',
     'This Computer': '이 컴퓨터',
     'Remote': '원격',
     'Remote Conversations': '원격 대화',
     'Controls permissions for remote conversations.': '원격 대화에 대한 권한을 제어합니다.',
+    'Configure the browser subagent. It requires Google Chrome to be installed. The browser subagent can be invoked by typing /browser in the conversation input box.':
+      '브라우저 서브에이전트를 설정합니다. 사용하려면 Google Chrome 설치가 필요합니다. 대화 입력창에 /browser를 입력해 브라우저 서브에이전트를 호출할 수 있습니다.',
+    'Ask anything, @ to mention, / for actions': '무엇이든 물어보세요 (@로 멘션, /로 작업 실행)',
+    'Ask anything, @ to mention': '무엇이든 물어보세요 (@로 멘션)',
+    'Message subagent, @ to mention, / for actions': '서브에이전트에게 메시지 보내기 (@로 멘션, /로 작업 실행)',
+    'Message subagent, @ to mention': '서브에이전트에게 메시지 보내기 (@로 멘션)',
+    'Listening. Ask anything.': '듣고 있습니다. 무엇이든 물어보세요.',
+    'Active Skills': '활성 스킬',
+    'Loading skills…': '스킬 불러오는 중…',
+    'No skills available': '사용 가능한 스킬 없음',
     'Local Permissions': '로컬 권한',
     'Permission Details': '권한 세부 정보',
     'Your agent’s ability to execute commands is also controlled by enterprise security policies.':

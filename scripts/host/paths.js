@@ -27,6 +27,13 @@ const LEGACY_PLUGIN_KO_SCRIPT_PATH = path.join(
   'scripts',
   'ko_thought_autoinject.js'
 );
+const LEGACY_SKILL_KO_SCRIPT_PATH = path.join(
+  PLUGIN_ROOT,
+  'skills',
+  'ko-thought-translator',
+  'scripts',
+  'ko_thought_inject.js'
+);
 const BUNDLED_ENSURE_STATUSBAR_PATCH_PATH = path.join(__dirname, 'ensure_statusbar_patch.js');
 
 const STATUSBAR_AUTOINJECT_PATH = path.join(AGY_DIR, 'statusbar_autoinject.js');
@@ -65,6 +72,7 @@ module.exports = {
   KO_SCRIPT_PATH,
   DIST_KO_SCRIPT_PATH,
   LEGACY_PLUGIN_KO_SCRIPT_PATH,
+  LEGACY_SKILL_KO_SCRIPT_PATH,
   BUNDLED_ENSURE_STATUSBAR_PATCH_PATH,
   STATUSBAR_AUTOINJECT_PATH,
   ENSURE_STATUSBAR_PATCH_PATH,
