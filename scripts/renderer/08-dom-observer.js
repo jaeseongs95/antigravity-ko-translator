@@ -1203,9 +1203,10 @@
     if (document.body) {
       localizeStaticUiInRoot(document.body);
       ensureNativeSettingsModalIntegration();
+      ensureThinkingDisplayMenuIntegration();
       if (
         document.getElementById('agy-ko-translator-modal') &&
-        !document.querySelector('[data-testid="agy-ko-show-thinking-switch"]') &&
+        !document.querySelector('[data-testid="agy-ko-translate-thinking-switch"]') &&
         typeof refreshTranslatorSettingsUi === 'function'
       ) {
         refreshTranslatorSettingsUi();
@@ -1228,6 +1229,7 @@
     inFastScan = true;
     try {
       scanTriggerButtonsSync();
+      ensureThinkingDisplayMenuIntegration();
       const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');
       if (mcpModal) localizeStaticUiInRoot(mcpModal);
       const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');
@@ -1266,13 +1268,14 @@
         if (document.body) {
           localizeStaticUiInRoot(document.body);
           ensureNativeSettingsModalIntegration();
-      if (
-        document.getElementById('agy-ko-translator-modal') &&
-        !document.querySelector('[data-testid="agy-ko-show-thinking-switch"]') &&
-        typeof refreshTranslatorSettingsUi === 'function'
-      ) {
-        refreshTranslatorSettingsUi();
-      }
+          ensureThinkingDisplayMenuIntegration();
+          if (
+            document.getElementById('agy-ko-translator-modal') &&
+            !document.querySelector('[data-testid="agy-ko-translate-thinking-switch"]') &&
+            typeof refreshTranslatorSettingsUi === 'function'
+          ) {
+            refreshTranslatorSettingsUi();
+          }
         }
         runFastThoughtAndTriggerScan();
       }, 16);
@@ -1399,7 +1402,7 @@
     });
     document
       .querySelectorAll(
-        '#agy-ko-settings-card, #agy-ko-settings-pane, button[data-testid="settings-nav-item-KoTranslator"]'
+        '#agy-ko-settings-card, #agy-ko-settings-pane, #agy-ko-model-menu-thinking-row, #agy-ko-appearance-thinking-row, button[data-testid="settings-nav-item-KoTranslator"]'
       )
       .forEach((el) => {
         if (el.getAttribute('data-testid') === 'settings-nav-item-KoTranslator' && el.parentElement) {

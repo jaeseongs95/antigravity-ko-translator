@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.18
+// @version      1.2.19
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.13';
+  const KO_LOCALIZER_VERSION = 'v13.14';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -3076,6 +3076,51 @@
     .agy-ko-switch[aria-checked="true"] .agy-ko-switch-thumb {
       transform: translateX(24px);
     }
+    .agy-ko-switch.is-compact {
+      height: 18px;
+      width: 34px;
+    }
+    .agy-ko-switch.is-compact .agy-ko-switch-thumb {
+      width: 12px;
+      height: 12px;
+      transform: translateX(3px);
+    }
+    .agy-ko-switch.is-compact[aria-checked="true"] .agy-ko-switch-thumb {
+      transform: translateX(19px);
+    }
+    .agy-ko-model-menu-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 10px;
+      border-top: 1px solid rgba(148, 163, 184, 0.16);
+      font-size: 12px;
+      color: inherit;
+      cursor: pointer;
+      user-select: none;
+      transition: background-color 0.15s ease;
+    }
+    .agy-ko-model-menu-row:hover {
+      background: rgba(148, 163, 184, 0.08);
+    }
+    .agy-ko-model-menu-left {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      min-width: 0;
+    }
+    .agy-ko-model-menu-title {
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.3;
+      color: inherit;
+    }
+    .agy-ko-model-menu-sub {
+      font-size: 10.5px;
+      line-height: 1.25;
+      opacity: 0.65;
+    }
     ga-remote-control {
       display: block;
       width: 100%;
@@ -3521,55 +3566,7 @@
     rowProvider.appendChild(llmStatusRow);
     card.appendChild(rowProvider);
 
-    // Row 2: Show Thinking (verboseConversationSteps) Toggle Switch
-    const thinkingVisible = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
-    const rowShowThinking = document.createElement('div');
-    rowShowThinking.className =
-      'agy-ko-row agy-ko-row-inline py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center';
-    const showThinkingInfo = document.createElement('div');
-    showThinkingInfo.className = 'agy-ko-info flex-1 flex flex-col gap-0.5';
-    const showThinkingTitle = document.createElement('span');
-    showThinkingTitle.className = 'agy-ko-title text-sm font-medium text-foreground';
-    showThinkingTitle.textContent = 'Thinking (추론 과정) 표시';
-    const showThinkingDesc = document.createElement('span');
-    showThinkingDesc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
-    showThinkingDesc.textContent =
-      '대화 중 에이전트의 추론 과정(Thinking 블록)과 중간 작업 단계를 자동으로 펼쳐 상시 표시합니다. 끄면 작업 내용(파일 분석·수정·명령 실행)은 그대로 표시하고 추론 블록만 숨깁니다. (기본값: 켜짐 · 직접 클릭해 접은 블록은 수동 상태를 유지합니다)';
-    showThinkingInfo.appendChild(showThinkingTitle);
-    showThinkingInfo.appendChild(showThinkingDesc);
-
-    const showThinkingSwitchWrap = document.createElement('div');
-    showThinkingSwitchWrap.className = 'agy-ko-switch-wrap shrink-0 flex items-center gap-2';
-    const showThinkingSwitchLbl = document.createElement('span');
-    showThinkingSwitchLbl.className = 'agy-ko-switch-lbl text-xs font-medium text-muted-foreground';
-    showThinkingSwitchLbl.textContent = thinkingVisible ? '켜짐' : '꺼짐';
-    const showThinkingSwitchBtn = document.createElement('button');
-    showThinkingSwitchBtn.type = 'button';
-    showThinkingSwitchBtn.setAttribute('role', 'switch');
-    showThinkingSwitchBtn.setAttribute('data-testid', 'agy-ko-show-thinking-switch');
-    showThinkingSwitchBtn.setAttribute('aria-checked', thinkingVisible ? 'true' : 'false');
-    showThinkingSwitchBtn.className = 'agy-ko-switch';
-    const showThinkingThumb = document.createElement('span');
-    showThinkingThumb.className = 'agy-ko-switch-thumb';
-    showThinkingSwitchBtn.appendChild(showThinkingThumb);
-    showThinkingSwitchBtn.onclick = (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const next = !(typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true);
-      if (typeof window.__agySetShowThinking === 'function') {
-        window.__agySetShowThinking(next);
-      }
-      showSettingsFeedback(
-        `✓ Thinking(추론 과정) 표시가 '${next ? '켜짐 (ON)' : '꺼짐 (OFF)'}'(으)로 설정되었습니다.`
-      );
-    };
-    showThinkingSwitchWrap.appendChild(showThinkingSwitchLbl);
-    showThinkingSwitchWrap.appendChild(showThinkingSwitchBtn);
-    rowShowThinking.appendChild(showThinkingInfo);
-    rowShowThinking.appendChild(showThinkingSwitchWrap);
-    card.appendChild(rowShowThinking);
-
-    // Row 3: Translate Thinking (추론 과정 한국어 번역) Toggle Switch
+    // Row 2: Translate Thinking (추론 과정 한국어 번역) Toggle Switch
     const translateThinkingOn =
       typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true;
     const rowTranslateThinking = document.createElement('div');
@@ -3804,6 +3801,183 @@
           }
         });
     }
+
+    // 3. Inject 'Thinking (추론 과정) 표시' row into Native Settings -> Appearance (모양 및 테마) -> Chat section
+    ensureAppearanceChatThinkingIntegration(modal);
+  }
+
+  function syncThinkingDisplayMenuControls() {
+    const thinkingVisible = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
+    if (document.querySelectorAll) {
+      document.querySelectorAll('[data-testid="agy-ko-show-thinking-switch"]').forEach((btn) => {
+        btn.setAttribute('aria-checked', thinkingVisible ? 'true' : 'false');
+      });
+      document.querySelectorAll('[data-agy-show-thinking-label="1"]').forEach((lbl) => {
+        lbl.textContent = thinkingVisible ? '켜짐' : '꺼짐';
+      });
+    }
+  }
+
+  function buildThinkingToggleRowElement(isCompactMenu = false) {
+    const thinkingVisible = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
+    const toggleHandler = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const next = !(typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true);
+      if (typeof window.__agySetShowThinking === 'function') {
+        window.__agySetShowThinking(next);
+      }
+      syncThinkingDisplayMenuControls();
+    };
+
+    if (isCompactMenu) {
+      const row = document.createElement('div');
+      row.id = 'agy-ko-model-menu-thinking-row';
+      row.className = 'agy-ko-model-menu-row agy-ko-settings-root';
+      row.setAttribute('data-testid', 'agy-ko-model-menu-show-thinking');
+
+      const left = document.createElement('div');
+      left.className = 'agy-ko-model-menu-left';
+      const title = document.createElement('span');
+      title.className = 'agy-ko-model-menu-title';
+      title.textContent = 'Thinking (추론 과정) 표시';
+      const sub = document.createElement('span');
+      sub.className = 'agy-ko-model-menu-sub';
+      sub.textContent = '작업 내역은 유지하고 추론 블록만 표시/숨김';
+      left.appendChild(title);
+      left.appendChild(sub);
+
+      const switchWrap = document.createElement('div');
+      switchWrap.className = 'agy-ko-switch-wrap';
+      const lbl = document.createElement('span');
+      lbl.className = 'agy-ko-switch-lbl';
+      lbl.setAttribute('data-agy-show-thinking-label', '1');
+      lbl.textContent = thinkingVisible ? '켜짐' : '꺼짐';
+      const switchBtn = document.createElement('button');
+      switchBtn.type = 'button';
+      switchBtn.setAttribute('role', 'switch');
+      switchBtn.setAttribute('data-testid', 'agy-ko-show-thinking-switch');
+      switchBtn.setAttribute('aria-checked', thinkingVisible ? 'true' : 'false');
+      switchBtn.className = 'agy-ko-switch is-compact';
+      const thumb = document.createElement('span');
+      thumb.className = 'agy-ko-switch-thumb';
+      switchBtn.appendChild(thumb);
+      switchWrap.appendChild(lbl);
+      switchWrap.appendChild(switchBtn);
+
+      row.appendChild(left);
+      row.appendChild(switchWrap);
+      row.onclick = toggleHandler;
+      return row;
+    }
+
+    const row = document.createElement('div');
+    row.id = 'agy-ko-appearance-thinking-row';
+    row.setAttribute('data-testid', 'agy-ko-appearance-show-thinking');
+    row.className =
+      'agy-ko-row agy-ko-row-inline py-3 px-3.5 w-full bg-transparent flex justify-between gap-4 items-center agy-ko-settings-root';
+
+    const info = document.createElement('div');
+    info.className = 'agy-ko-info flex-1 flex flex-col gap-0.5';
+    const title = document.createElement('span');
+    title.className = 'agy-ko-title text-sm font-medium text-foreground';
+    title.textContent = 'Thinking (추론 과정) 표시';
+    const desc = document.createElement('span');
+    desc.className = 'agy-ko-desc text-xs text-muted-foreground leading-relaxed';
+    desc.textContent =
+      '대화 중 에이전트의 추론 과정(Thinking 블록)을 자동으로 펼쳐 상시 표시합니다. 끄면 파일 분석·수정·명령 실행 등 작업 내역은 그대로 유지하고 추론 블록만 숨깁니다.';
+    info.appendChild(title);
+    info.appendChild(desc);
+
+    const switchWrap = document.createElement('div');
+    switchWrap.className = 'agy-ko-switch-wrap shrink-0 flex items-center gap-2';
+    const lbl = document.createElement('span');
+    lbl.className = 'agy-ko-switch-lbl text-xs font-medium text-muted-foreground';
+    lbl.setAttribute('data-agy-show-thinking-label', '1');
+    lbl.textContent = thinkingVisible ? '켜짐' : '꺼짐';
+    const switchBtn = document.createElement('button');
+    switchBtn.type = 'button';
+    switchBtn.setAttribute('role', 'switch');
+    switchBtn.setAttribute('data-testid', 'agy-ko-show-thinking-switch');
+    switchBtn.setAttribute('aria-checked', thinkingVisible ? 'true' : 'false');
+    switchBtn.className = 'agy-ko-switch';
+    const thumb = document.createElement('span');
+    thumb.className = 'agy-ko-switch-thumb';
+    switchBtn.appendChild(thumb);
+    switchBtn.onclick = toggleHandler;
+    switchWrap.appendChild(lbl);
+    switchWrap.appendChild(switchBtn);
+
+    row.appendChild(info);
+    row.appendChild(switchWrap);
+    return row;
+  }
+
+  function ensureAppearanceChatThinkingIntegration(modal) {
+    if (!modal || !modal.querySelectorAll) return;
+    const candidateRows = modal.querySelectorAll('.divide-y > div, .border.border-border > div');
+    for (const r of candidateRows) {
+      if (r.id === 'agy-ko-appearance-thinking-row') continue;
+      const txt = (r.textContent || '').trim();
+      if (
+        txt.includes('대화 단계 표시') ||
+        txt.includes('Conversation Steps') ||
+        txt.includes('세부 작업 단계의 기본 표시 수준') ||
+        txt.includes('default visibility of detailed steps')
+      ) {
+        const card = r.parentElement;
+        if (card && !card.querySelector('#agy-ko-appearance-thinking-row')) {
+          const thinkingRow = buildThinkingToggleRowElement(false);
+          card.appendChild(thinkingRow);
+        }
+        r.querySelectorAll('button').forEach((btn) => {
+          if (btn.__agyKoConvStepsBound) return;
+          btn.__agyKoConvStepsBound = true;
+          btn.addEventListener(
+            'click',
+            () => {
+              const bTxt = (btn.textContent || '').trim();
+              if (bTxt === '기본값' || bTxt === 'Default') {
+                if (typeof window.__agySetShowThinking === 'function') {
+                  window.__agySetShowThinking(false);
+                }
+              } else if (bTxt === '상세히' || bTxt === 'Verbose') {
+                if (typeof window.__agySetShowThinking === 'function') {
+                  window.__agySetShowThinking(true);
+                }
+              }
+              syncThinkingDisplayMenuControls();
+            },
+            true
+          );
+        });
+        break;
+      }
+    }
+  }
+
+  function ensureThinkingDisplayMenuIntegration() {
+    ensureStyle();
+    if (!document.querySelectorAll) return;
+    const panels = document.querySelectorAll('[data-testid="model-selector-panel"]');
+    panels.forEach((panel) => {
+      if (!panel.querySelector('#agy-ko-model-menu-thinking-row')) {
+        const row = buildThinkingToggleRowElement(true);
+        const footerEl = Array.from(panel.children || []).find(
+          (ch) => ch !== row && ch.classList && ch.classList.contains('border-t')
+        );
+        if (footerEl && typeof panel.insertBefore === 'function') {
+          panel.insertBefore(row, footerEl);
+        } else {
+          panel.appendChild(row);
+        }
+      }
+    });
+    const modal = document.querySelector('.settings-modal-container');
+    if (modal) {
+      ensureAppearanceChatThinkingIntegration(modal);
+    }
+    syncThinkingDisplayMenuControls();
   }
 
   let activeModalEscHandler = null;
@@ -3891,6 +4065,7 @@
     }
     const modalBody = document.getElementById('agy-ko-translator-modal-body');
     if (modalBody) renderTranslatorSettingsContent(modalBody, false, true);
+    syncThinkingDisplayMenuControls();
     if (typeof refreshStatusbarTranslatorAdapter === 'function') {
       refreshStatusbarTranslatorAdapter();
     }
@@ -5185,9 +5360,10 @@
     if (document.body) {
       localizeStaticUiInRoot(document.body);
       ensureNativeSettingsModalIntegration();
+      ensureThinkingDisplayMenuIntegration();
       if (
         document.getElementById('agy-ko-translator-modal') &&
-        !document.querySelector('[data-testid="agy-ko-show-thinking-switch"]') &&
+        !document.querySelector('[data-testid="agy-ko-translate-thinking-switch"]') &&
         typeof refreshTranslatorSettingsUi === 'function'
       ) {
         refreshTranslatorSettingsUi();
@@ -5210,6 +5386,7 @@
     inFastScan = true;
     try {
       scanTriggerButtonsSync();
+      ensureThinkingDisplayMenuIntegration();
       const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');
       if (mcpModal) localizeStaticUiInRoot(mcpModal);
       const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');
@@ -5248,13 +5425,14 @@
         if (document.body) {
           localizeStaticUiInRoot(document.body);
           ensureNativeSettingsModalIntegration();
-      if (
-        document.getElementById('agy-ko-translator-modal') &&
-        !document.querySelector('[data-testid="agy-ko-show-thinking-switch"]') &&
-        typeof refreshTranslatorSettingsUi === 'function'
-      ) {
-        refreshTranslatorSettingsUi();
-      }
+          ensureThinkingDisplayMenuIntegration();
+          if (
+            document.getElementById('agy-ko-translator-modal') &&
+            !document.querySelector('[data-testid="agy-ko-translate-thinking-switch"]') &&
+            typeof refreshTranslatorSettingsUi === 'function'
+          ) {
+            refreshTranslatorSettingsUi();
+          }
         }
         runFastThoughtAndTriggerScan();
       }, 16);
@@ -5381,7 +5559,7 @@
     });
     document
       .querySelectorAll(
-        '#agy-ko-settings-card, #agy-ko-settings-pane, button[data-testid="settings-nav-item-KoTranslator"]'
+        '#agy-ko-settings-card, #agy-ko-settings-pane, #agy-ko-model-menu-thinking-row, #agy-ko-appearance-thinking-row, button[data-testid="settings-nav-item-KoTranslator"]'
       )
       .forEach((el) => {
         if (el.getAttribute('data-testid') === 'settings-nav-item-KoTranslator' && el.parentElement) {

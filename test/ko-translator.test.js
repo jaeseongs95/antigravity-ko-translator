@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.13';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.14';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -367,6 +367,15 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(mod08.includes("const mcpOAuthModal = document.getElementById('agy-mcp-oauth-connect-backdrop');"), 'must localize #agy-mcp-oauth-connect-backdrop synchronously in fast scan');
   assert.ok(mod08.includes('mcp_manager_autoinject.js'), 'must auto-load mcp_manager_autoinject.js on Remote Control web when bookmarklet runs');
   const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
+  const renderTranslatorFnMatch = mod06.match(
+    /function renderTranslatorSettingsContent\(container, isFullPage = false, isModal = false\)\s*\{[\s\S]*?\r?\n  \}/
+  );
+  assert.ok(renderTranslatorFnMatch, 'renderTranslatorSettingsContent must exist in 06-settings-modal-ui.js');
+  assert.ok(
+    !renderTranslatorFnMatch[0].includes('agy-ko-show-thinking-switch') &&
+      !renderTranslatorFnMatch[0].includes('Thinking (추론 과정) 표시'),
+    'renderTranslatorSettingsContent (#agy-ko-translator-modal & #agy-ko-settings-pane) must NOT include Thinking (추론 과정) 표시 toggle (separated into dedicated menus)'
+  );
   assert.ok(mod06.includes('agy-ko-translate-thinking-switch'), 'modal must include Thinking Korean translation ON/OFF toggle switch');
   assert.ok(mod06.includes('window.__agySetTranslateThinking'), 'modal Thinking translation toggle must invoke window.__agySetTranslateThinking');
   assert.ok(mod06.includes('@media (max-width: 640px)'), 'must include mobile responsive rules for translator modal');
@@ -374,8 +383,11 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(mod06.includes('.agy-ko-row.agy-ko-row-inline') && mod06.includes('.agy-ko-row.agy-ko-row-top'), 'must override .agy-ko-row column direction with flex-direction: row on inline/top rows');
   assert.ok(!mod06.includes('flex: 1 1 200px'), 'must not use flex-basis: 200px on .agy-ko-info (causes 200px vertical gap if parent is column)');
   assert.ok(mod06.includes('renderTranslatorSettingsContent(body, false, true)'), 'modal must pass isModal=true to omit duplicate section heading');
-  assert.ok(mod06.includes('agy-ko-show-thinking-switch'), 'modal must include Thinking display ON/OFF toggle switch');
-  assert.ok(mod06.includes('window.__agySetShowThinking'), 'modal Thinking toggle must invoke window.__agySetShowThinking');
+  assert.ok(mod06.includes('ensureThinkingDisplayMenuIntegration'), 'must provide ensureThinkingDisplayMenuIntegration for dedicated Model Selector & Appearance > Chat menus');
+  assert.ok(mod06.includes('agy-ko-model-menu-show-thinking'), 'must inject Thinking display toggle into model-selector-panel');
+  assert.ok(mod06.includes('agy-ko-appearance-show-thinking'), 'must inject Thinking display toggle into Appearance > Chat settings card');
+  assert.ok(mod06.includes('agy-ko-show-thinking-switch'), 'dedicated menus must include Thinking display ON/OFF toggle switch');
+  assert.ok(mod06.includes('window.__agySetShowThinking'), 'dedicated Thinking toggle must invoke window.__agySetShowThinking');
   assert.ok(!mod06.includes("insertBefore(cardEl, permEl)"), 'must not inject #agy-ko-settings-card into General tab');
   assert.ok(mod06.includes('height: 100dvh !important'), 'must enforce 100dvh on ga-remote-control .app-container');
 
@@ -692,7 +704,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.13',
+      __agyKoLocalizerActive: 'v13.14',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -722,4 +734,130 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     [],
     'prepareBootstrapLifecycle must not overwrite explicit saved provider in localStorage when bundle default changes'
   );
+
+  // 9. Dedicated Thinking display menu integration: Model Selector dropdown footer & Native Settings Appearance > Chat card
+  let menuShowThinkingState = true;
+  const createdElements = [];
+  const makeDomEl = (tag) => {
+    const el = {
+      tagName: tag.toUpperCase(),
+      id: '',
+      className: '',
+      textContent: '',
+      attrs: {},
+      children: [],
+      parentElement: null,
+      onclick: null,
+      setAttribute(k, v) {
+        this.attrs[k] = String(v);
+      },
+      getAttribute(k) {
+        return this.attrs[k] ?? null;
+      },
+      appendChild(ch) {
+        ch.parentElement = this;
+        this.children.push(ch);
+        return ch;
+      },
+      insertBefore(newNode, refNode) {
+        newNode.parentElement = this;
+        const idx = this.children.indexOf(refNode);
+        if (idx >= 0) this.children.splice(idx, 0, newNode);
+        else this.children.push(newNode);
+        return newNode;
+      },
+      querySelector(sel) {
+        if (sel === '#agy-ko-model-menu-thinking-row') {
+          return this.children.find((c) => c.id === 'agy-ko-model-menu-thinking-row') || null;
+        }
+        if (sel === '#agy-ko-appearance-thinking-row') {
+          return this.children.find((c) => c.id === 'agy-ko-appearance-thinking-row') || null;
+        }
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    createdElements.push(el);
+    return el;
+  };
+
+  const mockFooter = { id: 'native-footer', classList: { contains: (c) => c === 'border-t' } };
+  const mockModelPanel = makeDomEl('div');
+  mockModelPanel.appendChild(mockFooter);
+
+  const mockChatCard = makeDomEl('div');
+  const mockConvStepsRow = makeDomEl('div');
+  mockConvStepsRow.textContent = '대화 단계 표시 대화 중 에이전트 세부 작업 단계의 기본 표시 수준을 설정합니다';
+  let defaultBtnClickCb = null;
+  const mockDefaultBtn = {
+    textContent: '기본값',
+    addEventListener(ev, cb) {
+      if (ev === 'click') defaultBtnClickCb = cb;
+    },
+  };
+  mockConvStepsRow.querySelectorAll = (sel) => (sel === 'button' ? [mockDefaultBtn] : []);
+  mockChatCard.appendChild(mockConvStepsRow);
+
+  const mockSettingsModal = {
+    querySelectorAll: (sel) => (sel.includes('.divide-y > div') ? [mockConvStepsRow] : []),
+  };
+
+  const menuSandbox = {
+    isShowThinkingEnabled: () => menuShowThinkingState,
+    window: {
+      __agySetShowThinking(next) {
+        menuShowThinkingState = Boolean(next);
+      },
+    },
+    document: {
+      head: { appendChild() {} },
+      getElementById: () => ({ textContent: '' }),
+      createElement: makeDomEl,
+      querySelector: (sel) => (sel === '.settings-modal-container' ? mockSettingsModal : null),
+      querySelectorAll(sel) {
+        if (sel === '[data-testid="model-selector-panel"]') return [mockModelPanel];
+        if (sel === '[data-testid="agy-ko-show-thinking-switch"]') {
+          return createdElements.filter((e) => e.attrs['data-testid'] === 'agy-ko-show-thinking-switch');
+        }
+        if (sel === '[data-agy-show-thinking-label="1"]') {
+          return createdElements.filter((e) => e.attrs['data-agy-show-thinking-label'] === '1');
+        }
+        return [];
+      },
+    },
+    setTimeout,
+    clearTimeout,
+  };
+
+  vm.runInNewContext(
+    `${mod06}\n;globalThis.__ensureThinkingMenu = ensureThinkingDisplayMenuIntegration;`,
+    menuSandbox
+  );
+  menuSandbox.__ensureThinkingMenu();
+
+  const injectedModelRow = mockModelPanel.querySelector('#agy-ko-model-menu-thinking-row');
+  assert.ok(injectedModelRow, 'must inject #agy-ko-model-menu-thinking-row into [data-testid="model-selector-panel"]');
+  assert.equal(
+    mockModelPanel.children.indexOf(injectedModelRow),
+    0,
+    'must insert model menu thinking row right before the bottom .border-t footer'
+  );
+  const injectedAppearanceRow = mockChatCard.querySelector('#agy-ko-appearance-thinking-row');
+  assert.ok(injectedAppearanceRow, 'must inject #agy-ko-appearance-thinking-row into Appearance > Chat card');
+
+  // Clicking the model menu thinking row toggles showThinking to false and updates switches & labels
+  injectedModelRow.onclick({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(menuShowThinkingState, false, 'clicking model menu thinking row must toggle showThinking to false');
+  const switches = menuSandbox.document.querySelectorAll('[data-testid="agy-ko-show-thinking-switch"]');
+  assert.equal(switches.length, 2);
+  assert.ok(switches.every((sw) => sw.getAttribute('aria-checked') === 'false'));
+
+  // Clicking back toggles showThinking to true, and clicking native Default button sets showThinking to false
+  injectedModelRow.onclick({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(menuShowThinkingState, true);
+  assert.ok(typeof defaultBtnClickCb === 'function');
+  defaultBtnClickCb();
+  assert.equal(menuShowThinkingState, false, 'clicking native Default (기본값) button in Appearance > Chat must sync showThinking to false');
 });

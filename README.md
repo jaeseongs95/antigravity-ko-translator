@@ -12,6 +12,7 @@ Antigravity 2.0 네이티브 앱에서 영어로 스트리밍되는 **Thinking(�
 
 2. **Antigravity 2.0 네이티브 설정창 통합 및 커스텀 상태바 어댑터 (`StatusBarAdapter`) 연동**
    - 좌측 하단 **`설정` (`Settings`)** 클릭 시 열리는 좌측 사이드바의 전용 **`한글 번역` 탭**과 상태바 빠른 설정 모달에서 번역 어댑터 전환, 로컬 LLM 연결 상태 확인, **Thinking(추론 과정) 표시 (`ON/OFF`)**, Thinking 사전 번역(`ON/OFF`), 현재 화면 즉시 재번역 및 캐시 초기화를 바로 실행할 수 있습니다.
+   - **Thinking (추론 과정) 표시 (ON/OFF)** 설정은 번역 설정과 분리하여 **채팅 입력창 하단의 모델 및 추론 수준 선택 드롭다운 메뉴 하단**과 **네이티브 설정창 모양 및 테마(Appearance) > 채팅(Chat) 섹션**에 전용 메뉴로 배치했습니다.
    - [`antigravity-statusbar`](https://github.com/jaeseongs95/antigravity-statusbar)의 `window.agyStatusBar.registerAdapter` API를 통해 상태바 코어 DOM이나 기존 버튼(`[ compact ]`, `[ context ]`) 영역을 침범하지 않고 우측 슬롯(`slot: 'right'`, `order: 30`)에 `[ 번역:구글 ]` / `[ 번역:LLM ]` 어댑터 버튼을 모듈화하여 장착합니다(클릭 시 빠른 설정 모달 열기/닫기, `Shift+클릭` 시 로컬 LLM ↔ Google 번역 즉시 전환).
 
 3. **고정 UI 및 위젯 0ms 동기 한글화 (`STATIC_UI_MAP`)**
