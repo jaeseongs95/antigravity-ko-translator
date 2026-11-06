@@ -55,7 +55,7 @@ javascript:(()=>{fetch('https://raw.githubusercontent.com/jaeseongs95/antigravit
 
 ### 방법 C. `antigravity-statusbar` (`커스텀바`) 연동 자동 실행
 
-호스트 PC에 `ko-thought-translator`가 설치되어 있는 경우, 원격 브라우저에서 **`커스텀바`(`antigravity-statusbar`)** 또는 **`MCP 매니저`(`antigravity-mcp-manager`)** 스크립트만 실행해도 호스트에 설치된 플러그인 구성을 자동 감지하여 **한글 번역까지 함께 자동으로 로드**됩니다. 반대로 **`한글번역`** 북마클릿만 실행해도 호스트 PC에 설치된 `antigravity-statusbar`와 `antigravity-mcp-manager`를 조건부로 자동 동기화합니다.
+호스트 PC에 `ko-thought-translator`가 설치되어 있으면, 원격 브라우저에서 **`커스텀바`(`antigravity-statusbar`)** 또는 **`MCP 매니저`(`antigravity-mcp-manager`)** 스크립트만 실행해도 호스트에 설치된 플러그인 구성을 자동 감지하여 **한글 번역까지 함께 로드**됩니다. 반대로 **`한글번역`** 북마클릿만 실행해도 호스트 PC에 설치된 `antigravity-statusbar`와 `antigravity-mcp-manager`를 조건부로 자동 동기화합니다.
 
 ---
 
@@ -103,11 +103,11 @@ node "$HOME\.gemini\config\plugins\ko-thought-translator\scripts\ensure_ko_thoug
    - **커스텀 어댑터 확장**: `window.__agyRegisterTranslationAdapter(id, { maxConcurrency, translate })`로 새 번역 엔진을 런타임에 등록할 수 있습니다.
 
 2. **고정 UI 및 위젯 0ms 동기 한글화 (`STATIC_UI_MAP`)**
-   - 메뉴바, 사이드바(`새 대화`, `맞춤 설정`, `대화 기록`, `CLI 프로젝트`), 우측 패널(`개요`, `변경사항 검토`, `서브에이전트`, `백그라운드 명령`), 설정(`일반`, `애플리케이션`, `모양 및 테마`, `단축키`, `알림`, `모델`), 원격 제어 전용 설정(`이 컴퓨터`, `원격`, `브라우저 서브에이전트`), `ask_question` 및 권한 승인 위젯을 네트워크 지연 없이 0ms에 즉시 한글화합니다.
+   - 메뉴바, 사이드바(`새 대화`, `맞춤 설정`, `대화 기록`, `CLI 프로젝트`), 우측 패널(`개요`, `변경사항 검토`, `서브에이전트`, `백그라운드 명령`), 설정(`일반`, `애플리케이션`, `모양 및 테마`, `단축키`, `알림`, `모델`), 원격 제어 전용 설정(`이 컴퓨터`, `원격`, `브라우저 서브에이전트`), `ask_question` 및 권한 승인 위젯을 네트워크 지연 없이 0ms에 한글화합니다.
    - 상태바(`.agy-ctx-statusbar`), 입력창 모델/권한 컨트롤, 모델 메뉴의 `New` 배지 및 코드 식별자는 원문을 보존합니다.
 
 3. **앱 업데이트 자동 감지 및 무중단 복구**
-   - 독립 백그라운드 데몬(`--watch-storage`)이 2초 주기로 `app.asar` 패치 여부와 `DevToolsActivePort` 변경을 감시하여 앱 업데이트 직후 자동 재패치 및 Live CDP 주입을 수행합니다.
+   - 독립 백그라운드 데몬(`--watch-storage`)이 2초 주기로 `app.asar` 패치 여부와 `DevToolsActivePort` 변경을 감시하여 앱 업데이트 직후 자동으로 재패치하고 Live CDP를 주입합니다.
    - `SessionStart`, `PreInvocation`, `PostInvocation` 훅이 동기(`spawnSync`) 방식으로 패치 무결성을 보장합니다.
 
 ---
