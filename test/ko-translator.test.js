@@ -27,7 +27,8 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.11';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.12';"));
+  assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.ok(bundleCode.includes("ensureVerboseConversationStepsEnabled"));
   assert.ok(bundleCode.includes("'verboseConversationSteps'"));
@@ -251,6 +252,32 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     dictSandbox.translateStaticUiSync('Loaded preset "📁 Filesystem". Review placeholders before saving.'),
     '"📁 파일시스템 (Filesystem)" 프리셋을 불러왔습니다. 저장하기 전에 입력값을 확인하세요.'
   );
+  // 3c. Antigravity Custom MCP Server Manager v1.2.0 (Edit Popup & Authentication UI)
+  assert.equal(
+    dictSandbox.translateStaticUiSync('⚙️ Edit Custom MCP Server & Authentication'),
+    '⚙️ 커스텀 MCP 서버 설정 및 인증 수정'
+  );
+  assert.equal(dictSandbox.translateStaticUiSync('Select Custom MCP Server to Edit:'), '수정할 커스텀 MCP 서버 선택:');
+  assert.equal(dictSandbox.translateStaticUiSync('+ New Custom MCP Server'), '+ 새 커스텀 MCP 서버');
+  assert.equal(
+    dictSandbox.translateStaticUiSync('🔐 Authentication Settings (Bearer Token / API Key / Basic / OAuth)'),
+    '🔐 인증 설정 (Bearer 토큰 / API Key / Basic / OAuth)'
+  );
+  assert.equal(dictSandbox.translateStaticUiSync('None (No authentication)'), '없음 (인증 미사용)');
+  assert.equal(dictSandbox.translateStaticUiSync('🌐 Open Auth URL in Browser'), '🌐 브라우저에서 인증 URL 열기');
+  assert.equal(dictSandbox.translateStaticUiSync('Save & Reconnect'), '저장 및 재연결');
+  assert.equal(
+    dictSandbox.translateStaticUiSync('HTTP https://mcp.example.com/mcp  [🔑 Auth Header Configured]'),
+    'HTTP https://mcp.example.com/mcp  [🔑 인증 헤더 설정됨]'
+  );
+  assert.equal(
+    dictSandbox.translateStaticUiSync('Apply this authentication to all 2 custom HTTP servers (alpha, beta)'),
+    '이 인증을 2개 커스텀 HTTP 서버 전체에 일괄 적용 (alpha, beta)'
+  );
+  assert.equal(
+    dictSandbox.translateStaticUiSync('Connected (12 tools available)'),
+    '연결됨 (사용 가능한 도구 12개)'
+  );
 
   // 4. Remote Control defaults to google-translate and local-llm falls back to google-translate when unreachable
   const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
@@ -307,6 +334,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(mod08.includes("el.classList.contains('agy-mcp-server-name')"), 'must exclude .agy-mcp-server-name from static UI text node translation');
   assert.ok(mod08.includes("el.classList.contains('agy-mcp-tool-chip')"), 'must exclude .agy-mcp-tool-chip from static UI text node translation');
   assert.ok(mod08.includes("const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');"), 'must localize #agy-mcp-manager-modal-backdrop synchronously in fast scan');
+  assert.ok(mod08.includes("const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');"), 'must localize #agy-mcp-edit-popup-backdrop synchronously in fast scan');
   const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
   assert.ok(mod06.includes('@media (max-width: 640px)'), 'must include mobile responsive rules for translator modal');
   assert.ok(mod06.includes('.agy-ko-card') && mod06.includes('.agy-ko-title') && mod06.includes('.agy-ko-desc'), 'must use self-contained CSS layout classes for Tailwind-less Remote Control host');
@@ -566,4 +594,51 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(workedWithThinking.expandedState, 'false');
   assert.equal(toolGroupWithThinking.expandedState, 'false');
   assert.equal(thinkingTriggerBtn.expandedState, 'false');
+
+  // 8. Translation provider persistence guard: never overwrite user-selected provider with local-llm on reinjection or showThinking/pretranslate toggles
+  const mod05 = fs.readFileSync(path.join(RENDERER_DIR, '05-fiber-pretranslator.js'), 'utf8');
+  assert.ok(
+    !mod05.includes('[PROVIDER_STORAGE_KEY]: activeTranslationProvider'),
+    '05-fiber-pretranslator.js must never overwrite PROVIDER_STORAGE_KEY inside __agySetShowThinking or __agySetPretranslate'
+  );
+  const { buildRuntimeConfiguredBundle } = require(BUNDLE_INJECTOR_PATH);
+  const defaultConfiguredBundle = buildRuntimeConfiguredBundle();
+  assert.ok(
+    defaultConfiguredBundle.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"),
+    'buildRuntimeConfiguredBundle() with no arguments must preserve stored google-translate instead of resetting to local-llm'
+  );
+
+  let providerSetCalls = [];
+  const reinjectSandbox = {
+    window: {
+      __agyKoLocalizerActive: 'v13.12',
+      __agyKoThoughtCleanup: () => {},
+      __agyRetranslateVisibleThoughts: () => {},
+      __agySetShowThinking: () => {},
+      __agyLastDefaultPretranslate: false,
+      __agyLastDefaultProvider: 'local-llm',
+      __agySetTranslationProvider(p) {
+        providerSetCalls.push(p);
+      },
+    },
+    document: {
+      getElementById: () => null,
+      querySelector: () => null,
+      body: {},
+    },
+    localStorage: {
+      getItem: (k) => (k === 'agy-ko-thought-provider' ? 'google-translate' : null),
+      setItem() {},
+    },
+  };
+  vm.runInNewContext(
+    `${mod01}\n;globalThis.__prepareResult = prepareBootstrapLifecycle();`,
+    reinjectSandbox
+  );
+  assert.equal(reinjectSandbox.__prepareResult, false);
+  assert.deepEqual(
+    providerSetCalls,
+    [],
+    'prepareBootstrapLifecycle must not overwrite explicit saved provider in localStorage when bundle default changes'
+  );
 });

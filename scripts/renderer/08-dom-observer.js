@@ -362,7 +362,8 @@
         txt !== '(managed by plugin)' &&
         txt !== '(플러그인에서 관리됨)' &&
         txt !== '(empty command)' &&
-        txt !== '(빈 명령어)'
+        txt !== '(빈 명령어)' &&
+        !/\[🔑\s*(?:Auth Header Configured|인증 헤더 설정됨)\]/.test(txt)
       ) {
         return true;
       }
@@ -1105,6 +1106,8 @@
       scanTriggerButtonsSync();
       const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');
       if (mcpModal) localizeStaticUiInRoot(mcpModal);
+      const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');
+      if (mcpEditPopup) localizeStaticUiInRoot(mcpEditPopup);
       if (document.querySelectorAll) {
         document.querySelectorAll('[data-agy-custom-mcp-btn]').forEach((el) => localizeStaticUiInRoot(el));
       }

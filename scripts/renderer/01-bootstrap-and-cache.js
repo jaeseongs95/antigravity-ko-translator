@@ -1,12 +1,12 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.11';
+  const KO_LOCALIZER_VERSION = 'v13.12';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
-  const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
+  const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';
   const PROVIDER_STORAGE_KEY = 'agy-ko-thought-provider';
   let disposed = false;
 
@@ -305,13 +305,23 @@
       typeof window.__agySetShowThinking === 'function' &&
       !document.getElementById('agy-ko-settings-card')
     ) {
+      if (typeof window.__agySyncPersistentSettings === 'function') {
+        window.__agySyncPersistentSettings();
+      }
       if (
         window.__agyLastDefaultPretranslate !== undefined &&
         window.__agyLastDefaultPretranslate !== DEFAULT_PRETRANSLATE_ENABLED &&
         typeof window.__agySetPretranslate === 'function'
       ) {
         window.__agyLastDefaultPretranslate = DEFAULT_PRETRANSLATE_ENABLED;
-        window.__agySetPretranslate(DEFAULT_PRETRANSLATE_ENABLED);
+        let hasSavedPre = false;
+        try {
+          const sp = localStorage.getItem(PRETRANSLATE_STORAGE_KEY);
+          if (sp === '0' || sp === '1' || sp === 'true' || sp === 'false') hasSavedPre = true;
+        } catch (e) {}
+        if (!hasSavedPre) {
+          window.__agySetPretranslate(DEFAULT_PRETRANSLATE_ENABLED);
+        }
       }
       if (
         window.__agyLastDefaultProvider !== undefined &&
@@ -319,7 +329,14 @@
         typeof window.__agySetTranslationProvider === 'function'
       ) {
         window.__agyLastDefaultProvider = DEFAULT_TRANSLATION_PROVIDER;
-        window.__agySetTranslationProvider(DEFAULT_TRANSLATION_PROVIDER);
+        let hasSavedProv = false;
+        try {
+          const sv = localStorage.getItem(PROVIDER_STORAGE_KEY);
+          if (sv === 'google-translate' || sv === 'local-llm') hasSavedProv = true;
+        } catch (e) {}
+        if (!hasSavedProv) {
+          window.__agySetTranslationProvider(DEFAULT_TRANSLATION_PROVIDER);
+        }
       }
       return false;
     }

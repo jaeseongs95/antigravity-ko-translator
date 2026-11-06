@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.16
+// @version      1.2.17
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,13 +25,13 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.11';
+  const KO_LOCALIZER_VERSION = 'v13.12';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
   const DEFAULT_PRETRANSLATE_ENABLED = false;
   const PRETRANSLATE_STORAGE_KEY = 'agy-ko-thought-pretranslate';
-  const DEFAULT_TRANSLATION_PROVIDER = 'local-llm';
+  const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';
   const PROVIDER_STORAGE_KEY = 'agy-ko-thought-provider';
   let disposed = false;
 
@@ -330,13 +330,23 @@
       typeof window.__agySetShowThinking === 'function' &&
       !document.getElementById('agy-ko-settings-card')
     ) {
+      if (typeof window.__agySyncPersistentSettings === 'function') {
+        window.__agySyncPersistentSettings();
+      }
       if (
         window.__agyLastDefaultPretranslate !== undefined &&
         window.__agyLastDefaultPretranslate !== DEFAULT_PRETRANSLATE_ENABLED &&
         typeof window.__agySetPretranslate === 'function'
       ) {
         window.__agyLastDefaultPretranslate = DEFAULT_PRETRANSLATE_ENABLED;
-        window.__agySetPretranslate(DEFAULT_PRETRANSLATE_ENABLED);
+        let hasSavedPre = false;
+        try {
+          const sp = localStorage.getItem(PRETRANSLATE_STORAGE_KEY);
+          if (sp === '0' || sp === '1' || sp === 'true' || sp === 'false') hasSavedPre = true;
+        } catch (e) {}
+        if (!hasSavedPre) {
+          window.__agySetPretranslate(DEFAULT_PRETRANSLATE_ENABLED);
+        }
       }
       if (
         window.__agyLastDefaultProvider !== undefined &&
@@ -344,7 +354,14 @@
         typeof window.__agySetTranslationProvider === 'function'
       ) {
         window.__agyLastDefaultProvider = DEFAULT_TRANSLATION_PROVIDER;
-        window.__agySetTranslationProvider(DEFAULT_TRANSLATION_PROVIDER);
+        let hasSavedProv = false;
+        try {
+          const sv = localStorage.getItem(PROVIDER_STORAGE_KEY);
+          if (sv === 'google-translate' || sv === 'local-llm') hasSavedProv = true;
+        } catch (e) {}
+        if (!hasSavedProv) {
+          window.__agySetTranslationProvider(DEFAULT_TRANSLATION_PROVIDER);
+        }
       }
       return false;
     }
@@ -1296,6 +1313,71 @@
     'MCP config root must be a JSON object.': 'MCP 설정 최상위 루트는 JSON 객체여야 합니다.',
     '"mcpServers" must be a JSON object mapping server names to configurations.':
       '"mcpServers"는 서버 이름을 설정에 매핑하는 JSON 객체여야 합니다.',
+    // Antigravity Custom MCP Server Manager v1.2.0 (Edit Popup & Authentication UI)
+    'Edit Custom MCP Server & Authentication': '커스텀 MCP 서버 설정 및 인증 수정',
+    '⚙️ Edit Custom MCP Server & Authentication': '⚙️ 커스텀 MCP 서버 설정 및 인증 수정',
+    'Custom Config': '커스텀 설정',
+    'Close Edit Popup': '수정 팝업 닫기',
+    'Select Custom MCP Server to Edit:': '수정할 커스텀 MCP 서버 선택:',
+    '+ New Custom MCP Server': '+ 새 커스텀 MCP 서버',
+    '🔐 Authentication Settings (Bearer Token / API Key / Basic / OAuth)':
+      '🔐 인증 설정 (Bearer 토큰 / API Key / Basic / OAuth)',
+    'None (No authentication)': '없음 (인증 미사용)',
+    'Bearer Token (Authorization: Bearer <token>)': 'Bearer 토큰 (Authorization: Bearer <token>)',
+    'API Key Header (X-API-Key or Custom Header)': 'API Key 헤더 (X-API-Key 또는 커스텀 헤더)',
+    'Basic Auth (Username & Password)': 'Basic 인증 (아이디 및 비밀번호)',
+    'Native OAuth / Browser Sign-In': '네이티브 OAuth / 브라우저 로그인',
+    'Bearer Token (Automatically sets "Authorization: Bearer <token>" header)':
+      'Bearer 토큰 ("Authorization: Bearer <token>" 헤더 자동 설정)',
+    'Auth Token (Automatically sets MCP_AUTH_TOKEN environment variable)':
+      '인증 토큰 (MCP_AUTH_TOKEN 환경 변수 자동 설정)',
+    'Auth Header / Env Key Name': '인증 헤더 / 환경 변수 키 이름',
+    'X-API-Key or Authorization': 'X-API-Key 또는 Authorization',
+    'API Key / Secret Value': 'API Key / 비밀값',
+    'Username': '아이디',
+    'Password': '비밀번호',
+    'Show': '표시',
+    'Hide': '숨김',
+    '🌐 Open Auth URL in Browser': '🌐 브라우저에서 인증 URL 열기',
+    'Submit Auth Code': '인증 코드 제출',
+    'Disconnect OAuth': 'OAuth 연결 해제',
+    'Delete Server': '서버 삭제',
+    'Deleted custom server.': '커스텀 서버를 삭제했습니다.',
+    'Open Full Manager': '전체 매니저 열기',
+    'Save & Reconnect': '저장 및 재연결',
+    '⚙️ Edit Custom MCP': '⚙️ 커스텀 MCP 수정',
+    '⚙️ Edit Custom MCP Settings': '⚙️ 커스텀 MCP 설정 수정',
+    'Edit custom MCP server settings & authentication': '커스텀 MCP 서버 설정 및 인증 수정',
+    '🔑 MCP Auth Settings': '🔑 MCP 인증 설정',
+    '⚙️ Edit Settings': '⚙️ 설정 수정',
+    '🔑 Authenticate': '🔑 인증 설정',
+    '🔑 Configure Auth / Edit Settings': '🔑 인증 설정 / 설정 수정',
+    '+ Custom MCP Server': '+ 커스텀 MCP 서버',
+    '🔑 Optional Bearer Token / API Key': '🔑 선택적 Bearer 토큰 / API Key',
+    'Paste Bearer token here (e.g. eyJhbGci... or mcp_secret_...)':
+      '여기에 Bearer 토큰을 붙여넣으세요 (예: eyJhbGci...)',
+    'Enter API key value...': 'API Key 값을 입력하세요...',
+    'Enter authorization code...': '인증 코드를 입력하세요...',
+    'OAuth status: Authenticated token is active on host.':
+      'OAuth 상태: 호스트에 인증된 토큰이 활성화되어 있습니다.',
+    'OAuth URL provided by server. Click "Open Auth URL in Browser", sign in, and paste the authorization code below.':
+      '서버에서 OAuth URL을 제공했습니다. "브라우저에서 인증 URL 열기"를 클릭해 로그인한 뒤 아래에 인증 코드를 붙여넣으세요.',
+    'If this remote MCP server uses Bearer tokens instead of dynamic OAuth registration, switch Authentication Type to "Bearer Token".':
+      '이 원격 MCP 서버가 동적 OAuth 등록 대신 Bearer 토큰을 사용하는 경우 인증 유형을 "Bearer 토큰"으로 전환하세요.',
+    'Opened OAuth authorization page in browser. Paste the resulting code below.':
+      '브라우저에서 OAuth 인증 페이지를 열었습니다. 발급된 인증 코드를 아래에 붙여넣으세요.',
+    'Save the server first or enter a Server Name before submitting an OAuth code.':
+      'OAuth 코드를 제출하기 전에 먼저 서버를 저장하거나 서버 이름을 입력하세요.',
+    'Failed to complete OAuth.': 'OAuth 인증을 완료하지 못했습니다.',
+    'Failed to disconnect OAuth.': 'OAuth 연결을 해제하지 못했습니다.',
+    'Server name and authorization code are required.': '서버 이름과 인증 코드가 필요합니다.',
+    'Host OAuth service (completeMcpOAuth) is not available.':
+      '호스트 OAuth 서비스(completeMcpOAuth)를 사용할 수 없습니다.',
+    'Host OAuth service (disconnectMcpOAuth) is not available.':
+      '호스트 OAuth 서비스(disconnectMcpOAuth)를 사용할 수 없습니다.',
+    'Server name is required.': '서버 이름은 필수입니다.',
+    'No matching HTTP custom servers found to update authentication.':
+      '인증을 업데이트할 일치하는 HTTP 커스텀 서버가 없습니다.',
   };
 
   function formatDurationKo(rawDur) {
@@ -1708,6 +1790,44 @@
 
     m = t.match(/^Error:\s*(.+)$/i);
     if (m) return `오류: ${m[1]}`;
+
+    // Antigravity Custom MCP Server Manager v1.2.0 dynamic patterns
+    m = t.match(/^HTTP\s+(.+?)\s+\[🔑 Auth Header Configured\]$/i);
+    if (m) return `HTTP ${m[1]}  [🔑 인증 헤더 설정됨]`;
+
+    m = t.match(/^Apply this authentication to all (\d+) custom HTTP servers \((.+)\)$/i);
+    if (m) return `이 인증을 ${m[1]}개 커스텀 HTTP 서버 전체에 일괄 적용 (${m[2]})`;
+
+    m = t.match(/^Connected \((\d+) tools available\)$/i);
+    if (m) return `연결됨 (사용 가능한 도구 ${m[1]}개)`;
+
+    m = t.match(/^Added\s+"(.+)",\s*which requires authentication\.\s*Enter your token or complete OAuth below\.$/i);
+    if (m) return `"${m[1]}" 서버를 추가했습니다. 인증이 필요하므로 아래에서 토큰을 입력하거나 OAuth 인증을 완료하세요.`;
+
+    m = t.match(
+      /^Auto-filled form for\s+"(.+)"\.\s*Review settings or authentication below,\s*then click Save & Connect Server\.$/i
+    );
+    if (m) {
+      return `"${m[1]}" 서버 폼을 자동으로 채웠습니다. 아래에서 설정 또는 인증을 확인한 뒤 [서버 저장 및 연결]을 클릭하세요.`;
+    }
+
+    m = t.match(/^OAuth authentication completed for\s+"(.+)"\.$/i);
+    if (m) return `"${m[1]}" 서버의 OAuth 인증이 완료되었습니다.`;
+
+    m = t.match(/^Disconnected OAuth session for\s+"(.+)"\.$/i);
+    if (m) return `"${m[1]}" 서버의 OAuth 세션 연결을 해제했습니다.`;
+
+    m = t.match(/^Edit settings & authentication for\s+"(.+)"$/i);
+    if (m) return `"${m[1]}" 설정 및 인증 수정`;
+
+    m = t.match(/^Configure Bearer token,\s*API Key,\s*or OAuth for\s+"(.+)"$/i);
+    if (m) return `"${m[1]}" Bearer 토큰, API Key 또는 OAuth 설정`;
+
+    m = t.match(/^Configure authentication for\s+"(.+)"$/i);
+    if (m) return `"${m[1]}" 인증 설정`;
+
+    m = t.match(/^Edit settings for\s+"(.+)"$/i);
+    if (m) return `"${m[1]}" 설정 수정`;
 
     // Thinking / Worked duration headers
     m = t.match(/^Thought for\s+(.+)$/i);
@@ -2154,12 +2274,12 @@
         ? 'google-translate'
         : savedProv;
     } else {
-      localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+      if (!window.nativeStorage || typeof window.nativeStorage.getItems !== 'function') localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     }
   } catch (e) {}
 
   function getActiveAdapter() {
-    return TRANSLATION_ADAPTERS[activeTranslationProvider] || TRANSLATION_ADAPTERS['local-llm'];
+    return TRANSLATION_ADAPTERS[activeTranslationProvider] || TRANSLATION_ADAPTERS['google-translate'];
   }
 
   window.__agyGetTranslationProvider = () => activeTranslationProvider;
@@ -2194,13 +2314,14 @@
     const prev = activeTranslationProvider;
     activeTranslationProvider = mapped;
     try {
-      localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+      if (!window.nativeStorage || typeof window.nativeStorage.getItems !== 'function') localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     } catch (e) {}
-    if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
+    try { localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider); } catch (e) {}
+    if (options.persist !== false && window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
       try {
         window.nativeStorage.updateItems({
           [PROVIDER_STORAGE_KEY]: activeTranslationProvider,
-          [PRETRANSLATE_STORAGE_KEY]: pretranslateEnabled ? '1' : '0',
+
         });
       } catch (e) {}
     }
@@ -2377,12 +2498,27 @@
         if (!items) return;
         let changed = false;
         const savedProv = items[PROVIDER_STORAGE_KEY];
-        if (savedProv && TRANSLATION_ADAPTERS[savedProv] && savedProv !== activeTranslationProvider) {
-          activeTranslationProvider = savedProv;
+        if (savedProv && TRANSLATION_ADAPTERS[savedProv]) {
           try {
-            localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+            localStorage.setItem(PROVIDER_STORAGE_KEY, savedProv);
           } catch (e) {}
-          changed = true;
+          if (savedProv !== activeTranslationProvider) {
+            activeTranslationProvider = savedProv;
+            if (activeTranslationProvider === 'local-llm') {
+              resolveLocalLlmEndpoint().then(() => {
+                if (typeof refreshTranslatorSettingsUi === 'function') refreshTranslatorSettingsUi();
+              });
+            } else {
+              resolvedLlmEndpoint = null;
+            }
+            changed = true;
+          }
+        } else {
+          try {
+            if (!localStorage.getItem(PROVIDER_STORAGE_KEY)) {
+              localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+            }
+          } catch (e) {}
         }
         const savedShow = items[SHOW_THINKING_STORAGE_KEY];
         if (savedShow !== undefined) {
@@ -2415,6 +2551,7 @@
       } catch (e) {}
     }
   }
+  window.__agySyncPersistentSettings = loadPersistentTranslatorSettings;
 
   const pretranslatedRawSet = new Set();
   let pretranslateRunning = false;
@@ -2547,8 +2684,6 @@
     if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
       try {
         window.nativeStorage.updateItems({
-          [PROVIDER_STORAGE_KEY]: activeTranslationProvider,
-          [PRETRANSLATE_STORAGE_KEY]: pretranslateEnabled ? '1' : '0',
           [SHOW_THINKING_STORAGE_KEY]: showThinkingEnabled ? '1' : '0',
         });
       } catch (e) {}
@@ -2605,7 +2740,6 @@
     if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
       try {
         window.nativeStorage.updateItems({
-          [PROVIDER_STORAGE_KEY]: activeTranslationProvider,
           [PRETRANSLATE_STORAGE_KEY]: pretranslateEnabled ? '1' : '0',
         });
       } catch (e) {}
@@ -3072,7 +3206,7 @@
       return {
         shortLabel: 'Google 번역',
         title: 'Google 번역 (google-translate)',
-        desc: 'Google 번역(GTX) 엔드포인트를 사용하여 로컬 GPU 자원 소모 없이 빠르게 번역합니다.',
+        desc: 'Google 번역(GTX) 엔드포인트를 사용하여 로컬 GPU 자원 소모 없이 빠르게 번역합니다. (기본값)',
       };
     }
     const custom = TRANSLATION_ADAPTERS[id];
@@ -3971,7 +4105,8 @@
         txt !== '(managed by plugin)' &&
         txt !== '(플러그인에서 관리됨)' &&
         txt !== '(empty command)' &&
-        txt !== '(빈 명령어)'
+        txt !== '(빈 명령어)' &&
+        !/\[🔑\s*(?:Auth Header Configured|인증 헤더 설정됨)\]/.test(txt)
       ) {
         return true;
       }
@@ -4714,6 +4849,8 @@
       scanTriggerButtonsSync();
       const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');
       if (mcpModal) localizeStaticUiInRoot(mcpModal);
+      const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');
+      if (mcpEditPopup) localizeStaticUiInRoot(mcpEditPopup);
       if (document.querySelectorAll) {
         document.querySelectorAll('[data-agy-custom-mcp-btn]').forEach((el) => localizeStaticUiInRoot(el));
       }

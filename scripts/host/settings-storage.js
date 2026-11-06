@@ -6,6 +6,7 @@
  */
 
 const fs = require('fs');
+const path = require('path');
 const { spawn } = require('child_process');
 const {
   APP_STORAGE_PATH,
@@ -68,7 +69,7 @@ function parseProviderCliArg(args) {
 
 function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider = null) {
   let enabled = false;
-  let provider = 'local-llm';
+  let provider = 'google-translate';
   let appStorage = null;
   try {
     if (fs.existsSync(APP_STORAGE_PATH)) {
@@ -102,7 +103,7 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
     provider =
       explicitProvider !== null
         ? explicitProvider
-        : storageProv || normalizeProviderName(existingEntry.provider) || 'local-llm';
+        : storageProv || normalizeProviderName(existingEntry.provider) || 'google-translate';
 
     if (
       explicitPretranslate !== null ||
@@ -164,9 +165,27 @@ function spawnDetachedWatcherProcess(entryScriptPath) {
   return child.pid || null;
 }
 
+function computeWatcherSignature(entryScriptPath) {
+  const files = [
+    entryScriptPath,
+    __filename,
+    path.join(__dirname, 'bundle-injector.js'),
+    path.join(__dirname, 'local-llm-service.js'),
+  ];
+  return files
+    .map((f) => {
+      try {
+        return Math.floor(fs.statSync(f).mtimeMs);
+      } catch {
+        return 0;
+      }
+    })
+    .join('-');
+}
+
 function ensureStorageWatcher(entryScriptPath) {
   try {
-    const mySig = String(Math.floor(fs.statSync(entryScriptPath).mtimeMs));
+    const mySig = computeWatcherSignature(entryScriptPath);
     if (fs.existsSync(WATCHER_PID_PATH)) {
       const raw = fs.readFileSync(WATCHER_PID_PATH, 'utf8').trim();
       const [pidStr, sig] = raw.split(':');
@@ -224,7 +243,7 @@ function isAsarCurrentlyPatched() {
 
 function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecoveryNeeded }) {
   try {
-    const mySig = String(Math.floor(fs.statSync(entryScriptPath).mtimeMs));
+    const mySig = computeWatcherSignature(entryScriptPath);
     fs.writeFileSync(WATCHER_PID_PATH, `${process.pid}:${mySig}`, 'utf8');
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] watcher pid write error: ${err.message}\n`);
@@ -253,7 +272,8 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
       // 1. Check Native Settings UI changes in app_storage.json every 400ms
       if (fs.existsSync(APP_STORAGE_PATH)) {
         const appStorage = JSON.parse(fs.readFileSync(APP_STORAGE_PATH, 'utf8'));
-        const curProvider = normalizeProviderName(appStorage['agy-ko-thought-provider']) || 'local-llm';
+        const curProvider =
+          normalizeProviderName(appStorage['agy-ko-thought-provider']) || lastProvider || 'google-translate';
         const curPre =
           appStorage['agy-ko-thought-pretranslate'] === '1' || appStorage['agy-ko-thought-pretranslate'] === true;
 

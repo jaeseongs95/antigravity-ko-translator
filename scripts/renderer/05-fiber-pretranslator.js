@@ -19,12 +19,27 @@
         if (!items) return;
         let changed = false;
         const savedProv = items[PROVIDER_STORAGE_KEY];
-        if (savedProv && TRANSLATION_ADAPTERS[savedProv] && savedProv !== activeTranslationProvider) {
-          activeTranslationProvider = savedProv;
+        if (savedProv && TRANSLATION_ADAPTERS[savedProv]) {
           try {
-            localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+            localStorage.setItem(PROVIDER_STORAGE_KEY, savedProv);
           } catch (e) {}
-          changed = true;
+          if (savedProv !== activeTranslationProvider) {
+            activeTranslationProvider = savedProv;
+            if (activeTranslationProvider === 'local-llm') {
+              resolveLocalLlmEndpoint().then(() => {
+                if (typeof refreshTranslatorSettingsUi === 'function') refreshTranslatorSettingsUi();
+              });
+            } else {
+              resolvedLlmEndpoint = null;
+            }
+            changed = true;
+          }
+        } else {
+          try {
+            if (!localStorage.getItem(PROVIDER_STORAGE_KEY)) {
+              localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+            }
+          } catch (e) {}
         }
         const savedShow = items[SHOW_THINKING_STORAGE_KEY];
         if (savedShow !== undefined) {
@@ -57,6 +72,7 @@
       } catch (e) {}
     }
   }
+  window.__agySyncPersistentSettings = loadPersistentTranslatorSettings;
 
   const pretranslatedRawSet = new Set();
   let pretranslateRunning = false;
@@ -189,8 +205,6 @@
     if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
       try {
         window.nativeStorage.updateItems({
-          [PROVIDER_STORAGE_KEY]: activeTranslationProvider,
-          [PRETRANSLATE_STORAGE_KEY]: pretranslateEnabled ? '1' : '0',
           [SHOW_THINKING_STORAGE_KEY]: showThinkingEnabled ? '1' : '0',
         });
       } catch (e) {}
@@ -247,7 +261,6 @@
     if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
       try {
         window.nativeStorage.updateItems({
-          [PROVIDER_STORAGE_KEY]: activeTranslationProvider,
           [PRETRANSLATE_STORAGE_KEY]: pretranslateEnabled ? '1' : '0',
         });
       } catch (e) {}

@@ -237,12 +237,12 @@
         ? 'google-translate'
         : savedProv;
     } else {
-      localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+      if (!window.nativeStorage || typeof window.nativeStorage.getItems !== 'function') localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     }
   } catch (e) {}
 
   function getActiveAdapter() {
-    return TRANSLATION_ADAPTERS[activeTranslationProvider] || TRANSLATION_ADAPTERS['local-llm'];
+    return TRANSLATION_ADAPTERS[activeTranslationProvider] || TRANSLATION_ADAPTERS['google-translate'];
   }
 
   window.__agyGetTranslationProvider = () => activeTranslationProvider;
@@ -277,13 +277,14 @@
     const prev = activeTranslationProvider;
     activeTranslationProvider = mapped;
     try {
-      localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+      if (!window.nativeStorage || typeof window.nativeStorage.getItems !== 'function') localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     } catch (e) {}
-    if (window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
+    try { localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider); } catch (e) {}
+    if (options.persist !== false && window.nativeStorage && typeof window.nativeStorage.updateItems === 'function') {
       try {
         window.nativeStorage.updateItems({
           [PROVIDER_STORAGE_KEY]: activeTranslationProvider,
-          [PRETRANSLATE_STORAGE_KEY]: pretranslateEnabled ? '1' : '0',
+
         });
       } catch (e) {}
     }

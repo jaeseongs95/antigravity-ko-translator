@@ -14,7 +14,7 @@ const {
   BEGIN_MARKER,
   END_MARKER,
 } = require('./paths');
-const { isPluginEnabled } = require('./settings-storage');
+const { isPluginEnabled, getOrSetTranslatorOptions } = require('./settings-storage');
 
 function assembleRendererSourceFromModules() {
   const missing = RENDERER_MODULE_FILES.filter((f) => !fs.existsSync(path.join(RENDERER_DIR, f)));
@@ -38,7 +38,7 @@ function assembleRendererSourceFromModules() {
     `// ==UserScript==\n` +
     `// @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)\n` +
     `// @namespace    https://github.com/jaeseongs95/antigravity-ko-translator\n` +
-    `// @version      1.2.16\n` +
+    `// @version      1.2.17\n` +
     `// @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.\n` +
     `// @match        https://antigravity.google.com/*\n` +
     `// @match        https://*.antigravity.google.com/*\n` +
@@ -76,21 +76,39 @@ function assembleRendererSourceFromModules() {
   return assembled;
 }
 
-function buildRuntimeConfiguredBundle(pretranslateEnabled = false, translationProvider = 'local-llm') {
+function resolveEffectiveOptions(pretranslateEnabled = null, translationProvider = null) {
+  if (pretranslateEnabled !== null && pretranslateEnabled !== undefined && translationProvider) {
+    return {
+      pretranslateEnabled: Boolean(pretranslateEnabled),
+      translationProvider: String(translationProvider),
+    };
+  }
+  const stored = getOrSetTranslatorOptions(null, null);
+  return {
+    pretranslateEnabled:
+      pretranslateEnabled !== null && pretranslateEnabled !== undefined
+        ? Boolean(pretranslateEnabled)
+        : Boolean(stored.pretranslateEnabled),
+    translationProvider: translationProvider || stored.translationProvider || 'google-translate',
+  };
+}
+
+function buildRuntimeConfiguredBundle(pretranslateEnabled = null, translationProvider = null) {
+  const effective = resolveEffectiveOptions(pretranslateEnabled, translationProvider);
   const canonicalSource = assembleRendererSourceFromModules();
   return canonicalSource
     .trim()
     .replace(
       /const DEFAULT_PRETRANSLATE_ENABLED = (?:true|false);/,
-      `const DEFAULT_PRETRANSLATE_ENABLED = ${pretranslateEnabled ? 'true' : 'false'};`
+      `const DEFAULT_PRETRANSLATE_ENABLED = ${effective.pretranslateEnabled ? 'true' : 'false'};`
     )
     .replace(
       /const DEFAULT_TRANSLATION_PROVIDER = '[^']+';/,
-      `const DEFAULT_TRANSLATION_PROVIDER = '${translationProvider || 'local-llm'}';`
+      `const DEFAULT_TRANSLATION_PROVIDER = '${effective.translationProvider}';`
     );
 }
 
-function syncCombinedAutoinject(pretranslateEnabled = false, translationProvider = 'local-llm') {
+function syncCombinedAutoinject(pretranslateEnabled = null, translationProvider = null) {
   if (!fs.existsSync(STATUSBAR_AUTOINJECT_PATH)) {
     return false;
   }

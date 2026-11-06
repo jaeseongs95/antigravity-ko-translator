@@ -433,7 +433,7 @@
       return {
         shortLabel: 'Google 번역',
         title: 'Google 번역 (google-translate)',
-        desc: 'Google 번역(GTX) 엔드포인트를 사용하여 로컬 GPU 자원 소모 없이 빠르게 번역합니다.',
+        desc: 'Google 번역(GTX) 엔드포인트를 사용하여 로컬 GPU 자원 소모 없이 빠르게 번역합니다. (기본값)',
       };
     }
     const custom = TRANSLATION_ADAPTERS[id];
