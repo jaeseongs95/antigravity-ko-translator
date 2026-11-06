@@ -349,6 +349,24 @@
     if (el.closest(selector)) {
       return true;
     }
+    if (
+      !forAttributes &&
+      el.classList &&
+      (el.classList.contains('agy-mcp-server-name') || el.classList.contains('agy-mcp-tool-chip'))
+    ) {
+      return true;
+    }
+    if (!forAttributes && el.classList && el.classList.contains('agy-mcp-cmd-preview')) {
+      const txt = (el.textContent || '').trim();
+      if (
+        txt !== '(managed by plugin)' &&
+        txt !== '(플러그인에서 관리됨)' &&
+        txt !== '(empty command)' &&
+        txt !== '(빈 명령어)'
+      ) {
+        return true;
+      }
+    }
     const testId = el.getAttribute('data-testid') || el.closest('[data-testid]')?.getAttribute('data-testid');
     if (testId === 'conversation-row-sidebar') {
       if (forAttributes && el.tagName === 'BUTTON') return false;
@@ -1085,6 +1103,11 @@
     inFastScan = true;
     try {
       scanTriggerButtonsSync();
+      const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');
+      if (mcpModal) localizeStaticUiInRoot(mcpModal);
+      if (document.querySelectorAll) {
+        document.querySelectorAll('[data-agy-custom-mcp-btn]').forEach((el) => localizeStaticUiInRoot(el));
+      }
       const allCursorEdits = document.querySelectorAll('.cursor-edit');
       for (const cursorEdit of allCursorEdits) {
         const container = cursorEdit.closest('.relative') || cursorEdit.parentElement;

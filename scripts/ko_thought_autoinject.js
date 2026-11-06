@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.15
+// @version      1.2.16
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.10';
+  const KO_LOCALIZER_VERSION = 'v13.11';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -1197,6 +1197,105 @@
     'Hook Json PostInvocation': '훅 실행 후 (PostInvocation)',
     'Hook Json Stop': '훅 종료 (Stop)',
     'Hook Json UserPromptSubmit': '훅 프롬프트 제출 (UserPromptSubmit)',
+
+    // Antigravity Custom MCP Server Manager (#agy-mcp-manager-modal-backdrop & Customizations injected buttons)
+    'Antigravity Custom MCP Server Manager': 'Antigravity 커스텀 MCP 서버 매니저',
+    '🔌 Antigravity Custom MCP Server Manager': '🔌 Antigravity 커스텀 MCP 서버 매니저',
+    'Native RPC Bridge': '네이티브 RPC 브리지',
+    'Close MCP Manager': 'MCP 매니저 닫기',
+    'Servers & Tools': '서버 및 도구',
+    '+ Add / Edit Server': '+ 서버 추가 / 편집',
+    '{ } Raw mcp_config.json': '{ } mcp_config.json 원문',
+    '+ Custom MCP': '+ 커스텀 MCP',
+    'Add or manage custom MCP servers in ~/.gemini/config/mcp_config.json':
+      '~/.gemini/config/mcp_config.json에서 커스텀 MCP 서버 추가 및 관리',
+    'Custom Stdio (npx / uvx / node / python) or HTTP MCP server:':
+      '커스텀 Stdio (npx / uvx / node / python) 또는 HTTP MCP 서버:',
+    '+ Add Custom MCP Server': '+ 커스텀 MCP 서버 추가',
+    'Manage Custom Servers': '커스텀 서버 관리',
+    '{ } Edit mcp_config.json': '{ } mcp_config.json 편집',
+    '⚡ Quick Auto-Add (Enter MCP Server URL, GitHub/npm Address, Command, or JSON):':
+      '⚡ 빠른 자동 추가 (MCP 서버 URL, GitHub/npm 주소, 명령어 또는 JSON 입력):',
+    'https://mcp.example.com/mcp, https://github.com/owner/repo, @playwright/mcp, or npx -y ...':
+      'https://mcp.example.com/mcp, https://github.com/owner/repo, @playwright/mcp 또는 npx -y ...',
+    'Auto-Add & Connect': '자동 추가 및 연결',
+    'Auto-Fill Form': '폼 자동 채우기',
+    '↻ Refresh All Servers': '↻ 모든 서버 새로고침',
+    'No custom MCP servers configured yet. Click "+ Add Custom MCP Server" to register a local Stdio or remote HTTP MCP server.':
+      '아직 설정된 커스텀 MCP 서버가 없습니다. "+ 커스텀 MCP 서버 추가"를 클릭해 로컬 Stdio 또는 원격 HTTP MCP 서버를 등록하세요.',
+    'READY': '준비됨',
+    'PENDING': '대기 중',
+    'ERROR': '오류',
+    'DISABLED': '비활성',
+    'CONFIGURED': '설정됨',
+    'Plugin': '플러그인',
+    '↻ Restart': '↻ 재시작',
+    '(managed by plugin)': '(플러그인에서 관리됨)',
+    '(empty command)': '(빈 명령어)',
+    'Quick Preset Templates (Click to prefill):': '빠른 프리셋 템플릿 (클릭 시 자동 입력):',
+    '📁 Filesystem': '📁 파일시스템 (Filesystem)',
+    '🧠 Memory': '🧠 메모리 (Memory)',
+    '🌐 Fetch': '🌐 웹 가져오기 (Fetch)',
+    '☁️ Remote HTTP': '☁️ 원격 HTTP (Remote HTTP)',
+    'Local directory read/write/search access via official MCP Filesystem server.':
+      '공식 MCP Filesystem 서버를 통한 로컬 디렉터리 읽기/쓰기/검색 접근.',
+    'Persistent knowledge graph memory server.': '지속형 지식 그래프 메모리 서버.',
+    'Web page fetching and HTML-to-markdown conversion.': '웹 페이지 가져오기 및 HTML-마크다운 변환.',
+    'GitHub repository, issue, PR, and search integration.': 'GitHub 저장소, 이슈, PR 및 검색 연동.',
+    'Read-only schema inspection and SQL query execution for PostgreSQL.':
+      'PostgreSQL 읽기 전용 스키마 조회 및 SQL 쿼리 실행.',
+    'SQLite database query and business insight memo server.':
+      'SQLite 데이터베이스 쿼리 및 비즈니스 인사이트 메모 서버.',
+    'Browser automation via Playwright MCP server.': 'Playwright MCP 서버를 통한 브라우저 자동화.',
+    'Streamable HTTP remote MCP endpoint (MCP spec 2025-03-26).':
+      'Streamable HTTP 원격 MCP 엔드포인트 (MCP 사양 2025-03-26).',
+    'Server Name (Optional — auto-filled from URL/Command)':
+      '서버 이름 (선택 사항 — URL/명령어에서 자동 입력)',
+    'Auto-detected if left blank (e.g. filesystem, github)':
+      '비워 두면 자동 감지됨 (예: filesystem, github)',
+    'Transport Type': '전송 방식 (Transport)',
+    'Stdio (Local Process: npx / uvx / node / python / docker)':
+      'Stdio (로컬 프로세스: npx / uvx / node / python / docker)',
+    'Streamable HTTP / Remote URL': 'Streamable HTTP / 원격 URL',
+    'Remote MCP Server URL (http:// or https://)': '원격 MCP 서버 URL (http:// 또는 https://)',
+    'HTTP Headers (One "Header: Value" per line or JSON object)':
+      'HTTP 헤더 (줄당 하나의 "Header: Value" 또는 JSON 객체)',
+    'Command Executable': '실행 명령어 (Executable)',
+    'Working Directory (cwd, optional)': '작업 디렉터리 (cwd, 선택 사항)',
+    'e.g. D:/projects/my-server': '예: D:/projects/my-server',
+    'Arguments (One argument per line, or JSON array ["arg1", "arg2"])':
+      '인자 (줄당 하나의 인자 또는 JSON 배열 ["arg1", "arg2"])',
+    'Environment Variables (One KEY=VALUE per line, or JSON object)':
+      '환경 변수 (줄당 하나의 KEY=VALUE 또는 JSON 객체)',
+    'Save as disabled initially': '초기에 비활성화 상태로 저장',
+    'Save & Connect Server': '서버 저장 및 연결',
+    'Open in Explorer': '탐색기에서 열기',
+    'Format JSON': 'JSON 정렬',
+    'Save mcp_config.json & Refresh': 'mcp_config.json 저장 및 새로고침',
+    'Refreshing MCP servers...': 'MCP 서버 새로고침 중...',
+    'MCP servers refreshed.': 'MCP 서버가 새로고침되었습니다.',
+    'Formatted JSON.': 'JSON 형식을 정렬했습니다.',
+    'Saved mcp_config.json and refreshed MCP servers.':
+      'mcp_config.json을 저장하고 MCP 서버를 새로고침했습니다.',
+    'Failed to save server': '서버 저장에 실패했습니다',
+    'Please enter an MCP server URL, package name, command, or JSON snippet.':
+      'MCP 서버 URL, 패키지 이름, 명령어 또는 JSON 조각을 입력해 주세요.',
+    'Invalid URL format.': '잘못된 URL 형식입니다.',
+    'Could not recognize MCP server address or command.':
+      'MCP 서버 주소 또는 명령어를 인식할 수 없습니다.',
+    'Server name is required (e.g. "filesystem" or "my-mcp-server").':
+      '서버 이름은 필수입니다 (예: "filesystem" 또는 "my-mcp-server").',
+    'Server name may only contain letters, numbers, hyphens (-), underscores (_), and dots (.).':
+      '서버 이름에는 영문자, 숫자, 하이픈(-), 밑줄(_), 마침표(.)만 사용할 수 있습니다.',
+    'Remote MCP Server URL is required for Streamable HTTP transport.':
+      'Streamable HTTP 전송 방식에는 원격 MCP 서버 URL이 필수입니다.',
+    'Remote MCP Server URL must start with http:// or https://.':
+      '원격 MCP 서버 URL은 http:// 또는 https://로 시작해야 합니다.',
+    'Executable command is required for Stdio transport (e.g. "npx", "node", "uvx").':
+      'Stdio 전송 방식에는 실행 명령어가 필수입니다 (예: "npx", "node", "uvx").',
+    'MCP config root must be a JSON object.': 'MCP 설정 최상위 루트는 JSON 객체여야 합니다.',
+    '"mcpServers" must be a JSON object mapping server names to configurations.':
+      '"mcpServers"는 서버 이름을 설정에 매핑하는 JSON 객체여야 합니다.',
   };
 
   function formatDurationKo(rawDur) {
@@ -1528,6 +1627,87 @@
 
     m = t.match(/^(\d+)\s+servers?\s+enabled$/i);
     if (m) return `서버 ${m[1]}개 활성화됨`;
+
+    // Antigravity Custom MCP Server Manager dynamic patterns
+    m = t.match(/^Custom Servers:\s*(\d+)\s*\|\s*Active Runtime States:\s*(\d+)$/i);
+    if (m) return `커스텀 서버: ${m[1]}개 | 활성 런타임 상태: ${m[2]}개`;
+
+    m = t.match(/^Tools\s*\((\d+)\)\s*—\s*click a tool chip to enable\/disable it in mcp_config\.json:$/i);
+    if (m) return `도구 (${m[1]}개) — 도구 칩을 클릭해 mcp_config.json에서 활성화/비활성화:`;
+
+    m = t.match(/^Tools\s*\((\d+)\):$/i);
+    if (m) return `도구 (${m[1]}개):`;
+
+    m = t.match(/^Saving\s+(\d+)\s+MCP\s+servers\s*\((.+)\)\.\.\.$/i);
+    if (m) return `MCP 서버 ${m[1]}개 저장 중 (${m[2]})...`;
+
+    m = t.match(/^Automatically configured and connected\s+(\d+)\s+servers:\s*(.+)\.$/i);
+    if (m) return `서버 ${m[1]}개를 자동으로 설정하고 연결했습니다: ${m[2]}.`;
+
+    m = t.match(/^Auto-configuring\s+"(.+)"\.\.\.$/i);
+    if (m) return `"${m[1]}" 자동 설정 중...`;
+
+    m = t.match(/^Automatically added and connected\s+"(.+)"\.$/i);
+    if (m) return `"${m[1]}" 서버를 자동으로 추가하고 연결했습니다.`;
+
+    m = t.match(
+      /^Auto-filled form for\s+"(.+)"\.\s*Review or add env vars below,\s*then click Save & Connect Server\.$/i
+    );
+    if (m) {
+      return `"${m[1]}" 서버 폼을 자동으로 채웠습니다. 아래에서 환경 변수를 검토하거나 추가한 뒤 [서버 저장 및 연결]을 클릭하세요.`;
+    }
+
+    m = t.match(/^Server\s+"(.+)"\s+(enabled|disabled)\.$/i);
+    if (m) return `"${m[1]}" 서버가 ${m[2].toLowerCase() === 'enabled' ? '활성화' : '비활성화'}되었습니다.`;
+
+    m = t.match(/^Restarting\s+"(.+)"\.\.\.$/i);
+    if (m) return `"${m[1]}" 재시작 중...`;
+
+    m = t.match(/^Restarted\s+"(.+)"\.$/i);
+    if (m) return `"${m[1]}" 서버를 재시작했습니다.`;
+
+    m = t.match(/^Removed custom server\s+"(.+)"\.$/i);
+    if (m) return `"${m[1]}" 커스텀 서버를 삭제했습니다.`;
+
+    m = t.match(/^Tool\s+"(.+)"\s+on\s+"(.+)"\s+(enabled|disabled)\.$/i);
+    if (m) {
+      return `"${m[2]}" 서버의 "${m[1]}" 도구가 ${m[3].toLowerCase() === 'enabled' ? '활성화' : '비활성화'}되었습니다.`;
+    }
+
+    m = t.match(/^Loaded preset\s+"(.+)"\.\s*Review placeholders before saving\.$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `"${inner}" 프리셋을 불러왔습니다. 저장하기 전에 입력값을 확인하세요.`;
+    }
+
+    m = t.match(/^Saving\s+"(.+)"\s+to\s+mcp_config\.json\.\.\.$/i);
+    if (m) return `mcp_config.json에 "${m[1]}" 저장 중...`;
+
+    m = t.match(/^Saved and triggered reload for\s+"(.+)"\.$/i);
+    if (m) return `"${m[1]}" 서버를 저장하고 다시 불러왔습니다.`;
+
+    m = t.match(/^Failed to load MCP configuration:\s*(.+)$/i);
+    if (m) return `MCP 설정을 불러오지 못했습니다: ${m[1]}`;
+
+    m = t.match(/^Failed to\s+(toggle|delete)\s+"(.+)":\s*(.+)$/i);
+    if (m) {
+      return `"${m[2]}" 서버 ${m[1].toLowerCase() === 'toggle' ? '상태 전환' : '삭제'} 실패: ${m[3]}`;
+    }
+
+    m = t.match(/^Failed to toggle tool:\s*(.+)$/i);
+    if (m) return `도구 상태 전환 실패: ${m[1]}`;
+
+    m = t.match(/^Invalid JSON(?: input)?:\s*(.+)$/i);
+    if (m) return `잘못된 JSON 형식: ${m[1]}`;
+
+    m = t.match(/^Server\s+"(.+)"\s+configuration must be a JSON object\.$/i);
+    if (m) return `"${m[1]}" 서버 설정은 JSON 객체여야 합니다.`;
+
+    m = t.match(/^Server\s+"(.+)"\s+must specify either "command"\s*\(Stdio\)\s*or "url"\s*\(Streamable HTTP\)\.$/i);
+    if (m) return `"${m[1]}" 서버는 "command"(Stdio) 또는 "url"(Streamable HTTP) 중 하나를 지정해야 합니다.`;
+
+    m = t.match(/^Error:\s*(.+)$/i);
+    if (m) return `오류: ${m[1]}`;
 
     // Thinking / Worked duration headers
     m = t.match(/^Thought for\s+(.+)$/i);
@@ -3778,6 +3958,24 @@
     if (el.closest(selector)) {
       return true;
     }
+    if (
+      !forAttributes &&
+      el.classList &&
+      (el.classList.contains('agy-mcp-server-name') || el.classList.contains('agy-mcp-tool-chip'))
+    ) {
+      return true;
+    }
+    if (!forAttributes && el.classList && el.classList.contains('agy-mcp-cmd-preview')) {
+      const txt = (el.textContent || '').trim();
+      if (
+        txt !== '(managed by plugin)' &&
+        txt !== '(플러그인에서 관리됨)' &&
+        txt !== '(empty command)' &&
+        txt !== '(빈 명령어)'
+      ) {
+        return true;
+      }
+    }
     const testId = el.getAttribute('data-testid') || el.closest('[data-testid]')?.getAttribute('data-testid');
     if (testId === 'conversation-row-sidebar') {
       if (forAttributes && el.tagName === 'BUTTON') return false;
@@ -4514,6 +4712,11 @@
     inFastScan = true;
     try {
       scanTriggerButtonsSync();
+      const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');
+      if (mcpModal) localizeStaticUiInRoot(mcpModal);
+      if (document.querySelectorAll) {
+        document.querySelectorAll('[data-agy-custom-mcp-btn]').forEach((el) => localizeStaticUiInRoot(el));
+      }
       const allCursorEdits = document.querySelectorAll('.cursor-edit');
       for (const cursorEdit of allCursorEdits) {
         const container = cursorEdit.closest('.relative') || cursorEdit.parentElement;

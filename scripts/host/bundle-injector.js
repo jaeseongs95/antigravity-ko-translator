@@ -38,7 +38,7 @@ function assembleRendererSourceFromModules() {
     `// ==UserScript==\n` +
     `// @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)\n` +
     `// @namespace    https://github.com/jaeseongs95/antigravity-ko-translator\n` +
-    `// @version      1.2.15\n` +
+    `// @version      1.2.16\n` +
     `// @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.\n` +
     `// @match        https://antigravity.google.com/*\n` +
     `// @match        https://*.antigravity.google.com/*\n` +
@@ -101,7 +101,9 @@ function syncCombinedAutoinject(pretranslateEnabled = false, translationProvider
   const bIdx = baseCode.indexOf(BEGIN_MARKER);
   const eIdx = baseCode.indexOf(END_MARKER);
   if (bIdx !== -1 && eIdx !== -1 && eIdx > bIdx) {
-    baseCode = baseCode.slice(0, bIdx).trimEnd();
+    const before = baseCode.slice(0, bIdx).trimEnd();
+    const after = baseCode.slice(eIdx + END_MARKER.length).trim();
+    baseCode = after ? `${before}\n\n${after}` : before;
   } else {
     baseCode = baseCode.trimEnd();
   }

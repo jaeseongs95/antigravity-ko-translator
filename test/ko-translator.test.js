@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.10';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.11';"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
   assert.ok(bundleCode.includes("ensureVerboseConversationStepsEnabled"));
   assert.ok(bundleCode.includes("'verboseConversationSteps'"));
@@ -220,6 +220,38 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(dictSandbox.translateStaticUiSync('Analyzing main.js'), '분석 중: main.js');
   assert.equal(dictSandbox.translateStaticUiSync('Running npm test'), '실행 중: npm test');
 
+  // 3b. Antigravity Custom MCP Server Manager (#agy-mcp-manager-modal-backdrop & Customizations injected buttons) static & dynamic localization
+  assert.equal(dictSandbox.translateStaticUiSync('🔌 Antigravity Custom MCP Server Manager'), '🔌 Antigravity 커스텀 MCP 서버 매니저');
+  assert.equal(dictSandbox.translateStaticUiSync('Native RPC Bridge'), '네이티브 RPC 브리지');
+  assert.equal(dictSandbox.translateStaticUiSync('Servers & Tools'), '서버 및 도구');
+  assert.equal(dictSandbox.translateStaticUiSync('+ Add / Edit Server'), '+ 서버 추가 / 편집');
+  assert.equal(dictSandbox.translateStaticUiSync('{ } Raw mcp_config.json'), '{ } mcp_config.json 원문');
+  assert.equal(dictSandbox.translateStaticUiSync('+ Custom MCP'), '+ 커스텀 MCP');
+  assert.equal(dictSandbox.translateStaticUiSync('+ Add Custom MCP Server'), '+ 커스텀 MCP 서버 추가');
+  assert.equal(dictSandbox.translateStaticUiSync('Manage Custom Servers'), '커스텀 서버 관리');
+  assert.equal(dictSandbox.translateStaticUiSync('{ } Edit mcp_config.json'), '{ } mcp_config.json 편집');
+  assert.equal(
+    dictSandbox.translateStaticUiSync('⚡ Quick Auto-Add (Enter MCP Server URL, GitHub/npm Address, Command, or JSON):'),
+    '⚡ 빠른 자동 추가 (MCP 서버 URL, GitHub/npm 주소, 명령어 또는 JSON 입력):'
+  );
+  assert.equal(dictSandbox.translateStaticUiSync('Auto-Add & Connect'), '자동 추가 및 연결');
+  assert.equal(dictSandbox.translateStaticUiSync('Auto-Fill Form'), '폼 자동 채우기');
+  assert.equal(dictSandbox.translateStaticUiSync('↻ Refresh All Servers'), '↻ 모든 서버 새로고침');
+  assert.equal(dictSandbox.translateStaticUiSync('Save & Connect Server'), '서버 저장 및 연결');
+  assert.equal(dictSandbox.translateStaticUiSync('Save mcp_config.json & Refresh'), 'mcp_config.json 저장 및 새로고침');
+  assert.equal(dictSandbox.translateStaticUiSync('Custom Servers: 3 | Active Runtime States: 5'), '커스텀 서버: 3개 | 활성 런타임 상태: 5개');
+  assert.equal(
+    dictSandbox.translateStaticUiSync('Tools (8) — click a tool chip to enable/disable it in mcp_config.json:'),
+    '도구 (8개) — 도구 칩을 클릭해 mcp_config.json에서 활성화/비활성화:'
+  );
+  assert.equal(dictSandbox.translateStaticUiSync('Automatically added and connected "playwright".'), '"playwright" 서버를 자동으로 추가하고 연결했습니다.');
+  assert.equal(dictSandbox.translateStaticUiSync('Server "filesystem" enabled.'), '"filesystem" 서버가 활성화되었습니다.');
+  assert.equal(dictSandbox.translateStaticUiSync('Tool "read_file" on "filesystem" disabled.'), '"filesystem" 서버의 "read_file" 도구가 비활성화되었습니다.');
+  assert.equal(
+    dictSandbox.translateStaticUiSync('Loaded preset "📁 Filesystem". Review placeholders before saving.'),
+    '"📁 파일시스템 (Filesystem)" 프리셋을 불러왔습니다. 저장하기 전에 입력값을 확인하세요.'
+  );
+
   // 4. Remote Control defaults to google-translate and local-llm falls back to google-translate when unreachable
   const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
   const mod04 = fs.readFileSync(path.join(RENDERER_DIR, '04-translation-adapters.js'), 'utf8');
@@ -272,6 +304,9 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(mod08.includes('scanTimerScheduled = true'), 'must coalesce full-DOM localizeStaticUiInRoot via 16ms timer');
   assert.ok(mod08.includes('__JETSKI_LS_CLIENT_DECORATOR__'), 'must pre-hook __JETSKI_LS_CLIENT_DECORATOR__ on promoted Mobile Chrome iframe');
   assert.ok(mod08.includes('height:100dvh'), 'must enforce 100dvh viewport on Mobile Chrome remote iframe');
+  assert.ok(mod08.includes("el.classList.contains('agy-mcp-server-name')"), 'must exclude .agy-mcp-server-name from static UI text node translation');
+  assert.ok(mod08.includes("el.classList.contains('agy-mcp-tool-chip')"), 'must exclude .agy-mcp-tool-chip from static UI text node translation');
+  assert.ok(mod08.includes("const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');"), 'must localize #agy-mcp-manager-modal-backdrop synchronously in fast scan');
   const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
   assert.ok(mod06.includes('@media (max-width: 640px)'), 'must include mobile responsive rules for translator modal');
   assert.ok(mod06.includes('.agy-ko-card') && mod06.includes('.agy-ko-title') && mod06.includes('.agy-ko-desc'), 'must use self-contained CSS layout classes for Tailwind-less Remote Control host');
