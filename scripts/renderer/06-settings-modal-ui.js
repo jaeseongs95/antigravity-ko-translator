@@ -763,8 +763,14 @@
     if (legacyCard) legacyCard.remove();
 
     // 2. Inject dedicated '한글 번역' nav tab in left sidebar of Settings modal
-    const modelsNavBtn = modal.querySelector('button[data-testid="settings-nav-item-Models"]');
-    const navGroup = modelsNavBtn ? modelsNavBtn.closest('.flex.flex-col.gap-0\\.5') || modelsNavBtn.parentElement?.parentElement : null;
+    const modelsNavBtn =
+      modal.querySelector('button[data-testid="settings-nav-item-Models"]') ||
+      modal.querySelector('button[data-testid^="settings-nav-item-"]');
+    const navGroup = modelsNavBtn
+      ? modelsNavBtn.closest('.flex.flex-col.gap-0\\.5') ||
+        modelsNavBtn.parentElement?.parentElement ||
+        modelsNavBtn.parentElement
+      : null;
     if (navGroup && !modal.querySelector('button[data-testid="settings-nav-item-KoTranslator"]')) {
       const navWrap = document.createElement('div');
       navWrap.className = 'relative group/nav-item mx-2 agy-ko-settings-root';

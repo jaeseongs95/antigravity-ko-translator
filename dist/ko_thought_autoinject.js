@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.20
+// @version      1.2.21
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.15';
+  const KO_LOCALIZER_VERSION = 'v13.16';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -688,6 +688,19 @@
     // Settings -> General & Permissions
     'Configure agent execution, queued message delivery, and permissions.':
       '에이전트 실행, 대기열 메시지 전송 방식 및 권한을 설정합니다.',
+    'Configure what the agent can do in local and remote conversations. ':
+      '로컬 및 원격 대화에서 에이전트가 수행할 수 있는 작업 권한을 설정합니다. ',
+    'This Computer': '이 컴퓨터',
+    'Remote': '원격',
+    'Remote Conversations': '원격 대화',
+    'Controls permissions for remote conversations.': '원격 대화에 대한 권한을 제어합니다.',
+    'Local Permissions': '로컬 권한',
+    'Permission Details': '권한 세부 정보',
+    'Your agent’s ability to execute commands is also controlled by enterprise security policies.':
+      '에이전트의 명령어 실행 권한은 엔터프라이즈 보안 정책에 의해서도 제어됩니다.',
+    'Your agent\'s ability to execute commands is also controlled by enterprise security policies.':
+      '에이전트의 명령어 실행 권한은 엔터프라이즈 보안 정책에 의해서도 제어됩니다.',
+    'Terminal sandbox is not supported in this environment': '이 환경에서는 터미널 샌드박스가 지원되지 않습니다',
     'Global Permissions': '전역 권한',
     'Configure global allowed and denied resource permissions.':
       '전역 허용 및 차단 리소스 권한을 설정합니다.',
@@ -805,6 +818,33 @@
       '입력창 하단 모드 드롭다운에 자율 실행 모드 스위치를 추가합니다. 활성화 시 에이전트가 질문이나 추가 권한 요청 없이 비대화형으로 실행됩니다.',
 
     // Settings -> Browser
+    'Browser Subagent': '브라우저 서브에이전트',
+    'Browser Subagent Viewer': '브라우저 서브에이전트 뷰어',
+    'Browser Task': '브라우저 작업',
+    'Built-in Browser': '내장 브라우저',
+    'Side Panel Preview': '사이드 패널 미리보기',
+    'Configure link opening and built-in browser preferences.': '링크 열기 방식 및 내장 브라우저 환경설정을 구성합니다.',
+    'Download Location': '다운로드 위치',
+    'Folder where files downloaded in the built-in browser are saved.': '내장 브라우저에서 다운로드한 파일이 저장되는 폴더입니다.',
+    'Change…': '변경…',
+    'Browsing History': '브라우징 기록',
+    'Clear visited URLs and autocomplete suggestions from the built-in browser.':
+      '내장 브라우저의 방문 URL 기록과 자동 완성 추천 항목을 지웁니다.',
+    'Clear visited URLs and autocomplete suggestions from side panel preview.':
+      '사이드 패널 미리보기의 방문 URL 기록과 자동 완성 추천 항목을 지웁니다.',
+    'Browser Actuation Permissions': '브라우저 조작 권한',
+    'Execute URLs': '실행 허용 URL',
+    'Allow/deny agent browser actuation access to specific URLs.':
+      '특정 URL에 대한 에이전트의 브라우저 조작 접근을 허용하거나 차단합니다.',
+    'New Conversation Button': '새 대화 버튼 동작',
+    'Which workspace the New Conversation button and keyboard shortcut start you in.':
+      '새 대화 버튼 및 단축키 실행 시 시작할 기본 작업공간을 설정합니다.',
+    'New Workspace': '새 작업공간',
+    'No Project': '프로젝트 없음',
+    'Last Workspace': '마지막 작업공간',
+    'Create a new workspace from your first message.': '첫 메시지에서 새 작업공간을 생성합니다.',
+    'Start without a workspace, for general questions.': '일반적인 질문을 위해 작업공간 없이 시작합니다.',
+    'Reuse your last workspace.': '마지막으로 사용한 작업공간을 다시 사용합니다.',
     'Configure the browser subagent. It requires': '브라우저 서브에이전트를 설정합니다. 사용하려면',
     'to be installed. The browser subagent can be invoked by typing /browser in the conversation input box.':
       '설치가 필요합니다. 대화 입력창에 /browser를 입력해 브라우저 서브에이전트를 호출할 수 있습니다.',
@@ -3793,8 +3833,14 @@
     if (legacyCard) legacyCard.remove();
 
     // 2. Inject dedicated '한글 번역' nav tab in left sidebar of Settings modal
-    const modelsNavBtn = modal.querySelector('button[data-testid="settings-nav-item-Models"]');
-    const navGroup = modelsNavBtn ? modelsNavBtn.closest('.flex.flex-col.gap-0\\.5') || modelsNavBtn.parentElement?.parentElement : null;
+    const modelsNavBtn =
+      modal.querySelector('button[data-testid="settings-nav-item-Models"]') ||
+      modal.querySelector('button[data-testid^="settings-nav-item-"]');
+    const navGroup = modelsNavBtn
+      ? modelsNavBtn.closest('.flex.flex-col.gap-0\\.5') ||
+        modelsNavBtn.parentElement?.parentElement ||
+        modelsNavBtn.parentElement
+      : null;
     if (navGroup && !modal.querySelector('button[data-testid="settings-nav-item-KoTranslator"]')) {
       const navWrap = document.createElement('div');
       navWrap.className = 'relative group/nav-item mx-2 agy-ko-settings-root';
@@ -5060,14 +5106,58 @@
     if (window.__agyRemoteControlInstance && !window.__agyRemoteControlInstance.destroyed) {
       return window.__agyRemoteControlInstance;
     }
-    if (rcEl && rcEl.__ngContext__) {
-      const ctx = rcEl.__ngContext__;
-      const list = Array.isArray(ctx) ? ctx : Array.isArray(ctx.lView) ? ctx.lView : [ctx.component, ctx];
-      for (const item of list) {
-        if (item && typeof item === 'object' && typeof item.proxyCommand === 'function') {
-          window.__agyRemoteControlInstance = item;
-          return item;
+    const isRcInstance = (obj) =>
+      Boolean(
+        obj &&
+          typeof obj === 'object' &&
+          !obj.destroyed &&
+          (typeof obj.proxyCommand === 'function' ||
+            typeof obj.onIframeLoad === 'function' ||
+            typeof obj.handleIframeMessage === 'function')
+      );
+    const searchNgContext = (ctx) => {
+      if (!ctx || typeof ctx !== 'object') return null;
+      if (isRcInstance(ctx)) return ctx;
+      if (isRcInstance(ctx.component)) return ctx.component;
+      const visited = new Set();
+      const queue = [ctx];
+      let steps = 0;
+      while (queue.length > 0 && steps < 250) {
+        const cur = queue.shift();
+        if (!cur || typeof cur !== 'object' || visited.has(cur)) continue;
+        visited.add(cur);
+        steps++;
+        if (isRcInstance(cur)) return cur;
+        if (Array.isArray(cur)) {
+          for (let i = 0; i < Math.min(cur.length, 60); i++) {
+            const item = cur[i];
+            if (isRcInstance(item)) return item;
+            if (item && typeof item === 'object') queue.push(item);
+          }
+        } else {
+          for (const k of ['component', 'lView', 'data', 'context', '_lView']) {
+            if (cur[k] && typeof cur[k] === 'object') queue.push(cur[k]);
+          }
         }
+      }
+      return null;
+    };
+    if (rcEl) {
+      const ngFn = window.ng && typeof window.ng.getComponent === 'function' ? window.ng.getComponent : null;
+      if (ngFn) {
+        try {
+          const comp = ngFn(rcEl);
+          if (isRcInstance(comp)) {
+            window.__agyRemoteControlInstance = comp;
+            return comp;
+          }
+        } catch (e) {}
+      }
+      const ctxKey = Object.keys(rcEl).find((k) => k.startsWith('__ngContext'));
+      const found = searchNgContext(rcEl.__ngContext__ || (ctxKey ? rcEl[ctxKey] : null));
+      if (found) {
+        window.__agyRemoteControlInstance = found;
+        return found;
       }
     }
     const nsRoot = window.default_GoogleAntigravity;
@@ -5076,15 +5166,31 @@
         const mod = nsRoot[k];
         if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) continue;
         const RC = mod.RemoteControlComponent || (typeof mod.prototype?.proxyCommand === 'function' ? mod : null);
-        if (RC && RC.prototype && typeof RC.prototype.handleIframeMessage === 'function') {
+        if (RC && RC.prototype) {
           if (!RC.prototype.__agyKoProbeHooked) {
             RC.prototype.__agyKoProbeHooked = true;
-            const origMsg = RC.prototype.handleIframeMessage;
-            RC.prototype.handleIframeMessage = function (ev) {
-              window.__agyRemoteControlInstance = this;
-              if (ev && ev.data === '__agy_ko_probe__') return;
-              return origMsg.apply(this, arguments);
-            };
+            for (const mName of [
+              'handleIframeMessage',
+              'proxyCommand',
+              'streamProxyCommand',
+              'handlePortRequest',
+              'managePolling',
+              'shouldPoll',
+              'loadInstances',
+              'isDisconnected',
+              'onIframeLoad',
+            ]) {
+              if (typeof RC.prototype[mName] === 'function') {
+                const origFn = RC.prototype[mName];
+                RC.prototype[mName] = function (ev) {
+                  if (this && !this.destroyed) {
+                    window.__agyRemoteControlInstance = this;
+                  }
+                  if (mName === 'handleIframeMessage' && ev && ev.data === '__agy_ko_probe__') return;
+                  return origFn.apply(this, arguments);
+                };
+              }
+            }
           }
           try {
             if (typeof MessageEvent === 'function') {
@@ -5098,6 +5204,25 @@
     return window.__agyRemoteControlInstance && !window.__agyRemoteControlInstance.destroyed
       ? window.__agyRemoteControlInstance
       : null;
+  }
+
+  function decodeBase64Utf8(b64) {
+    if (!b64 || typeof b64 !== 'string') return '';
+    try {
+      if (typeof Buffer !== 'undefined' && typeof Buffer.from === 'function') {
+        return Buffer.from(b64, 'base64').toString('utf8');
+      }
+      if (typeof atob === 'function') {
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i) & 0xff;
+        if (typeof TextDecoder === 'function') {
+          return new TextDecoder('utf-8').decode(bytes);
+        }
+        return decodeURIComponent(escape(bin));
+      }
+    } catch (e) {}
+    return '';
   }
 
   function extractCompanionBlock(text, startMarkers, endMarkers) {
@@ -5137,12 +5262,18 @@
     };
     if (window.__agyHostInstalledPlugins && typeof window.__agyHostInstalledPlugins === 'object') {
       const override = window.__agyHostInstalledPlugins;
-      info.resolved = true;
-      info.statusbarInstalled = Boolean(override.statusbar || override['antigravity-statusbar']);
-      info.mcpManagerInstalled = Boolean(override.mcpManager || override['antigravity-mcp-manager']);
-      info.statusbarCode = String(override.statusbarCode || '');
-      info.mcpManagerCode = String(override.mcpManagerCode || '');
-      return info;
+      info.resolved = Boolean(override.resolved !== false);
+      info.statusbarInstalled = Boolean(
+        override.statusbar || override.hasStatusbar || override['antigravity-statusbar']
+      );
+      info.mcpManagerInstalled = Boolean(
+        override.mcpManager || override.hasMcpManager || override['antigravity-mcp-manager']
+      );
+      info.statusbarCode = String(override.statusbarCode || override.statusbarBlock || '');
+      info.mcpManagerCode = String(override.mcpManagerCode || override.mcpManagerBlock || '');
+      if (info.resolved && (info.statusbarInstalled || info.mcpManagerInstalled || override.statusbar !== undefined || override.mcpManager !== undefined)) {
+        return info;
+      }
     }
 
     const iframe = rcEl && rcEl.querySelector ? rcEl.querySelector('iframe') : null;
@@ -5151,63 +5282,180 @@
       window.__agyCapturedLsClient ||
       (cw && cw.__agyCapturedLsClient) ||
       null;
-    if (!lsClient) return info;
+    const rcInst = getRemoteControlComponentInstance(rcEl);
+    if (!lsClient && (!rcInst || typeof rcInst.proxyCommand !== 'function')) return info;
 
-    const callRpc = async (methods, payload = {}) => {
-      for (const m of methods) {
-        if (typeof lsClient[m] === 'function') {
-          try {
-            return await lsClient[m](payload);
-          } catch (e) {}
+    const callRpc = async (methods, rpcPath, payload = {}) => {
+      if (lsClient) {
+        for (const m of methods) {
+          if (typeof lsClient[m] === 'function') {
+            try {
+              const res = await lsClient[m](payload);
+              if (res) return res;
+            } catch (e) {}
+          }
         }
+      }
+      if (rcInst && typeof rcInst.proxyCommand === 'function' && rpcPath) {
+        try {
+          const TE = typeof TextEncoder === 'function' ? new TextEncoder() : null;
+          const TD = typeof TextDecoder === 'function' ? new TextDecoder('utf-8') : null;
+          const reqStr = JSON.stringify(payload || {});
+          const reqBytes = TE
+            ? TE.encode(reqStr)
+            : Uint8Array.from(reqStr.split('').map((c) => c.charCodeAt(0) & 0xff));
+          const res = await rcInst.proxyCommand(rpcPath, reqBytes);
+          if (res && res.payload) {
+            const text = TD
+              ? TD.decode(res.payload)
+              : String.fromCharCode(...new Uint8Array(res.payload));
+            if (text) return JSON.parse(text);
+          }
+        } catch (e) {}
       }
       return null;
     };
 
+    const applyRawBundleInspection = (rawText) => {
+      if (!rawText || typeof rawText !== 'string') return;
+      info.resolved = true;
+      const sbCode = extractCompanionBlock(
+        rawText,
+        ['/* === BEGIN_AGY_STATUSBAR === */', '// === BEGIN_AGY_STATUSBAR ==='],
+        ['/* === END_AGY_STATUSBAR === */', '// === END_AGY_STATUSBAR ===']
+      );
+      const mcpCode = extractCompanionBlock(
+        rawText,
+        [
+          '// === BEGIN_AGY_MCP_MANAGER_V1 ===',
+          '/* === BEGIN_AGY_MCP_MANAGER_V1 === */',
+          '// === BEGIN_AGY_MCP_MANAGER ===',
+          '/* === BEGIN_AGY_MCP_MANAGER === */',
+        ],
+        [
+          '// === END_AGY_MCP_MANAGER_V1 ===',
+          '/* === END_AGY_MCP_MANAGER_V1 === */',
+          '// === END_AGY_MCP_MANAGER ===',
+          '/* === END_AGY_MCP_MANAGER === */',
+        ]
+      );
+      if (
+        sbCode ||
+        rawText.includes('mountStatusBar') ||
+        rawText.includes('mountContextStatusBar') ||
+        rawText.includes('agy-ctx-statusbar')
+      ) {
+        info.statusbarInstalled = true;
+        if (sbCode) info.statusbarCode = sbCode;
+      }
+      if (mcpCode || rawText.includes('mountMcpManager') || rawText.includes('agyMcpManager')) {
+        info.mcpManagerInstalled = true;
+        if (mcpCode) info.mcpManagerCode = mcpCode;
+      }
+    };
+
     try {
-      const userRes = await callRpc(['getLocalUserInfo', 'GetLocalUserInfo'], {});
-      const homeDir = String(
+      const userRes = await callRpc(['getLocalUserInfo', 'GetLocalUserInfo'], null, {});
+      let homeDir = String(
         userRes?.homeDir || userRes?.userHome || userRes?.userInfo?.homeDir || ''
-      ).replace(/\\/g, '/').replace(/\/+$/, '');
+      )
+        .replace(/\\/g, '/')
+        .replace(/\/+$/, '');
       if (homeDir) {
         const bundlePath = `${homeDir}/.gemini/antigravity/statusbar_autoinject.js`;
-        const fileRes = await callRpc(['readFile', 'ReadFile', 'viewFile', 'ViewFile'], {
-          path: bundlePath,
-          filePath: bundlePath,
-          absolutePath: bundlePath,
-        });
-        const rawText = String(fileRes?.content || fileRes?.text || fileRes?.data || '');
-        if (rawText) {
-          info.resolved = true;
-          const sbCode = extractCompanionBlock(
-            rawText,
-            ['/* === BEGIN_AGY_STATUSBAR === */', '// === BEGIN_AGY_STATUSBAR ==='],
-            ['/* === END_AGY_STATUSBAR === */', '// === END_AGY_STATUSBAR ===']
-          );
-          const mcpCode = extractCompanionBlock(
-            rawText,
-            ['// === BEGIN_AGY_MCP_MANAGER ===', '/* === BEGIN_AGY_MCP_MANAGER === */'],
-            ['// === END_AGY_MCP_MANAGER ===', '/* === END_AGY_MCP_MANAGER === */']
-          );
-          if (sbCode || rawText.includes('mountContextStatusBar') || rawText.includes('agy-ctx-statusbar')) {
-            info.statusbarInstalled = true;
-            info.statusbarCode = sbCode;
+        const fileRes = await callRpc(
+          ['readFile', 'ReadFile', 'viewFile', 'ViewFile'],
+          '/exa.language_server_pb.LanguageServerService/ReadFile',
+          {
+            uri: bundlePath.startsWith('/') ? `file://${bundlePath}` : `file:///${bundlePath}`,
+            path: bundlePath,
+            filePath: bundlePath,
+            absolutePath: bundlePath,
           }
-          if (mcpCode || rawText.includes('mountMcpManager') || rawText.includes('agyMcpManager')) {
-            info.mcpManagerInstalled = true;
-            info.mcpManagerCode = mcpCode;
+        );
+        const rawContent = String(fileRes?.content || fileRes?.text || fileRes?.data || '');
+        const decoded =
+          rawContent && !rawContent.includes('function') && !rawContent.includes('===')
+            ? decodeBase64Utf8(rawContent) || rawContent
+            : rawContent;
+        applyRawBundleInspection(decoded);
+      }
+
+      const [pluginsRes, statesRes] = await Promise.all([
+        callRpc(
+          ['getAllPlugins', 'GetAllPlugins'],
+          '/exa.language_server_pb.LanguageServerService/GetAllPlugins',
+          { workspaceUris: [] }
+        ),
+        callRpc(
+          ['getCustomizationStates', 'GetCustomizationStates'],
+          '/exa.language_server_pb.LanguageServerService/GetCustomizationStates',
+          {}
+        ),
+      ]);
+
+      const candidatePaths = [];
+      for (const resObj of [pluginsRes, statesRes]) {
+        if (!resObj) continue;
+        info.resolved = true;
+        const rawJson = JSON.stringify(resObj);
+        if (/antigravity-statusbar/i.test(rawJson)) info.statusbarInstalled = true;
+        if (/antigravity-mcp-manager/i.test(rawJson)) info.mcpManagerInstalled = true;
+        if (Array.isArray(resObj.plugins)) {
+          for (const p of resObj.plugins) {
+            if (p?.path) candidatePaths.push(String(p.path));
+          }
+        }
+        if (Array.isArray(resObj.states)) {
+          for (const s of resObj.states) {
+            if (s?.path) candidatePaths.push(String(s.path));
           }
         }
       }
-      const pluginsRes = await callRpc(
-        ['getAllPlugins', 'GetAllPlugins', 'getCustomizationStates', 'GetCustomizationStates'],
-        {}
-      );
-      if (pluginsRes) {
-        info.resolved = true;
-        const rawJson = JSON.stringify(pluginsRes);
-        if (/antigravity-statusbar/i.test(rawJson)) info.statusbarInstalled = true;
-        if (/antigravity-mcp-manager/i.test(rawJson)) info.mcpManagerInstalled = true;
+
+      if (!candidatePaths.length && !homeDir) {
+        const skillsRes = await callRpc(
+          ['getAllSkills', 'GetAllSkills'],
+          '/exa.language_server_pb.LanguageServerService/GetAllSkills',
+          {}
+        );
+        if (Array.isArray(skillsRes?.skills)) {
+          info.resolved = true;
+          for (const sk of skillsRes.skills) {
+            if (sk?.path) candidatePaths.push(String(sk.path));
+          }
+        }
+      }
+
+      if (!homeDir && candidatePaths.length > 0) {
+        for (const rawPath of candidatePaths) {
+          const norm = String(rawPath).replace(/^file:\/\/\/?/i, '').replace(/\\/g, '/');
+          const idx = norm.indexOf('/.gemini/');
+          if (idx !== -1) {
+            const prefix =
+              String(rawPath).startsWith('file:///') && norm.startsWith('Users/')
+                ? '/'
+                : '';
+            const geminiDir = (prefix + norm.slice(0, idx + 8)).replace(
+              /^\/+([A-Za-z]:\/)/,
+              '$1'
+            );
+            const uriPrefix = geminiDir.startsWith('/') ? 'file://' : 'file:///';
+            const uri = `${uriPrefix}${geminiDir}/antigravity/statusbar_autoinject.js`;
+            const rf = await callRpc(
+              ['readFile', 'ReadFile'],
+              '/exa.language_server_pb.LanguageServerService/ReadFile',
+              { uri, path: `${geminiDir}/antigravity/statusbar_autoinject.js` }
+            );
+            const rawContent = String(rf?.content || rf?.text || rf?.data || '');
+            const decoded =
+              rawContent && !rawContent.includes('function') && !rawContent.includes('===')
+                ? decodeBase64Utf8(rawContent) || rawContent
+                : rawContent;
+            applyRawBundleInspection(decoded);
+            break;
+          }
+        }
       }
     } catch (e) {}
 
@@ -5216,12 +5464,13 @@
 
   function syncRemoteCompanionPlugins(rcEl) {
     if (!rcEl || window.__agyKoSyncingCompanions) return;
-    const hasLsClient = Boolean(
+    const hasRpcOrOverride = Boolean(
       window.__agyCapturedLsClient ||
         rcEl.querySelector?.('iframe')?.contentWindow?.__agyCapturedLsClient ||
-        window.__agyHostInstalledPlugins
+        window.__agyHostInstalledPlugins ||
+        getRemoteControlComponentInstance(rcEl)
     );
-    if (!hasLsClient) return;
+    if (!hasRpcOrOverride) return;
     if (window.__agyKoCompanionsSynced && window.__agyHostInstalledPlugins === window.__agyLastHostInstalledPluginsRef) {
       return;
     }
@@ -5347,14 +5596,25 @@
     const cdnBaseUrl = `${cdnOrigin}${basePath}`;
 
     iframe.__agyKoPromoted = KO_LOCALIZER_VERSION;
-    const savedChildPath =
+    const savedChildPath = String(
       new URLSearchParams(window.location.search || '').get('p') ||
-      rcInst.lastSyncedChildPath ||
-      rcInst.initialChildPath ||
-      '';
+        rcInst.lastSyncedChildPath ||
+        rcInst.initialChildPath ||
+        ''
+    ).replace(/^\/+/, '');
     if (savedChildPath) {
       rcInst.initialChildPath = savedChildPath;
     }
+
+    const buildInitialIframeHistoryUrl = () => {
+      if (!savedChildPath) return `${basePath}/?iframe=true`;
+      const qIdx = savedChildPath.indexOf('?');
+      const subPath = qIdx >= 0 ? savedChildPath.slice(0, qIdx) : savedChildPath;
+      const subQuery = qIdx >= 0 ? savedChildPath.slice(qIdx + 1) : '';
+      const cleanSubPath = subPath.replace(/^\/+/, '');
+      const fullPath = cleanSubPath ? `${basePath}/${cleanSubPath}` : `${basePath}/`;
+      return subQuery ? `${fullPath}?${subQuery}&iframe=true` : `${fullPath}?iframe=true`;
+    };
 
     const origSrcDesc =
       typeof HTMLIFrameElement !== 'undefined'
@@ -5415,7 +5675,7 @@
         } catch (e) {}
 
         try {
-          cw.history.replaceState(null, '', `${basePath}/?iframe=true`);
+          cw.history.replaceState(null, '', buildInitialIframeHistoryUrl());
         } catch (e) {}
         try {
           Object.defineProperty(cd, 'referrer', {
@@ -5509,11 +5769,25 @@
             rcInst.__agyOrigOnIframeLoad ||
             rcProto?.__agyOrigOnIframeLoad ||
             rcInst.onIframeLoad;
-          if (typeof origLoad === 'function' && !cw.__initialConfigReceived) {
-            try {
-              origLoad.call(rcInst);
-            } catch (e) {}
-          }
+          const ensureInitialConfigSent = () => {
+            if (typeof origLoad === 'function' && !cw.__initialConfigReceived) {
+              if (savedChildPath) rcInst.initialChildPath = savedChildPath;
+              try {
+                origLoad.call(rcInst);
+              } catch (e) {}
+            }
+          };
+          ensureInitialConfigSent();
+          [120, 400, 1000].forEach((delay) => {
+            setTimeout(() => {
+              ensureInitialConfigSent();
+              if (savedChildPath && typeof rcInst.navigateIframeToChildPath === 'function') {
+                try {
+                  rcInst.navigateIframeToChildPath(savedChildPath);
+                } catch (e) {}
+              }
+            }, delay);
+          });
           try {
             if (typeof rcInst.markIframeReady === 'function') {
               rcInst.markIframeReady();

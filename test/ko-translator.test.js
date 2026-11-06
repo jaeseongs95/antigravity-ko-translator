@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.15';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.16';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -738,7 +738,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.15',
+      __agyKoLocalizerActive: 'v13.16',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -922,5 +922,28 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(
     mod08.includes('probeHostCompanionPluginsForRemote') && mod08.includes('info.statusbarInstalled') && mod08.includes('info.mcpManagerInstalled'),
     'D-0006: 08-dom-observer.js must verify host companion installation before loading statusbar or mcp-manager in Remote Control web'
+  );
+
+  // 11. D-0007 regression checks: Remote Control Settings strings, nested __ngContext__ BFS, initial URL query preservation, and base64 ReadFile decoding
+  const rcDictSandbox = {};
+  vm.runInNewContext(`${mod02}\n;globalThis.__translateStatic = translateStaticUiSync;`, rcDictSandbox);
+  assert.equal(rcDictSandbox.__translateStatic('This Computer'), '이 컴퓨터');
+  assert.equal(rcDictSandbox.__translateStatic('Remote'), '원격');
+  assert.equal(
+    rcDictSandbox.__translateStatic('Controls permissions for remote conversations.'),
+    '원격 대화에 대한 권한을 제어합니다.'
+  );
+  assert.equal(rcDictSandbox.__translateStatic('Browser Subagent'), '브라우저 서브에이전트');
+  assert.equal(
+    rcDictSandbox.__translateStatic('Configure what the agent can do in local and remote conversations.'),
+    '로컬 및 원격 대화에서 에이전트가 수행할 수 있는 작업 권한을 설정합니다.'
+  );
+  assert.ok(
+    mod08.includes('buildInitialIframeHistoryUrl') && mod08.includes('navigateIframeToChildPath'),
+    'D-0007: bridgeRemoteControlIframe must preserve savedChildPath query params (?settingsOpen=true&settingsScreen=General) during same-origin promotion'
+  );
+  assert.ok(
+    mod08.includes('decodeBase64Utf8') && mod08.includes('/exa.language_server_pb.LanguageServerService/ReadFile'),
+    'D-0007: probeHostCompanionPluginsForRemote must support ReadFile { uri } base64 decoding and rcInst.proxyCommand fallback'
   );
 });

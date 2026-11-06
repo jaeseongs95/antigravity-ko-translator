@@ -263,6 +263,19 @@
     // Settings -> General & Permissions
     'Configure agent execution, queued message delivery, and permissions.':
       '에이전트 실행, 대기열 메시지 전송 방식 및 권한을 설정합니다.',
+    'Configure what the agent can do in local and remote conversations. ':
+      '로컬 및 원격 대화에서 에이전트가 수행할 수 있는 작업 권한을 설정합니다. ',
+    'This Computer': '이 컴퓨터',
+    'Remote': '원격',
+    'Remote Conversations': '원격 대화',
+    'Controls permissions for remote conversations.': '원격 대화에 대한 권한을 제어합니다.',
+    'Local Permissions': '로컬 권한',
+    'Permission Details': '권한 세부 정보',
+    'Your agent’s ability to execute commands is also controlled by enterprise security policies.':
+      '에이전트의 명령어 실행 권한은 엔터프라이즈 보안 정책에 의해서도 제어됩니다.',
+    'Your agent\'s ability to execute commands is also controlled by enterprise security policies.':
+      '에이전트의 명령어 실행 권한은 엔터프라이즈 보안 정책에 의해서도 제어됩니다.',
+    'Terminal sandbox is not supported in this environment': '이 환경에서는 터미널 샌드박스가 지원되지 않습니다',
     'Global Permissions': '전역 권한',
     'Configure global allowed and denied resource permissions.':
       '전역 허용 및 차단 리소스 권한을 설정합니다.',
@@ -380,6 +393,33 @@
       '입력창 하단 모드 드롭다운에 자율 실행 모드 스위치를 추가합니다. 활성화 시 에이전트가 질문이나 추가 권한 요청 없이 비대화형으로 실행됩니다.',
 
     // Settings -> Browser
+    'Browser Subagent': '브라우저 서브에이전트',
+    'Browser Subagent Viewer': '브라우저 서브에이전트 뷰어',
+    'Browser Task': '브라우저 작업',
+    'Built-in Browser': '내장 브라우저',
+    'Side Panel Preview': '사이드 패널 미리보기',
+    'Configure link opening and built-in browser preferences.': '링크 열기 방식 및 내장 브라우저 환경설정을 구성합니다.',
+    'Download Location': '다운로드 위치',
+    'Folder where files downloaded in the built-in browser are saved.': '내장 브라우저에서 다운로드한 파일이 저장되는 폴더입니다.',
+    'Change…': '변경…',
+    'Browsing History': '브라우징 기록',
+    'Clear visited URLs and autocomplete suggestions from the built-in browser.':
+      '내장 브라우저의 방문 URL 기록과 자동 완성 추천 항목을 지웁니다.',
+    'Clear visited URLs and autocomplete suggestions from side panel preview.':
+      '사이드 패널 미리보기의 방문 URL 기록과 자동 완성 추천 항목을 지웁니다.',
+    'Browser Actuation Permissions': '브라우저 조작 권한',
+    'Execute URLs': '실행 허용 URL',
+    'Allow/deny agent browser actuation access to specific URLs.':
+      '특정 URL에 대한 에이전트의 브라우저 조작 접근을 허용하거나 차단합니다.',
+    'New Conversation Button': '새 대화 버튼 동작',
+    'Which workspace the New Conversation button and keyboard shortcut start you in.':
+      '새 대화 버튼 및 단축키 실행 시 시작할 기본 작업공간을 설정합니다.',
+    'New Workspace': '새 작업공간',
+    'No Project': '프로젝트 없음',
+    'Last Workspace': '마지막 작업공간',
+    'Create a new workspace from your first message.': '첫 메시지에서 새 작업공간을 생성합니다.',
+    'Start without a workspace, for general questions.': '일반적인 질문을 위해 작업공간 없이 시작합니다.',
+    'Reuse your last workspace.': '마지막으로 사용한 작업공간을 다시 사용합니다.',
     'Configure the browser subagent. It requires': '브라우저 서브에이전트를 설정합니다. 사용하려면',
     'to be installed. The browser subagent can be invoked by typing /browser in the conversation input box.':
       '설치가 필요합니다. 대화 입력창에 /browser를 입력해 브라우저 서브에이전트를 호출할 수 있습니다.',
