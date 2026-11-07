@@ -1126,6 +1126,60 @@
     '↻ Detect OAuth & Sign In': '↻ OAuth 감지 및 로그인',
     'Configure Custom Client ID / Advanced OAuth': 'Client ID 직접 입력 / 고급 OAuth 설정',
     'Add or manage custom OAuth / Stdio MCP servers': '사용자 지정 OAuth / Stdio MCP 서버 추가 및 관리',
+
+    // Antigravity Web Host Shell (boq-jetski: m=SIH86 HomeComponent, m=PGmR6b RemoteControlComponent, m=Mc2QKe RemoteAgentsComponent)
+    'Welcome to Antigravity': 'Antigravity에 오신 것을 환영합니다',
+    'The agentic development platform': '에이전트 기반 개발 플랫폼',
+    'Google Account': 'Google 계정',
+    'Signed in with': '로그인 계정:',
+    'Continue': '계속',
+    'Switch account': '계정 전환',
+    'Use business account': '비즈니스 계정 사용',
+    'Sign in with business account': '비즈니스 계정으로 로그인',
+    'Terms of Service': '서비스 약관',
+    'Privacy Policy': '개인정보처리방침',
+    'Remote Control': '원격 제어',
+    'Remote Control Instances': '원격 제어 인스턴스',
+    'Remote Conversations': '원격 대화',
+    'Remote agent': '원격 에이전트',
+    'New environment for each conversation': '대화마다 새 환경 생성',
+    'Connect your first instance': '첫 번째 인스턴스 연결',
+    'Run Antigravity on your machine and drive it from here.': 'PC에서 Antigravity를 실행하고 여기에서 원격으로 제어하세요.',
+    'Download Antigravity': 'Antigravity 다운로드',
+    'View the docs': '문서 보기',
+    'Using the CLI?': 'CLI를 사용하시나요?',
+    'CLI guide': 'CLI 가이드',
+    'Loading instances...': '인스턴스 불러오는 중...',
+    'Failed to load instances': '인스턴스를 불러오지 못했습니다',
+    'Dismiss': '닫기',
+    'Dismiss notification': '알림 닫기',
+    'Instance disconnected': '인스턴스 연결 끊김',
+    'Waiting for connection or Wi-Fi to resume...': '연결 또는 Wi-Fi 복구를 기다리는 중...',
+    'Connecting to instance...': '인스턴스에 연결하는 중...',
+    'No instance selected': '선택된 인스턴스 없음',
+    'Instance unavailable': '인스턴스를 사용할 수 없음',
+    'Device access revoked': '기기 접근 권한이 해제됨',
+    'Go to Instance Selector': '인스턴스 선택 화면으로 이동',
+    'Reload Instances': '인스턴스 새로고침',
+    'Install as App': '앱으로 설치',
+    'Send feedback': '의견 보내기',
+    'Dev Debug Panel': '개발 디버그 패널',
+    'Continue on': '다른 기기에서 계속',
+    'Reconnect': '다시 연결',
+    'Offline': '오프라인',
+    'Online': '온라인',
+    'Last active': '마지막 활동',
+    'Updated just now': '방금 업데이트됨',
+    'Remove instance': '인스턴스 제거',
+    'More options': '더보기 옵션',
+    'Create Project': '프로젝트 생성',
+    'New Remote Project': '새 원격 프로젝트',
+    'Project Name': '프로젝트 이름',
+    'Repository URL': '저장소 URL',
+    'Open in Hub': '허브에서 열기',
+    'Switch Roles': '역할 전환',
+    'By continuing, you agree to the': '계속 진행하면 다음에 동의하게 됩니다:',
+    'and acknowledge the': '및 확인:',
   };
 
   function formatDurationKo(rawDur) {
@@ -1636,6 +1690,24 @@
 
     // Relative time in sidebar/history
     if (t.toLowerCase() === 'now' || t.toLowerCase() === 'just now') return '방금';
+    if (t.toLowerCase() === 'updated just now') return '방금 업데이트됨';
+    m = t.match(/^Updated\s+(\d+)\s*s(?:ec(?:ond)?s?)?\s+ago$/i);
+    if (m) return `${m[1]}초 전 업데이트됨`;
+    m = t.match(/^Updated\s+(\d+)\s*m(?:in(?:ute)?s?)?\s+ago$/i);
+    if (m) return `${m[1]}분 전 업데이트됨`;
+    m = t.match(/^Updated\s+(\d+)\s*h(?:ours?|r)?\s+ago$/i);
+    if (m) return `${m[1]}시간 전 업데이트됨`;
+    m = t.match(/^Updated\s+(\d+)\s*d(?:ays?)?\s+ago$/i);
+    if (m) return `${m[1]}일 전 업데이트됨`;
+    m = t.match(/^Remove\s+(.+?)\s+from your instances\?$/i);
+    if (m) return `인스턴스 목록에서 ${m[1]} 항목을 제거하시겠습니까?`;
+    m = t.match(/^Last active[:\s]+(.+)$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `마지막 활동: ${inner}`;
+    }
+    m = t.match(/^Version\s+([0-9A-Za-z._-]+)$/i);
+    if (m) return `버전 ${m[1]}`;
     m = t.match(/^(\d+)\s*s$/i);
     if (m) return `${m[1]}초`;
     m = t.match(/^(\d+)\s*m$/i);

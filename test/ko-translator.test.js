@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.18';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.19';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -738,7 +738,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.18',
+      __agyKoLocalizerActive: 'v13.19',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -958,5 +958,74 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(
     mod08.includes('decodeBase64Utf8') && mod08.includes('/exa.language_server_pb.LanguageServerService/ReadFile'),
     'D-0007: probeHostCompanionPluginsForRemote must support ReadFile { uri } base64 decoding and rcInst.proxyCommand fallback'
+  );
+
+  // 12. D-0010 regression checks: Angular 19 LView TNode extraction & deep LView scan, INITIAL_CONFIG message buffering/replay without duplicate onIframeLoad teardown, and Web Host UI dictionary
+  assert.equal(rcDictSandbox.__translateStatic('Remote Control Instances'), '원격 제어 인스턴스');
+  assert.equal(rcDictSandbox.__translateStatic('Connect your first instance'), '첫 번째 인스턴스 연결');
+  assert.equal(rcDictSandbox.__translateStatic('New environment for each conversation'), '대화마다 새 환경 생성');
+  assert.equal(rcDictSandbox.__translateStatic('Updated 5m ago'), '5분 전 업데이트됨');
+  assert.equal(
+    rcDictSandbox.__translateStatic('Remove Lenovo-PC from your instances?'),
+    '인스턴스 목록에서 Lenovo-PC 항목을 제거하시겠습니까?'
+  );
+  assert.equal(rcDictSandbox.__translateStatic('Last active: 2h ago'), '마지막 활동: 2시간 전');
+  assert.ok(
+    mod08.includes('extractFromLContext') &&
+      mod08.includes('tNode.directiveStart + tNode.componentOffset') &&
+      mod08.includes('__agyBufferedInitialConfigEvent') &&
+      mod08.includes('__agyOnIframeLoadCalled') &&
+      mod08.includes('__agyWorkerPatched'),
+    'D-0010: 08-dom-observer.js must extract Angular 19 component via TNode directiveStart+componentOffset, buffer/replay INITIAL_CONFIG without calling onIframeLoad twice, and wrap relative Worker URLs'
+  );
+
+  // Runtime execution proof for getRemoteControlComponentInstance with deep Angular 19 LView & TNode
+  const getRcFnMatch = mod08.match(
+    /function getRemoteControlComponentInstance\(rcEl\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  function decodeBase64Utf8/
+  );
+  assert.ok(getRcFnMatch, 'getRemoteControlComponentInstance must be extractable for runtime verification');
+  const getRcFnCode = getRcFnMatch[0].replace(/\r?\n\r?\n  function decodeBase64Utf8$/, '');
+  const mockRcInstance = {
+    destroyed: false,
+    proxyCommand() {},
+    onIframeLoad() {},
+    handleIframeMessage() {},
+  };
+  // Build an Angular 19 LView with 30 heavy nested objects in header slots (0..29) and component at slot 45
+  const mockLView = new Array(60).fill(null).map((_, idx) => {
+    if (idx === 1) {
+      return {
+        data: [null, null, { directiveStart: 45, componentOffset: 0 }],
+      };
+    }
+    if (idx === 45) return mockRcInstance;
+    // Heavy nested objects that previously exhausted the 250-step BFS queue
+    return { a: { b: { c: Array.from({ length: 20 }, () => ({ x: 1 })) } } };
+  });
+  const rcSandbox = {
+    window: {
+      default_GoogleAntigravity: {
+        y: {
+          '\u0275getLContext': () => ({
+            lViewId: 2,
+            nodeIndex: 2,
+            component: undefined,
+            get lView() {
+              return mockLView;
+            },
+          }),
+        },
+      },
+    },
+    document: {
+      querySelector: () => null,
+    },
+  };
+  vm.runInNewContext(`${getRcFnCode}\n;globalThis.__getRc = getRemoteControlComponentInstance;`, rcSandbox);
+  const resolvedRc = rcSandbox.__getRc({});
+  assert.equal(
+    resolvedRc,
+    mockRcInstance,
+    'D-0010: getRemoteControlComponentInstance must extract RemoteControlComponent from Angular 19 LView TNode slot even when LContext.component is undefined and header slots contain deep objects'
   );
 });

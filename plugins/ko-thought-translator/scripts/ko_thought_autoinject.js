@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.23
+// @version      1.2.24
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.18';
+  const KO_LOCALIZER_VERSION = 'v13.19';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -1556,6 +1556,60 @@
     '↻ Detect OAuth & Sign In': '↻ OAuth 감지 및 로그인',
     'Configure Custom Client ID / Advanced OAuth': 'Client ID 직접 입력 / 고급 OAuth 설정',
     'Add or manage custom OAuth / Stdio MCP servers': '사용자 지정 OAuth / Stdio MCP 서버 추가 및 관리',
+
+    // Antigravity Web Host Shell (boq-jetski: m=SIH86 HomeComponent, m=PGmR6b RemoteControlComponent, m=Mc2QKe RemoteAgentsComponent)
+    'Welcome to Antigravity': 'Antigravity에 오신 것을 환영합니다',
+    'The agentic development platform': '에이전트 기반 개발 플랫폼',
+    'Google Account': 'Google 계정',
+    'Signed in with': '로그인 계정:',
+    'Continue': '계속',
+    'Switch account': '계정 전환',
+    'Use business account': '비즈니스 계정 사용',
+    'Sign in with business account': '비즈니스 계정으로 로그인',
+    'Terms of Service': '서비스 약관',
+    'Privacy Policy': '개인정보처리방침',
+    'Remote Control': '원격 제어',
+    'Remote Control Instances': '원격 제어 인스턴스',
+    'Remote Conversations': '원격 대화',
+    'Remote agent': '원격 에이전트',
+    'New environment for each conversation': '대화마다 새 환경 생성',
+    'Connect your first instance': '첫 번째 인스턴스 연결',
+    'Run Antigravity on your machine and drive it from here.': 'PC에서 Antigravity를 실행하고 여기에서 원격으로 제어하세요.',
+    'Download Antigravity': 'Antigravity 다운로드',
+    'View the docs': '문서 보기',
+    'Using the CLI?': 'CLI를 사용하시나요?',
+    'CLI guide': 'CLI 가이드',
+    'Loading instances...': '인스턴스 불러오는 중...',
+    'Failed to load instances': '인스턴스를 불러오지 못했습니다',
+    'Dismiss': '닫기',
+    'Dismiss notification': '알림 닫기',
+    'Instance disconnected': '인스턴스 연결 끊김',
+    'Waiting for connection or Wi-Fi to resume...': '연결 또는 Wi-Fi 복구를 기다리는 중...',
+    'Connecting to instance...': '인스턴스에 연결하는 중...',
+    'No instance selected': '선택된 인스턴스 없음',
+    'Instance unavailable': '인스턴스를 사용할 수 없음',
+    'Device access revoked': '기기 접근 권한이 해제됨',
+    'Go to Instance Selector': '인스턴스 선택 화면으로 이동',
+    'Reload Instances': '인스턴스 새로고침',
+    'Install as App': '앱으로 설치',
+    'Send feedback': '의견 보내기',
+    'Dev Debug Panel': '개발 디버그 패널',
+    'Continue on': '다른 기기에서 계속',
+    'Reconnect': '다시 연결',
+    'Offline': '오프라인',
+    'Online': '온라인',
+    'Last active': '마지막 활동',
+    'Updated just now': '방금 업데이트됨',
+    'Remove instance': '인스턴스 제거',
+    'More options': '더보기 옵션',
+    'Create Project': '프로젝트 생성',
+    'New Remote Project': '새 원격 프로젝트',
+    'Project Name': '프로젝트 이름',
+    'Repository URL': '저장소 URL',
+    'Open in Hub': '허브에서 열기',
+    'Switch Roles': '역할 전환',
+    'By continuing, you agree to the': '계속 진행하면 다음에 동의하게 됩니다:',
+    'and acknowledge the': '및 확인:',
   };
 
   function formatDurationKo(rawDur) {
@@ -2066,6 +2120,24 @@
 
     // Relative time in sidebar/history
     if (t.toLowerCase() === 'now' || t.toLowerCase() === 'just now') return '방금';
+    if (t.toLowerCase() === 'updated just now') return '방금 업데이트됨';
+    m = t.match(/^Updated\s+(\d+)\s*s(?:ec(?:ond)?s?)?\s+ago$/i);
+    if (m) return `${m[1]}초 전 업데이트됨`;
+    m = t.match(/^Updated\s+(\d+)\s*m(?:in(?:ute)?s?)?\s+ago$/i);
+    if (m) return `${m[1]}분 전 업데이트됨`;
+    m = t.match(/^Updated\s+(\d+)\s*h(?:ours?|r)?\s+ago$/i);
+    if (m) return `${m[1]}시간 전 업데이트됨`;
+    m = t.match(/^Updated\s+(\d+)\s*d(?:ays?)?\s+ago$/i);
+    if (m) return `${m[1]}일 전 업데이트됨`;
+    m = t.match(/^Remove\s+(.+?)\s+from your instances\?$/i);
+    if (m) return `인스턴스 목록에서 ${m[1]} 항목을 제거하시겠습니까?`;
+    m = t.match(/^Last active[:\s]+(.+)$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `마지막 활동: ${inner}`;
+    }
+    m = t.match(/^Version\s+([0-9A-Za-z._-]+)$/i);
+    if (m) return `버전 ${m[1]}`;
     m = t.match(/^(\d+)\s*s$/i);
     if (m) return `${m[1]}초`;
     m = t.match(/^(\d+)\s*m$/i);
@@ -5132,24 +5204,51 @@
             typeof obj.onIframeLoad === 'function' ||
             typeof obj.handleIframeMessage === 'function')
       );
+    const extractFromLContext = (lCtx) => {
+      if (!lCtx || typeof lCtx !== 'object') return null;
+      if (isRcInstance(lCtx)) return lCtx;
+      if (isRcInstance(lCtx.component)) return lCtx.component;
+      const lView = lCtx.lView;
+      if (Array.isArray(lView)) {
+        try {
+          const tView = lView[1];
+          const nodeIndex = typeof lCtx.nodeIndex === 'number' ? lCtx.nodeIndex : -1;
+          const tNode = nodeIndex >= 0 && Array.isArray(tView?.data) ? tView.data[nodeIndex] : null;
+          if (tNode && typeof tNode.directiveStart === 'number' && typeof tNode.componentOffset === 'number' && tNode.componentOffset > -1) {
+            const comp = lView[tNode.directiveStart + tNode.componentOffset];
+            if (isRcInstance(comp)) return comp;
+          }
+        } catch (e) {}
+        for (let i = 0; i < Math.min(lView.length, 300); i++) {
+          if (isRcInstance(lView[i])) return lView[i];
+        }
+      }
+      return null;
+    };
     const searchNgContext = (ctx) => {
       if (!ctx || typeof ctx !== 'object') return null;
-      if (isRcInstance(ctx)) return ctx;
-      if (isRcInstance(ctx.component)) return ctx.component;
+      const direct = extractFromLContext(ctx);
+      if (direct) return direct;
       const visited = new Set();
       const queue = [ctx];
       let steps = 0;
-      while (queue.length > 0 && steps < 250) {
+      while (queue.length > 0 && steps < 400) {
         const cur = queue.shift();
         if (!cur || typeof cur !== 'object' || visited.has(cur)) continue;
         visited.add(cur);
         steps++;
-        if (isRcInstance(cur)) return cur;
+        const extracted = extractFromLContext(cur);
+        if (extracted) return extracted;
         if (Array.isArray(cur)) {
-          for (let i = 0; i < Math.min(cur.length, 60); i++) {
+          const scanLen = Math.min(cur.length, 300);
+          for (let i = 0; i < scanLen; i++) {
+            if (isRcInstance(cur[i])) return cur[i];
+          }
+          for (let i = 0; i < scanLen; i++) {
             const item = cur[i];
-            if (isRcInstance(item)) return item;
-            if (item && typeof item === 'object') queue.push(item);
+            if (item && typeof item === 'object' && (Array.isArray(item) || isRcInstance(item.component))) {
+              queue.push(item);
+            }
           }
         } else {
           for (const k of ['component', 'lView', 'data', 'context', '_lView']) {
@@ -5177,15 +5276,25 @@
         return found;
       }
     }
+    const gaRootEl = typeof document?.querySelector === 'function' ? document.querySelector('ga-root') : null;
+    if (gaRootEl) {
+      const rootCtxKey = Object.keys(gaRootEl).find((k) => k.startsWith('__ngContext'));
+      const foundFromRoot = searchNgContext(gaRootEl.__ngContext__ || (rootCtxKey ? gaRootEl[rootCtxKey] : null));
+      if (foundFromRoot) {
+        window.__agyRemoteControlInstance = foundFromRoot;
+        return foundFromRoot;
+      }
+    }
     const nsRoot = window.default_GoogleAntigravity;
     if (nsRoot && typeof nsRoot === 'object') {
       for (const k of Object.keys(nsRoot)) {
         const mod = nsRoot[k];
         if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) continue;
-        if (rcEl) {
+        for (const targetEl of [rcEl, gaRootEl]) {
+          if (!targetEl) continue;
           try {
             if (typeof mod.getDebugNode === 'function') {
-              const dbgNode = mod.getDebugNode(rcEl);
+              const dbgNode = mod.getDebugNode(targetEl);
               const dbgComp = dbgNode?.componentInstance || dbgNode?.context;
               if (isRcInstance(dbgComp)) {
                 window.__agyRemoteControlInstance = dbgComp;
@@ -5198,7 +5307,7 @@
               }
             }
             if (typeof mod.getComponent === 'function') {
-              const comp = mod.getComponent(rcEl);
+              const comp = mod.getComponent(targetEl);
               if (isRcInstance(comp)) {
                 window.__agyRemoteControlInstance = comp;
                 return comp;
@@ -5206,8 +5315,8 @@
             }
             const getLCtx = mod['\u0275getLContext'] || mod.getLContext;
             if (typeof getLCtx === 'function') {
-              const lCtx = getLCtx(rcEl);
-              const foundFromLCtx = searchNgContext(lCtx?.lView || lCtx);
+              const lCtx = getLCtx(targetEl);
+              const foundFromLCtx = extractFromLContext(lCtx) || searchNgContext(lCtx?.lView || lCtx);
               if (foundFromLCtx) {
                 window.__agyRemoteControlInstance = foundFromLCtx;
                 return foundFromLCtx;
@@ -5815,6 +5924,78 @@
           cw.document.documentElement.style.colorScheme = 'dark';
         } catch (e) {}
 
+        // Buffer INITIAL_CONFIG messages sent to cw before main.js registers its XChannelTransport(qYc) message listener,
+        // and replay the cached event immediately when addEventListener('message', fn) is called.
+        // This guarantees main.js receives the very first MessagePort without ever calling rcInst.onIframeLoad() twice
+        // (which would run teardownProxyPort() and close the active MessagePort).
+        const msgListeners = new Set();
+        try {
+          if (typeof cw.addEventListener === 'function' && !cw.__agyMsgBufferInstalled) {
+            cw.__agyMsgBufferInstalled = true;
+            const origAddEv = cw.addEventListener.bind(cw);
+            const origRemoveEv = typeof cw.removeEventListener === 'function' ? cw.removeEventListener.bind(cw) : null;
+            origAddEv('message', (ev) => {
+              if (ev && ev.data && ev.data.type === 'INITIAL_CONFIG') {
+                cw.__agyBufferedInitialConfigEvent = ev;
+                if (msgListeners.size > 0) {
+                  cw.__initialConfigReceived = true;
+                }
+              }
+            });
+            cw.addEventListener = function (type, listener, options) {
+              if (type === 'message' && typeof listener === 'function') {
+                msgListeners.add(listener);
+                const res = origAddEv(type, listener, options);
+                if (cw.__agyBufferedInitialConfigEvent && !cw.__initialConfigReceived) {
+                  const bufferedEv = cw.__agyBufferedInitialConfigEvent;
+                  cw.__initialConfigReceived = true;
+                  Promise.resolve().then(() => {
+                    try {
+                      listener.call(cw, bufferedEv);
+                    } catch (e) {}
+                  });
+                }
+                return res;
+              }
+              return origAddEv(type, listener, options);
+            };
+            if (origRemoveEv) {
+              cw.removeEventListener = function (type, listener, options) {
+                if (type === 'message' && typeof listener === 'function') {
+                  msgListeners.delete(listener);
+                }
+                return origRemoveEv(type, listener, options);
+              };
+            }
+          }
+        } catch (e) {}
+
+        // Wrap cw.Worker so relative worker paths (e.g. '/diff_worker.js?v=...') resolve against cdnBaseUrl via Blob importScripts
+        try {
+          if (typeof cw.Worker === 'function' && !cw.Worker.__agyWorkerPatched) {
+            const OrigWorker = cw.Worker;
+            const PatchedWorker = function (scriptURL, options) {
+              let urlStr = String(scriptURL || '');
+              if (urlStr.startsWith('/') && !urlStr.startsWith('//')) {
+                const targetWorkerUrl = `${cdnBaseUrl}${urlStr}`;
+                try {
+                  if (typeof cw.Blob === 'function' && cw.URL && typeof cw.URL.createObjectURL === 'function') {
+                    const blob = new cw.Blob([`importScripts(${JSON.stringify(targetWorkerUrl)});`], {
+                      type: 'application/javascript',
+                    });
+                    const blobUrl = cw.URL.createObjectURL(blob);
+                    return new OrigWorker(ttPolicy ? ttPolicy.createScriptURL(blobUrl) : blobUrl, options);
+                  }
+                } catch (e) {}
+              }
+              return new OrigWorker(scriptURL, options);
+            };
+            PatchedWorker.prototype = OrigWorker.prototype;
+            PatchedWorker.__agyWorkerPatched = true;
+            cw.Worker = PatchedWorker;
+          }
+        } catch (e) {}
+
         const prismScript = cd.createElement('script');
         if (nonce) prismScript.nonce = nonce;
         prismScript.async = false;
@@ -5835,23 +6016,31 @@
             rcProto?.__agyOrigOnIframeLoad ||
             rcInst.onIframeLoad;
           let initialConfigInFlight = false;
+          const replayBufferedInitialConfig = () => {
+            if (!cw.__initialConfigReceived && cw.__agyBufferedInitialConfigEvent && msgListeners.size > 0) {
+              const bufferedEv = cw.__agyBufferedInitialConfigEvent;
+              cw.__initialConfigReceived = true;
+              for (const fn of Array.from(msgListeners)) {
+                try {
+                  fn.call(cw, bufferedEv);
+                } catch (e) {}
+              }
+            }
+          };
           const ensureInitialConfigSent = () => {
-            if (typeof origLoad === 'function' && !cw.__initialConfigReceived && !initialConfigInFlight) {
+            replayBufferedInitialConfig();
+            if (typeof origLoad === 'function' && !cw.__initialConfigReceived && !initialConfigInFlight && !cw.__agyOnIframeLoadCalled) {
               initialConfigInFlight = true;
+              cw.__agyOnIframeLoadCalled = true;
               if (savedChildPath) rcInst.initialChildPath = savedChildPath;
               try {
                 const res = origLoad.call(rcInst);
                 Promise.resolve(res)
                   .catch(() => {})
                   .finally(() => {
-                    setTimeout(() => {
-                      initialConfigInFlight = false;
-                      if (!cw.__initialConfigReceived && typeof origLoad === 'function') {
-                        try {
-                          origLoad.call(rcInst);
-                        } catch (e) {}
-                      }
-                    }, 600);
+                    initialConfigInFlight = false;
+                    replayBufferedInitialConfig();
+                    setTimeout(replayBufferedInitialConfig, 150);
                   });
               } catch (e) {
                 initialConfigInFlight = false;

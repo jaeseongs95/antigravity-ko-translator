@@ -829,24 +829,51 @@
             typeof obj.onIframeLoad === 'function' ||
             typeof obj.handleIframeMessage === 'function')
       );
+    const extractFromLContext = (lCtx) => {
+      if (!lCtx || typeof lCtx !== 'object') return null;
+      if (isRcInstance(lCtx)) return lCtx;
+      if (isRcInstance(lCtx.component)) return lCtx.component;
+      const lView = lCtx.lView;
+      if (Array.isArray(lView)) {
+        try {
+          const tView = lView[1];
+          const nodeIndex = typeof lCtx.nodeIndex === 'number' ? lCtx.nodeIndex : -1;
+          const tNode = nodeIndex >= 0 && Array.isArray(tView?.data) ? tView.data[nodeIndex] : null;
+          if (tNode && typeof tNode.directiveStart === 'number' && typeof tNode.componentOffset === 'number' && tNode.componentOffset > -1) {
+            const comp = lView[tNode.directiveStart + tNode.componentOffset];
+            if (isRcInstance(comp)) return comp;
+          }
+        } catch (e) {}
+        for (let i = 0; i < Math.min(lView.length, 300); i++) {
+          if (isRcInstance(lView[i])) return lView[i];
+        }
+      }
+      return null;
+    };
     const searchNgContext = (ctx) => {
       if (!ctx || typeof ctx !== 'object') return null;
-      if (isRcInstance(ctx)) return ctx;
-      if (isRcInstance(ctx.component)) return ctx.component;
+      const direct = extractFromLContext(ctx);
+      if (direct) return direct;
       const visited = new Set();
       const queue = [ctx];
       let steps = 0;
-      while (queue.length > 0 && steps < 250) {
+      while (queue.length > 0 && steps < 400) {
         const cur = queue.shift();
         if (!cur || typeof cur !== 'object' || visited.has(cur)) continue;
         visited.add(cur);
         steps++;
-        if (isRcInstance(cur)) return cur;
+        const extracted = extractFromLContext(cur);
+        if (extracted) return extracted;
         if (Array.isArray(cur)) {
-          for (let i = 0; i < Math.min(cur.length, 60); i++) {
+          const scanLen = Math.min(cur.length, 300);
+          for (let i = 0; i < scanLen; i++) {
+            if (isRcInstance(cur[i])) return cur[i];
+          }
+          for (let i = 0; i < scanLen; i++) {
             const item = cur[i];
-            if (isRcInstance(item)) return item;
-            if (item && typeof item === 'object') queue.push(item);
+            if (item && typeof item === 'object' && (Array.isArray(item) || isRcInstance(item.component))) {
+              queue.push(item);
+            }
           }
         } else {
           for (const k of ['component', 'lView', 'data', 'context', '_lView']) {
@@ -874,15 +901,25 @@
         return found;
       }
     }
+    const gaRootEl = typeof document?.querySelector === 'function' ? document.querySelector('ga-root') : null;
+    if (gaRootEl) {
+      const rootCtxKey = Object.keys(gaRootEl).find((k) => k.startsWith('__ngContext'));
+      const foundFromRoot = searchNgContext(gaRootEl.__ngContext__ || (rootCtxKey ? gaRootEl[rootCtxKey] : null));
+      if (foundFromRoot) {
+        window.__agyRemoteControlInstance = foundFromRoot;
+        return foundFromRoot;
+      }
+    }
     const nsRoot = window.default_GoogleAntigravity;
     if (nsRoot && typeof nsRoot === 'object') {
       for (const k of Object.keys(nsRoot)) {
         const mod = nsRoot[k];
         if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) continue;
-        if (rcEl) {
+        for (const targetEl of [rcEl, gaRootEl]) {
+          if (!targetEl) continue;
           try {
             if (typeof mod.getDebugNode === 'function') {
-              const dbgNode = mod.getDebugNode(rcEl);
+              const dbgNode = mod.getDebugNode(targetEl);
               const dbgComp = dbgNode?.componentInstance || dbgNode?.context;
               if (isRcInstance(dbgComp)) {
                 window.__agyRemoteControlInstance = dbgComp;
@@ -895,7 +932,7 @@
               }
             }
             if (typeof mod.getComponent === 'function') {
-              const comp = mod.getComponent(rcEl);
+              const comp = mod.getComponent(targetEl);
               if (isRcInstance(comp)) {
                 window.__agyRemoteControlInstance = comp;
                 return comp;
@@ -903,8 +940,8 @@
             }
             const getLCtx = mod['\u0275getLContext'] || mod.getLContext;
             if (typeof getLCtx === 'function') {
-              const lCtx = getLCtx(rcEl);
-              const foundFromLCtx = searchNgContext(lCtx?.lView || lCtx);
+              const lCtx = getLCtx(targetEl);
+              const foundFromLCtx = extractFromLContext(lCtx) || searchNgContext(lCtx?.lView || lCtx);
               if (foundFromLCtx) {
                 window.__agyRemoteControlInstance = foundFromLCtx;
                 return foundFromLCtx;
@@ -1512,6 +1549,78 @@
           cw.document.documentElement.style.colorScheme = 'dark';
         } catch (e) {}
 
+        // Buffer INITIAL_CONFIG messages sent to cw before main.js registers its XChannelTransport(qYc) message listener,
+        // and replay the cached event immediately when addEventListener('message', fn) is called.
+        // This guarantees main.js receives the very first MessagePort without ever calling rcInst.onIframeLoad() twice
+        // (which would run teardownProxyPort() and close the active MessagePort).
+        const msgListeners = new Set();
+        try {
+          if (typeof cw.addEventListener === 'function' && !cw.__agyMsgBufferInstalled) {
+            cw.__agyMsgBufferInstalled = true;
+            const origAddEv = cw.addEventListener.bind(cw);
+            const origRemoveEv = typeof cw.removeEventListener === 'function' ? cw.removeEventListener.bind(cw) : null;
+            origAddEv('message', (ev) => {
+              if (ev && ev.data && ev.data.type === 'INITIAL_CONFIG') {
+                cw.__agyBufferedInitialConfigEvent = ev;
+                if (msgListeners.size > 0) {
+                  cw.__initialConfigReceived = true;
+                }
+              }
+            });
+            cw.addEventListener = function (type, listener, options) {
+              if (type === 'message' && typeof listener === 'function') {
+                msgListeners.add(listener);
+                const res = origAddEv(type, listener, options);
+                if (cw.__agyBufferedInitialConfigEvent && !cw.__initialConfigReceived) {
+                  const bufferedEv = cw.__agyBufferedInitialConfigEvent;
+                  cw.__initialConfigReceived = true;
+                  Promise.resolve().then(() => {
+                    try {
+                      listener.call(cw, bufferedEv);
+                    } catch (e) {}
+                  });
+                }
+                return res;
+              }
+              return origAddEv(type, listener, options);
+            };
+            if (origRemoveEv) {
+              cw.removeEventListener = function (type, listener, options) {
+                if (type === 'message' && typeof listener === 'function') {
+                  msgListeners.delete(listener);
+                }
+                return origRemoveEv(type, listener, options);
+              };
+            }
+          }
+        } catch (e) {}
+
+        // Wrap cw.Worker so relative worker paths (e.g. '/diff_worker.js?v=...') resolve against cdnBaseUrl via Blob importScripts
+        try {
+          if (typeof cw.Worker === 'function' && !cw.Worker.__agyWorkerPatched) {
+            const OrigWorker = cw.Worker;
+            const PatchedWorker = function (scriptURL, options) {
+              let urlStr = String(scriptURL || '');
+              if (urlStr.startsWith('/') && !urlStr.startsWith('//')) {
+                const targetWorkerUrl = `${cdnBaseUrl}${urlStr}`;
+                try {
+                  if (typeof cw.Blob === 'function' && cw.URL && typeof cw.URL.createObjectURL === 'function') {
+                    const blob = new cw.Blob([`importScripts(${JSON.stringify(targetWorkerUrl)});`], {
+                      type: 'application/javascript',
+                    });
+                    const blobUrl = cw.URL.createObjectURL(blob);
+                    return new OrigWorker(ttPolicy ? ttPolicy.createScriptURL(blobUrl) : blobUrl, options);
+                  }
+                } catch (e) {}
+              }
+              return new OrigWorker(scriptURL, options);
+            };
+            PatchedWorker.prototype = OrigWorker.prototype;
+            PatchedWorker.__agyWorkerPatched = true;
+            cw.Worker = PatchedWorker;
+          }
+        } catch (e) {}
+
         const prismScript = cd.createElement('script');
         if (nonce) prismScript.nonce = nonce;
         prismScript.async = false;
@@ -1532,23 +1641,31 @@
             rcProto?.__agyOrigOnIframeLoad ||
             rcInst.onIframeLoad;
           let initialConfigInFlight = false;
+          const replayBufferedInitialConfig = () => {
+            if (!cw.__initialConfigReceived && cw.__agyBufferedInitialConfigEvent && msgListeners.size > 0) {
+              const bufferedEv = cw.__agyBufferedInitialConfigEvent;
+              cw.__initialConfigReceived = true;
+              for (const fn of Array.from(msgListeners)) {
+                try {
+                  fn.call(cw, bufferedEv);
+                } catch (e) {}
+              }
+            }
+          };
           const ensureInitialConfigSent = () => {
-            if (typeof origLoad === 'function' && !cw.__initialConfigReceived && !initialConfigInFlight) {
+            replayBufferedInitialConfig();
+            if (typeof origLoad === 'function' && !cw.__initialConfigReceived && !initialConfigInFlight && !cw.__agyOnIframeLoadCalled) {
               initialConfigInFlight = true;
+              cw.__agyOnIframeLoadCalled = true;
               if (savedChildPath) rcInst.initialChildPath = savedChildPath;
               try {
                 const res = origLoad.call(rcInst);
                 Promise.resolve(res)
                   .catch(() => {})
                   .finally(() => {
-                    setTimeout(() => {
-                      initialConfigInFlight = false;
-                      if (!cw.__initialConfigReceived && typeof origLoad === 'function') {
-                        try {
-                          origLoad.call(rcInst);
-                        } catch (e) {}
-                      }
-                    }, 600);
+                    initialConfigInFlight = false;
+                    replayBufferedInitialConfig();
+                    setTimeout(replayBufferedInitialConfig, 150);
                   });
               } catch (e) {
                 initialConfigInFlight = false;
