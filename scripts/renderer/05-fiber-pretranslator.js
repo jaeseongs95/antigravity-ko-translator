@@ -46,11 +46,12 @@
           const nextShow = savedShow === '1' || savedShow === 'true' || savedShow === true;
           if (nextShow !== showThinkingEnabled) {
             showThinkingEnabled = nextShow;
-            verboseStepsEnsured = false;
             try {
               localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
             } catch (e) {}
-            ensureVerboseConversationStepsEnabled();
+            if (typeof syncShowThinkingDomAttribute === 'function') {
+              syncShowThinkingDomAttribute();
+            }
             if (typeof scanTriggerButtonsSync === 'function') {
               scanTriggerButtonsSync(!showThinkingEnabled);
             }
@@ -214,7 +215,6 @@
   window.__agyGetShowThinking = () => isShowThinkingEnabled();
   window.__agySetShowThinking = (enabled, _fromCrossFrame = false) => {
     showThinkingEnabled = Boolean(enabled);
-    verboseStepsEnsured = true;
     try {
       localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
       localStorage.setItem(SHOW_THINKING_INIT_STORAGE_KEY, '1');
@@ -228,16 +228,6 @@
           [SHOW_THINKING_STORAGE_KEY]: showThinkingEnabled ? '1' : '0',
         });
       } catch (e) {}
-    }
-    const st = resolveUserSettingsStore();
-    if (st && typeof st.setPrefValue === 'function') {
-      Promise.resolve(st.setPrefValue('verboseConversationSteps', true))
-        .then(() => {
-          if (typeof refreshTranslatorSettingsUi === 'function') {
-            refreshTranslatorSettingsUi();
-          }
-        })
-        .catch(() => {});
     }
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();

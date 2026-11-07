@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.25
+// @version      1.2.26
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.20';
+  const KO_LOCALIZER_VERSION = 'v13.21';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -338,34 +338,21 @@
     return Boolean(showThinkingEnabled);
   }
 
-  let verboseStepsEnsured = false;
-  let verboseStepsSetInFlight = false;
-  function ensureVerboseConversationStepsEnabled() {
-    syncShowThinkingDomAttribute();
-    if (disposed) return;
+  function isNativeVerboseConversationStepsEnabled() {
     try {
       const st = resolveUserSettingsStore();
-      if (!st) return;
-      try {
-        localStorage.setItem(SHOW_THINKING_INIT_STORAGE_KEY, '1');
-      } catch (e) {}
-      const currentVal = st.getPrefValue('verboseConversationSteps');
-      if (currentVal === true) {
-        verboseStepsEnsured = true;
-        return;
-      }
-      if (typeof currentVal === 'boolean' && !verboseStepsSetInFlight) {
-        verboseStepsEnsured = true;
-        verboseStepsSetInFlight = true;
-        Promise.resolve(st.setPrefValue('verboseConversationSteps', true))
-          .catch(() => {
-            verboseStepsEnsured = false;
-          })
-          .finally(() => {
-            verboseStepsSetInFlight = false;
-          });
+      if (st && typeof st.getPrefValue === 'function') {
+        const val = st.getPrefValue('verboseConversationSteps');
+        if (typeof val === 'boolean') return val;
       }
     } catch (e) {}
+    return true;
+  }
+
+  function ensureVerboseConversationStepsEnabled() {
+    // D-0012: Preserve native 'Conversation Steps' (verboseConversationSteps: Default/Verbose) setting.
+    // Never overwrite or force verboseConversationSteps to true.
+    syncShowThinkingDomAttribute();
   }
 
   function prepareBootstrapLifecycle() {
@@ -2850,11 +2837,12 @@
           const nextShow = savedShow === '1' || savedShow === 'true' || savedShow === true;
           if (nextShow !== showThinkingEnabled) {
             showThinkingEnabled = nextShow;
-            verboseStepsEnsured = false;
             try {
               localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
             } catch (e) {}
-            ensureVerboseConversationStepsEnabled();
+            if (typeof syncShowThinkingDomAttribute === 'function') {
+              syncShowThinkingDomAttribute();
+            }
             if (typeof scanTriggerButtonsSync === 'function') {
               scanTriggerButtonsSync(!showThinkingEnabled);
             }
@@ -3018,7 +3006,6 @@
   window.__agyGetShowThinking = () => isShowThinkingEnabled();
   window.__agySetShowThinking = (enabled, _fromCrossFrame = false) => {
     showThinkingEnabled = Boolean(enabled);
-    verboseStepsEnsured = true;
     try {
       localStorage.setItem(SHOW_THINKING_STORAGE_KEY, showThinkingEnabled ? '1' : '0');
       localStorage.setItem(SHOW_THINKING_INIT_STORAGE_KEY, '1');
@@ -3032,16 +3019,6 @@
           [SHOW_THINKING_STORAGE_KEY]: showThinkingEnabled ? '1' : '0',
         });
       } catch (e) {}
-    }
-    const st = resolveUserSettingsStore();
-    if (st && typeof st.setPrefValue === 'function') {
-      Promise.resolve(st.setPrefValue('verboseConversationSteps', true))
-        .then(() => {
-          if (typeof refreshTranslatorSettingsUi === 'function') {
-            refreshTranslatorSettingsUi();
-          }
-        })
-        .catch(() => {});
     }
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
@@ -4154,43 +4131,8 @@
           const thinkingRow = buildThinkingToggleRowElement(false);
           card.appendChild(thinkingRow);
         }
-        r.querySelectorAll('button').forEach((btn) => {
-          if (btn.__agyKoConvStepsBound) return;
-          btn.__agyKoConvStepsBound = true;
-          btn.addEventListener(
-            'click',
-            () => {
-              const bTxt = (btn.textContent || '').trim();
-              let nextShowThinking = null;
-              if (bTxt === '기본값' || bTxt === 'Default') {
-                nextShowThinking = false;
-              } else if (bTxt === '상세히' || bTxt === 'Verbose') {
-                nextShowThinking = true;
-              }
-              if (nextShowThinking !== null && typeof window.__agySetShowThinking === 'function') {
-                window.__agySetShowThinking(nextShowThinking);
-                // Native React onClick runs in the bubble phase right after this capture listener
-                // and sets `verboseConversationSteps = false` when "Default" is clicked.
-                // Immediately restore `verboseConversationSteps = true` on microtask & next ticks
-                // so tool-group-collapsible and worked-for-collapsible steps never unmount.
-                const restoreVerbose = () => {
-                  verboseStepsEnsured = false;
-                  ensureVerboseConversationStepsEnabled();
-                  if (typeof scanTriggerButtonsSync === 'function') {
-                    scanTriggerButtonsSync(!nextShowThinking);
-                  }
-                  syncThinkingDisplayMenuControls();
-                };
-                Promise.resolve().then(restoreVerbose);
-                setTimeout(restoreVerbose, 0);
-                setTimeout(restoreVerbose, 60);
-              } else {
-                syncThinkingDisplayMenuControls();
-              }
-            },
-            true
-          );
-        });
+        // D-0012: Do not attach capture click listeners to native 'Conversation Steps' (Default / Verbose) buttons
+        // and never restore verboseConversationSteps = true when the user clicks Default.
         break;
       }
     }
@@ -5095,11 +5037,18 @@
       syncShowThinkingDomAttribute();
     }
     const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
+    const nativeVerboseSteps =
+      typeof isNativeVerboseConversationStepsEnabled === 'function'
+        ? isNativeVerboseConversationStepsEnabled()
+        : true;
     const workedBtns = Array.from(document.querySelectorAll('button[data-testid="worked-for-collapsible"]'));
     for (let i = 0; i < workedBtns.length; i++) {
       const btn = workedBtns[i];
       const isLastWorked = i === workedBtns.length - 1;
       processTriggerButton(btn);
+      if (!nativeVerboseSteps) {
+        continue;
+      }
       if (isHiddenActiveWorkedForButton(btn)) {
         // Active/latest turn has triggerVisible=false (.hidden on the button).
         // If collapsed, its entire body (all tool & work steps) unmounts while the trigger button itself is hidden!
@@ -5132,11 +5081,7 @@
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
     for (const btn of toolGroupBtns) {
       processTriggerButton(btn);
-      // Tool group collapsibles (`G_` in v2.29+) auto-collapse on `isActive: true -> false` when a tool group finishes,
-      // which unmounts all child work rows (`분석함`, `실행함`, `편집함`).
-      // Always keep tool groups expanded (unless manually collapsed by the user);
-      // CSS (`html[data-agy-hide-thinking="1"]`) hides `thinking-collapsible-trigger` & `.cursor-edit` directly.
-      if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+      if (nativeVerboseSteps && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
         expandTriggerButtonIfNeeded(btn);
       }
     }

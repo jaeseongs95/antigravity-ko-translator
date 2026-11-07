@@ -698,11 +698,18 @@
       syncShowThinkingDomAttribute();
     }
     const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
+    const nativeVerboseSteps =
+      typeof isNativeVerboseConversationStepsEnabled === 'function'
+        ? isNativeVerboseConversationStepsEnabled()
+        : true;
     const workedBtns = Array.from(document.querySelectorAll('button[data-testid="worked-for-collapsible"]'));
     for (let i = 0; i < workedBtns.length; i++) {
       const btn = workedBtns[i];
       const isLastWorked = i === workedBtns.length - 1;
       processTriggerButton(btn);
+      if (!nativeVerboseSteps) {
+        continue;
+      }
       if (isHiddenActiveWorkedForButton(btn)) {
         // Active/latest turn has triggerVisible=false (.hidden on the button).
         // If collapsed, its entire body (all tool & work steps) unmounts while the trigger button itself is hidden!
@@ -735,11 +742,7 @@
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
     for (const btn of toolGroupBtns) {
       processTriggerButton(btn);
-      // Tool group collapsibles (`G_` in v2.29+) auto-collapse on `isActive: true -> false` when a tool group finishes,
-      // which unmounts all child work rows (`분석함`, `실행함`, `편집함`).
-      // Always keep tool groups expanded (unless manually collapsed by the user);
-      // CSS (`html[data-agy-hide-thinking="1"]`) hides `thinking-collapsible-trigger` & `.cursor-edit` directly.
-      if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+      if (nativeVerboseSteps && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
         expandTriggerButtonIfNeeded(btn);
       }
     }

@@ -27,12 +27,13 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.20';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.21';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
-  assert.ok(bundleCode.includes("ensureVerboseConversationStepsEnabled"));
+  assert.ok(bundleCode.includes("isNativeVerboseConversationStepsEnabled"));
   assert.ok(bundleCode.includes("'verboseConversationSteps'"));
+  assert.ok(!bundleCode.includes("setPrefValue('verboseConversationSteps'"));
   assert.ok(bundleCode.includes("doesWorkedForButtonContainThinking"));
   assert.ok(bundleCode.includes("doesToolGroupButtonContainThinking"));
   assert.ok(
@@ -402,7 +403,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(!mod06.includes("insertBefore(cardEl, permEl)"), 'must not inject #agy-ko-settings-card into General tab');
   assert.ok(mod06.includes('height: 100dvh !important'), 'must enforce 100dvh on ga-remote-control .app-container');
 
-  // 5. ensureVerboseConversationStepsEnabled auto-enables verboseConversationSteps when Default (false)
+  // 5. D-0012: ensureVerboseConversationStepsEnabled NEVER overwrites native verboseConversationSteps, and isNativeVerboseConversationStepsEnabled reads the native setting cleanly
   const mod01 = fs.readFileSync(path.join(RENDERER_DIR, '01-bootstrap-and-cache.js'), 'utf8');
   let verbosePrefVal = false;
   let setPrefCalls = [];
@@ -437,12 +438,15 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     localStorage: { getItem: () => null, setItem() {} },
   };
   vm.runInNewContext(
-    `${mod01}\n;globalThis.__ensureVerbose = ensureVerboseConversationStepsEnabled;`,
+    `${mod01}\n;globalThis.__ensureVerbose = ensureVerboseConversationStepsEnabled;globalThis.__isNativeVerbose = isNativeVerboseConversationStepsEnabled;`,
     bootSandbox
   );
   bootSandbox.__ensureVerbose();
-  assert.deepEqual(setPrefCalls, [['verboseConversationSteps', true]]);
-  assert.equal(verbosePrefVal, true);
+  assert.deepEqual(setPrefCalls, [], 'D-0012: ensureVerboseConversationStepsEnabled must NEVER call setPrefValue("verboseConversationSteps", true)');
+  assert.equal(verbosePrefVal, false, 'D-0012: native verboseConversationSteps=false (Default) must remain untouched');
+  assert.equal(bootSandbox.__isNativeVerbose(), false, 'D-0012: isNativeVerboseConversationStepsEnabled must return false when native setting is Default');
+  verbosePrefVal = true;
+  assert.equal(bootSandbox.__isNativeVerbose(), true, 'D-0012: isNativeVerboseConversationStepsEnabled must return true when native setting is Verbose');
 
   // 6. processTriggerButton NEVER clears origSpan.textContent (prevents React removeChild Black Screen crash) and strips [data-slot-out] animation residue
   assert.ok(mod08.includes('const liveText = extractTriggerSpanRawText(origSpan);'), 'must extract live text via extractTriggerSpanRawText');
@@ -601,11 +605,13 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   const thinkingTriggerBtn = makeCollapsibleBtn('__reactFiber$thinking1', {});
 
   let showThinkingFlag = true;
+  let nativeVerboseStepsFlag = true;
   const expandSandbox = {
     ensureStyle() {},
     processTriggerButton() {},
     syncShowThinkingDomAttribute() {},
     isShowThinkingEnabled: () => showThinkingFlag,
+    isNativeVerboseConversationStepsEnabled: () => nativeVerboseStepsFlag,
     document: {
       querySelectorAll(sel) {
         if (sel.includes('worked-for-collapsible')) return [workedWithThinking, activeHiddenWorked];
@@ -692,8 +698,24 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.deepEqual(
     clickedOrder,
     ['__reactFiber$workedLatestNoThinking', '__reactFiber$toolGrp2'],
-    'D-0005: when Show Thinking is OFF, latest worked-for-collapsible and tool-group-collapsible without thinking must still expand so tool work items never unmount'
+    'D-0005: when Show Thinking is OFF and native Verbose is ON, latest worked-for-collapsible and tool-group-collapsible without thinking must still expand so tool work items never unmount'
   );
+
+  // D-0012: When native 'Conversation Steps' is set to 'Default' (nativeVerboseStepsFlag = false),
+  // scanTriggerButtonsSync must NOT force-expand worked-for-collapsible or tool-group-collapsible buttons!
+  nativeVerboseStepsFlag = false;
+  workedWithThinking.expandedState = 'false';
+  latestWorkedNoThinking.expandedState = 'false';
+  toolGroupWithThinking.expandedState = 'false';
+  toolGroupWithoutThinking.expandedState = 'false';
+  clickedOrder = [];
+  expandSandbox.__scanTriggerButtonsSync(false);
+  assert.deepEqual(
+    clickedOrder,
+    [],
+    'D-0012: when native verboseConversationSteps is false (Default), scanTriggerButtonsSync must NOT auto-expand worked-for-collapsible or tool-group-collapsible'
+  );
+  nativeVerboseStepsFlag = true;
 
   // 7b. Translate Thinking ON/OFF toggle (__agySetTranslateThinking): restores original English .cursor-edit when OFF
   const restoreCursorFnMatch = mod08.match(/function restoreOriginalCursorEdits\(\)\s*\{[\s\S]*?\r?\n  \}/);
@@ -738,7 +760,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.20',
+      __agyKoLocalizerActive: 'v13.21',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -893,12 +915,19 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(switches.length, 2);
   assert.ok(switches.every((sw) => sw.getAttribute('aria-checked') === 'false'));
 
-  // Clicking back toggles showThinking to true, and clicking native Default button sets showThinking to false
+  // Clicking back toggles showThinking to true, and native 'Default' (기본값) button in Appearance > Chat is NOT intercepted by ko-thought-translator (D-0012)
   injectedModelRow.onclick({ preventDefault() {}, stopPropagation() {} });
   assert.equal(menuShowThinkingState, true);
-  assert.ok(typeof defaultBtnClickCb === 'function');
-  defaultBtnClickCb();
-  assert.equal(menuShowThinkingState, false, 'clicking native Default (기본값) button in Appearance > Chat must sync showThinking to false');
+  assert.equal(
+    defaultBtnClickCb,
+    null,
+    'D-0012: ensureAppearanceChatThinkingIntegration must NOT attach click listeners to native Conversation Steps Default/Verbose buttons'
+  );
+  assert.equal(
+    verboseRestoreCalls,
+    0,
+    'D-0012: must never invoke ensureVerboseConversationStepsEnabled to revert native Default button click'
+  );
 
   // 10. D-0004 & D-0006 regression checks: dual marker blocks, cross-frame parent sync, and conditional remote companion loading
   const { BEGIN_MARKER, END_MARKER, BEGIN_BLOCK_MARKER, END_BLOCK_MARKER } = require(path.join(HOST_DIR, 'paths.js'));

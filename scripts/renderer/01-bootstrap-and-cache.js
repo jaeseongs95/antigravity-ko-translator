@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.20';
+  const KO_LOCALIZER_VERSION = 'v13.21';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -313,34 +313,21 @@
     return Boolean(showThinkingEnabled);
   }
 
-  let verboseStepsEnsured = false;
-  let verboseStepsSetInFlight = false;
-  function ensureVerboseConversationStepsEnabled() {
-    syncShowThinkingDomAttribute();
-    if (disposed) return;
+  function isNativeVerboseConversationStepsEnabled() {
     try {
       const st = resolveUserSettingsStore();
-      if (!st) return;
-      try {
-        localStorage.setItem(SHOW_THINKING_INIT_STORAGE_KEY, '1');
-      } catch (e) {}
-      const currentVal = st.getPrefValue('verboseConversationSteps');
-      if (currentVal === true) {
-        verboseStepsEnsured = true;
-        return;
-      }
-      if (typeof currentVal === 'boolean' && !verboseStepsSetInFlight) {
-        verboseStepsEnsured = true;
-        verboseStepsSetInFlight = true;
-        Promise.resolve(st.setPrefValue('verboseConversationSteps', true))
-          .catch(() => {
-            verboseStepsEnsured = false;
-          })
-          .finally(() => {
-            verboseStepsSetInFlight = false;
-          });
+      if (st && typeof st.getPrefValue === 'function') {
+        const val = st.getPrefValue('verboseConversationSteps');
+        if (typeof val === 'boolean') return val;
       }
     } catch (e) {}
+    return true;
+  }
+
+  function ensureVerboseConversationStepsEnabled() {
+    // D-0012: Preserve native 'Conversation Steps' (verboseConversationSteps: Default/Verbose) setting.
+    // Never overwrite or force verboseConversationSteps to true.
+    syncShowThinkingDomAttribute();
   }
 
   function prepareBootstrapLifecycle() {
