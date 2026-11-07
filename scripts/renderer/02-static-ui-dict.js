@@ -66,6 +66,13 @@
     'Open in Built-in Browser': '내장 브라우저에서 열기',
     // Chat canvas static labels
     'Conversation Log': '대화 기록',
+    'What can we get done today?': '오늘 어떤 작업을 도와드릴까요?',
+    'No Project': '프로젝트 없음',
+    'No Model Selected': '선택된 모델 없음',
+    'Message input': '메시지 입력',
+    'Add context': '컨텍스트 추가',
+    'Send message': '메시지 보내기',
+    'Announcements and tips': '공지사항 및 팁',
     'Load older messages': '이전 메시지 불러오기',
     'No more older messages': '더 이상 이전 메시지가 없습니다',
     'Working': '작업 중',
@@ -1737,6 +1744,21 @@
 
     m = t.match(/^Load older messages,\s*showing\s+(\d+)\s+of\s+(\d+)$/i);
     if (m) return `이전 메시지 불러오기 (${m[2]}개 중 ${m[1]}개 표시)`;
+
+    m = t.match(/^Hi\s+(.+?),\s*what can we get done today\?$/i);
+    if (m) return `안녕하세요 ${m[1]}님, 오늘 어떤 작업을 도와드릴까요?`;
+
+    m = t.match(/^Select project,\s*current:\s*(.+)$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `프로젝트 선택, 현재: ${inner}`;
+    }
+
+    m = t.match(/^Select model,\s*current:\s*(.+)$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `모델 선택, 현재: ${inner}`;
+    }
 
     // Multi-clause tool group summary (e.g. "Explored files, ran commands, edited files")
     if (t.includes(',')) {

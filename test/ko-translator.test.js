@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.19';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.20';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -738,7 +738,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.19',
+      __agyKoLocalizerActive: 'v13.20',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1027,5 +1027,95 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     resolvedRc,
     mockRcInstance,
     'D-0010: getRemoteControlComponentInstance must extract RemoteControlComponent from Angular 19 LView TNode slot even when LContext.component is undefined and header slots contain deep objects'
+  );
+
+  // 13. D-0011 regression checks: Cross-origin iframe.contentWindow SecurityError defense, Angular 19 dynamic RouterOutlet child element lookup (rcEl.firstElementChild), home greeting & Lexical placeholder localization
+  assert.equal(
+    rcDictSandbox.__translateStatic('Hi Lenovo, what can we get done today?'),
+    '안녕하세요 Lenovo님, 오늘 어떤 작업을 도와드릴까요?'
+  );
+  assert.equal(rcDictSandbox.__translateStatic('What can we get done today?'), '오늘 어떤 작업을 도와드릴까요?');
+  assert.equal(
+    rcDictSandbox.__translateStatic('Select project, current: No Project'),
+    '프로젝트 선택, 현재: 프로젝트 없음'
+  );
+  assert.equal(
+    rcDictSandbox.__translateStatic('Select model, current: No Model Selected'),
+    '모델 선택, 현재: 선택된 모델 없음'
+  );
+
+  // Verify getRemoteControlComponentInstance resolves RemoteControlComponent via rcEl.firstElementChild when Bxa(lView, rcEl) === -1 returns null for rcEl
+  const childEl = { tagName: 'DIV', className: 'app-container' };
+  const hostRcEl = {
+    tagName: 'GA-REMOTE-CONTROL',
+    __ngContext__: 3, // numeric lViewId in Angular 19 production
+    firstElementChild: childEl,
+    querySelector: () => childEl,
+  };
+  const rcChildLView = new Array(25).fill(null);
+  rcChildLView[0] = hostRcEl;
+  rcChildLView[8] = mockRcInstance;
+  rcChildLView[20] = childEl;
+  const rcChildSandbox = {
+    window: {
+      default_GoogleAntigravity: {
+        y: {
+          // Simulate exact boq-jetski m=_b ug(a)/Bxa(b,a): returns null for hostRcEl, returns LContext for childEl!
+          '\u0275getLContext': (el) => {
+            if (el === childEl) {
+              return { lViewId: 3, nodeIndex: 20, component: undefined, lView: rcChildLView };
+            }
+            return null;
+          },
+        },
+      },
+    },
+    document: { querySelector: () => null },
+  };
+  vm.runInNewContext(`${getRcFnCode}\n;globalThis.__getRcChild = getRemoteControlComponentInstance;`, rcChildSandbox);
+  assert.equal(
+    rcChildSandbox.__getRcChild(hostRcEl),
+    mockRcInstance,
+    'D-0011: getRemoteControlComponentInstance must resolve RemoteControlComponent via rcEl.firstElementChild when Angular 19 ɵgetLContext(rcEl) returns null for dynamic RouterOutlet host'
+  );
+
+  // Verify syncRemoteCompanionPlugins and probeHostCompanionPluginsForRemote never throw when iframe.contentWindow is cross-origin and throws DOMException SecurityError on property read
+  const syncFnMatch = mod08.match(
+    /async function probeHostCompanionPluginsForRemote\(rcEl\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  function bridgeRemoteControlIframe/
+  );
+  assert.ok(syncFnMatch, 'probeHostCompanionPluginsForRemote and syncRemoteCompanionPlugins must be extractable');
+  const syncFnsCode = syncFnMatch[0].replace(/\r?\n\r?\n  function bridgeRemoteControlIframe$/, '');
+  const crossOriginWindow = new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        throw new Error(`SecurityError: Blocked a frame from accessing a cross-origin frame (property '${String(prop)}')`);
+      },
+    }
+  );
+  const crossOriginRcEl = {
+    querySelector: (sel) => (sel === 'iframe' ? { contentWindow: crossOriginWindow } : null),
+  };
+  const crossOriginSandbox = {
+    window: {},
+    document: {},
+    getRemoteControlComponentInstance: () => null,
+    extractCompanionBlock: () => '',
+    decodeBase64Utf8: () => '',
+    injectRemoteCompanionScript: () => {},
+    refreshStatusbarTranslatorAdapter: () => {},
+  };
+  vm.runInNewContext(
+    `${syncFnsCode}\n;globalThis.__syncComp = syncRemoteCompanionPlugins; globalThis.__probeComp = probeHostCompanionPluginsForRemote;`,
+    crossOriginSandbox
+  );
+  assert.doesNotThrow(() => {
+    crossOriginSandbox.__syncComp(crossOriginRcEl);
+  }, 'D-0011: syncRemoteCompanionPlugins must not throw synchronous SecurityError when reading cross-origin iframe.contentWindow.__agyCapturedLsClient');
+  const probeRes = await crossOriginSandbox.__probeComp(crossOriginRcEl);
+  assert.equal(
+    probeRes.resolved,
+    false,
+    'D-0011: probeHostCompanionPluginsForRemote must safely catch cross-origin iframe.contentWindow SecurityError and return unresolved info'
   );
 });

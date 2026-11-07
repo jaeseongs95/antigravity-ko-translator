@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.24
+// @version      1.2.25
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.19';
+  const KO_LOCALIZER_VERSION = 'v13.20';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -496,6 +496,13 @@
     'Open in Built-in Browser': '내장 브라우저에서 열기',
     // Chat canvas static labels
     'Conversation Log': '대화 기록',
+    'What can we get done today?': '오늘 어떤 작업을 도와드릴까요?',
+    'No Project': '프로젝트 없음',
+    'No Model Selected': '선택된 모델 없음',
+    'Message input': '메시지 입력',
+    'Add context': '컨텍스트 추가',
+    'Send message': '메시지 보내기',
+    'Announcements and tips': '공지사항 및 팁',
     'Load older messages': '이전 메시지 불러오기',
     'No more older messages': '더 이상 이전 메시지가 없습니다',
     'Working': '작업 중',
@@ -2167,6 +2174,21 @@
 
     m = t.match(/^Load older messages,\s*showing\s+(\d+)\s+of\s+(\d+)$/i);
     if (m) return `이전 메시지 불러오기 (${m[2]}개 중 ${m[1]}개 표시)`;
+
+    m = t.match(/^Hi\s+(.+?),\s*what can we get done today\?$/i);
+    if (m) return `안녕하세요 ${m[1]}님, 오늘 어떤 작업을 도와드릴까요?`;
+
+    m = t.match(/^Select project,\s*current:\s*(.+)$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `프로젝트 선택, 현재: ${inner}`;
+    }
+
+    m = t.match(/^Select model,\s*current:\s*(.+)$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `모델 선택, 현재: ${inner}`;
+    }
 
     // Multi-clause tool group summary (e.g. "Explored files, ran commands, edited files")
     if (t.includes(',')) {
@@ -4776,12 +4798,25 @@
     const baseExcluded =
       'style, script, code, pre, [contenteditable="true"], .monaco-editor, .xterm, ' +
       '.agy-ctx-statusbar, .agy-ctx-modal-backdrop, .agy-ko-settings-root, #agy-ko-translator-modal, ' +
-      '[data-testid="agent-input-box"], [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
+      '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
       'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
       '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
       '[data-uri], [data-quotable-inline="true"], .cursor-edit';
     const selector = forAttributes ? baseExcluded : 'textarea, ' + baseExcluded;
     if (el.closest(selector)) {
+      return true;
+    }
+    if (!forAttributes && el.closest('[data-testid="agent-input-box"]')) {
+      const txt = (el.textContent || '').trim();
+      if (
+        el.tagName === 'P' &&
+        (txt.startsWith('Ask anything') ||
+          txt.startsWith('Message subagent') ||
+          txt.startsWith('무엇이든 물어보세요') ||
+          txt.startsWith('서브에이전트에게 메시지 보내기'))
+      ) {
+        return false;
+      }
       return true;
     }
     if (
@@ -5287,10 +5322,25 @@
     }
     const nsRoot = window.default_GoogleAntigravity;
     if (nsRoot && typeof nsRoot === 'object') {
+      const targetCandidates = [];
+      if (rcEl) {
+        targetCandidates.push(rcEl);
+        if (rcEl.firstElementChild) targetCandidates.push(rcEl.firstElementChild);
+        if (typeof rcEl.querySelector === 'function') {
+          const innerContainer = rcEl.querySelector('.app-container, .iframe-panel, iframe');
+          if (innerContainer && !targetCandidates.includes(innerContainer)) {
+            targetCandidates.push(innerContainer);
+          }
+        }
+      }
+      if (gaRootEl) {
+        targetCandidates.push(gaRootEl);
+        if (gaRootEl.firstElementChild) targetCandidates.push(gaRootEl.firstElementChild);
+      }
       for (const k of Object.keys(nsRoot)) {
         const mod = nsRoot[k];
         if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) continue;
-        for (const targetEl of [rcEl, gaRootEl]) {
+        for (const targetEl of targetCandidates) {
           if (!targetEl) continue;
           try {
             if (typeof mod.getDebugNode === 'function') {
@@ -5448,9 +5498,13 @@
 
     const iframe = rcEl && rcEl.querySelector ? rcEl.querySelector('iframe') : null;
     const cw = iframe && iframe.contentWindow ? iframe.contentWindow : null;
+    let cwLsClient = null;
+    try {
+      cwLsClient = cw && cw.__agyCapturedLsClient ? cw.__agyCapturedLsClient : null;
+    } catch (e) {}
     const lsClient =
       window.__agyCapturedLsClient ||
-      (cw && cw.__agyCapturedLsClient) ||
+      cwLsClient ||
       null;
     const rcInst = getRemoteControlComponentInstance(rcEl);
     if (!lsClient && (!rcInst || typeof rcInst.proxyCommand !== 'function')) return info;
@@ -5637,9 +5691,13 @@
 
   function syncRemoteCompanionPlugins(rcEl) {
     if (!rcEl || window.__agyKoSyncingCompanions) return;
+    let cwLsClient = null;
+    try {
+      cwLsClient = rcEl.querySelector?.('iframe')?.contentWindow?.__agyCapturedLsClient || null;
+    } catch (e) {}
     const hasRpcOrOverride = Boolean(
       window.__agyCapturedLsClient ||
-        rcEl.querySelector?.('iframe')?.contentWindow?.__agyCapturedLsClient ||
+        cwLsClient ||
         window.__agyHostInstalledPlugins ||
         getRemoteControlComponentInstance(rcEl)
     );
@@ -5720,12 +5778,16 @@
       const cw = iframe.contentWindow;
       const cd = iframe.contentDocument;
       const rootEl = cd && cd.getElementById ? cd.getElementById('root') : null;
+      const cwOrigin = cw && cw.location ? cw.location.origin : '';
+      const isSameOriginOrBlank =
+        cwOrigin === window.location.origin ||
+        cwOrigin === 'null' ||
+        (cw && cw.location && cw.location.href === 'about:blank');
       if (
         cw &&
         cd &&
         cd.body &&
-        cw.location &&
-        cw.location.origin === window.location.origin &&
+        isSameOriginOrBlank &&
         (cw.__agyMainBooted || (rootEl && rootEl.childElementCount > 0))
       ) {
         if (cw.__agyKoLocalizerActive !== KO_LOCALIZER_VERSION) {
@@ -5738,7 +5800,14 @@
         }
         return;
       }
-    } catch (e) {}
+      if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION && (!cd || !cd.getElementById || !cd.getElementById('root'))) {
+        delete iframe.__agyKoPromoted;
+      }
+    } catch (e) {
+      if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION) {
+        delete iframe.__agyKoPromoted;
+      }
+    }
 
     if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION) return;
     const rcInst = getRemoteControlComponentInstance(rcEl);
@@ -6086,7 +6155,20 @@
     try {
       delete iframe.src;
     } catch (e) {}
-    iframe.addEventListener('load', onBlankLoad, { once: true });
+    let blankLoadHandled = false;
+    const triggerBlankLoadOnce = () => {
+      if (blankLoadHandled) return;
+      try {
+        const cd = iframe.contentDocument;
+        const cw = iframe.contentWindow;
+        if (!cd || !cw) return;
+        blankLoadHandled = true;
+      } catch (e) {
+        return;
+      }
+      onBlankLoad();
+    };
+    iframe.addEventListener('load', triggerBlankLoadOnce, { once: true });
     if (origSrcDesc && typeof origSrcDesc.set === 'function') {
       origSrcDesc.set.call(iframe, 'about:blank');
     } else {
@@ -6099,6 +6181,15 @@
         set: () => {},
       });
     } catch (e) {}
+    setTimeout(() => {
+      if (!blankLoadHandled) {
+        try {
+          if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
+            triggerBlankLoadOnce();
+          }
+        } catch (e) {}
+      }
+    }, 60);
   }
 
   function scanThoughtBlocks() {

@@ -401,12 +401,25 @@
     const baseExcluded =
       'style, script, code, pre, [contenteditable="true"], .monaco-editor, .xterm, ' +
       '.agy-ctx-statusbar, .agy-ctx-modal-backdrop, .agy-ko-settings-root, #agy-ko-translator-modal, ' +
-      '[data-testid="agent-input-box"], [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
+      '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
       'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
       '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
       '[data-uri], [data-quotable-inline="true"], .cursor-edit';
     const selector = forAttributes ? baseExcluded : 'textarea, ' + baseExcluded;
     if (el.closest(selector)) {
+      return true;
+    }
+    if (!forAttributes && el.closest('[data-testid="agent-input-box"]')) {
+      const txt = (el.textContent || '').trim();
+      if (
+        el.tagName === 'P' &&
+        (txt.startsWith('Ask anything') ||
+          txt.startsWith('Message subagent') ||
+          txt.startsWith('무엇이든 물어보세요') ||
+          txt.startsWith('서브에이전트에게 메시지 보내기'))
+      ) {
+        return false;
+      }
       return true;
     }
     if (
@@ -912,10 +925,25 @@
     }
     const nsRoot = window.default_GoogleAntigravity;
     if (nsRoot && typeof nsRoot === 'object') {
+      const targetCandidates = [];
+      if (rcEl) {
+        targetCandidates.push(rcEl);
+        if (rcEl.firstElementChild) targetCandidates.push(rcEl.firstElementChild);
+        if (typeof rcEl.querySelector === 'function') {
+          const innerContainer = rcEl.querySelector('.app-container, .iframe-panel, iframe');
+          if (innerContainer && !targetCandidates.includes(innerContainer)) {
+            targetCandidates.push(innerContainer);
+          }
+        }
+      }
+      if (gaRootEl) {
+        targetCandidates.push(gaRootEl);
+        if (gaRootEl.firstElementChild) targetCandidates.push(gaRootEl.firstElementChild);
+      }
       for (const k of Object.keys(nsRoot)) {
         const mod = nsRoot[k];
         if (!mod || (typeof mod !== 'object' && typeof mod !== 'function')) continue;
-        for (const targetEl of [rcEl, gaRootEl]) {
+        for (const targetEl of targetCandidates) {
           if (!targetEl) continue;
           try {
             if (typeof mod.getDebugNode === 'function') {
@@ -1073,9 +1101,13 @@
 
     const iframe = rcEl && rcEl.querySelector ? rcEl.querySelector('iframe') : null;
     const cw = iframe && iframe.contentWindow ? iframe.contentWindow : null;
+    let cwLsClient = null;
+    try {
+      cwLsClient = cw && cw.__agyCapturedLsClient ? cw.__agyCapturedLsClient : null;
+    } catch (e) {}
     const lsClient =
       window.__agyCapturedLsClient ||
-      (cw && cw.__agyCapturedLsClient) ||
+      cwLsClient ||
       null;
     const rcInst = getRemoteControlComponentInstance(rcEl);
     if (!lsClient && (!rcInst || typeof rcInst.proxyCommand !== 'function')) return info;
@@ -1262,9 +1294,13 @@
 
   function syncRemoteCompanionPlugins(rcEl) {
     if (!rcEl || window.__agyKoSyncingCompanions) return;
+    let cwLsClient = null;
+    try {
+      cwLsClient = rcEl.querySelector?.('iframe')?.contentWindow?.__agyCapturedLsClient || null;
+    } catch (e) {}
     const hasRpcOrOverride = Boolean(
       window.__agyCapturedLsClient ||
-        rcEl.querySelector?.('iframe')?.contentWindow?.__agyCapturedLsClient ||
+        cwLsClient ||
         window.__agyHostInstalledPlugins ||
         getRemoteControlComponentInstance(rcEl)
     );
@@ -1345,12 +1381,16 @@
       const cw = iframe.contentWindow;
       const cd = iframe.contentDocument;
       const rootEl = cd && cd.getElementById ? cd.getElementById('root') : null;
+      const cwOrigin = cw && cw.location ? cw.location.origin : '';
+      const isSameOriginOrBlank =
+        cwOrigin === window.location.origin ||
+        cwOrigin === 'null' ||
+        (cw && cw.location && cw.location.href === 'about:blank');
       if (
         cw &&
         cd &&
         cd.body &&
-        cw.location &&
-        cw.location.origin === window.location.origin &&
+        isSameOriginOrBlank &&
         (cw.__agyMainBooted || (rootEl && rootEl.childElementCount > 0))
       ) {
         if (cw.__agyKoLocalizerActive !== KO_LOCALIZER_VERSION) {
@@ -1363,7 +1403,14 @@
         }
         return;
       }
-    } catch (e) {}
+      if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION && (!cd || !cd.getElementById || !cd.getElementById('root'))) {
+        delete iframe.__agyKoPromoted;
+      }
+    } catch (e) {
+      if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION) {
+        delete iframe.__agyKoPromoted;
+      }
+    }
 
     if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION) return;
     const rcInst = getRemoteControlComponentInstance(rcEl);
@@ -1711,7 +1758,20 @@
     try {
       delete iframe.src;
     } catch (e) {}
-    iframe.addEventListener('load', onBlankLoad, { once: true });
+    let blankLoadHandled = false;
+    const triggerBlankLoadOnce = () => {
+      if (blankLoadHandled) return;
+      try {
+        const cd = iframe.contentDocument;
+        const cw = iframe.contentWindow;
+        if (!cd || !cw) return;
+        blankLoadHandled = true;
+      } catch (e) {
+        return;
+      }
+      onBlankLoad();
+    };
+    iframe.addEventListener('load', triggerBlankLoadOnce, { once: true });
     if (origSrcDesc && typeof origSrcDesc.set === 'function') {
       origSrcDesc.set.call(iframe, 'about:blank');
     } else {
@@ -1724,6 +1784,15 @@
         set: () => {},
       });
     } catch (e) {}
+    setTimeout(() => {
+      if (!blankLoadHandled) {
+        try {
+          if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
+            triggerBlankLoadOnce();
+          }
+        } catch (e) {}
+      }
+    }, 60);
   }
 
   function scanThoughtBlocks() {
