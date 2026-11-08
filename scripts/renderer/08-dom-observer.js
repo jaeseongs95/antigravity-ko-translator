@@ -392,15 +392,21 @@
   }
 
   // Excludes:
-  // 1) Statusbar (`.agy-ctx-statusbar`, `.agy-ctx-modal-backdrop`)
+  // 1) Statusbar & custom no-translate roots (`[data-agy-no-translate="true"]`, `.agy-ctx-statusbar`, `.agy-ctx-menu`, `#agy-ctx-debug-modal`, `.agy-ctx-modal-backdrop`)
   // 2) Input box toolbar (`[data-testid="agent-input-box"]`, `[data-testid="model-selector-trigger"]`, `[data-testid="permissions-preset-selector"]`)
   // 3) Thinking/Worked trigger buttons (handled by non-destructive sibling spans)
   // 4) Chat messages, code blocks, editors, terminals, file links
+  const CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR =
+    '[data-agy-no-translate="true"], .agy-ctx-statusbar, .agy-ctx-menu, #agy-ctx-debug-modal, .agy-ctx-modal-backdrop, ' +
+    '#agy-mcp-manager-modal-backdrop, #agy-mcp-edit-popup-backdrop, #agy-mcp-oauth-connect-backdrop, #agy-mcp-settings-pane, ' +
+    '.agy-ko-thought-wrap, .agy-ko-settings-root, #agy-ko-translator-modal';
+
   function isExcludedFromStaticUiLocalization(el, forAttributes = false) {
     if (!el || !el.closest) return true;
     const baseExcluded =
       'style, script, code, pre, [contenteditable="true"], .monaco-editor, .xterm, ' +
-      '.agy-ctx-statusbar, .agy-ctx-modal-backdrop, .agy-ko-settings-root, #agy-ko-translator-modal, ' +
+      '[data-agy-no-translate="true"], .agy-ctx-statusbar, .agy-ctx-menu, #agy-ctx-debug-modal, .agy-ctx-modal-backdrop, ' +
+      '.agy-ko-settings-root, #agy-ko-translator-modal, ' +
       '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
       'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
       '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
@@ -525,7 +531,9 @@
 
   const STATIC_UI_SUBTREE_PRUNE_SELECTOR =
     'style, script, code, pre, textarea, [contenteditable="true"], .monaco-editor, .xterm, ' +
-    '.agy-ctx-statusbar, .agy-ctx-modal-backdrop, .agy-ko-settings-root, #agy-ko-translator-modal, ' +
+    '[data-agy-no-translate="true"], .agy-ctx-statusbar, .agy-ctx-menu, #agy-ctx-debug-modal, .agy-ctx-modal-backdrop, ' +
+    '#agy-mcp-manager-modal-backdrop, #agy-mcp-edit-popup-backdrop, #agy-mcp-oauth-connect-backdrop, #agy-mcp-settings-pane, ' +
+    '.agy-ko-settings-root, #agy-ko-translator-modal, ' +
     '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
     'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
     '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
@@ -533,6 +541,13 @@
 
   function localizeStaticUiInRoot(rootNode) {
     if (!rootNode) return;
+    if (
+      rootNode.nodeType === 1 &&
+      typeof rootNode.getAttribute === 'function' &&
+      rootNode.getAttribute('data-agy-no-translate') === 'true'
+    ) {
+      return;
+    }
     localizeAttributesInRoot(rootNode);
     const showFilter =
       typeof NodeFilter !== 'undefined' && NodeFilter
@@ -542,7 +557,11 @@
       acceptNode(node) {
         if (!node) return typeof NodeFilter !== 'undefined' && NodeFilter.FILTER_REJECT ? NodeFilter.FILTER_REJECT : 2;
         if (node.nodeType === 1) {
-          if (typeof node.matches === 'function' && node.matches(STATIC_UI_SUBTREE_PRUNE_SELECTOR)) {
+          if (
+            node !== rootNode &&
+            typeof node.matches === 'function' &&
+            node.matches(STATIC_UI_SUBTREE_PRUNE_SELECTOR)
+          ) {
             return typeof NodeFilter !== 'undefined' && NodeFilter.FILTER_REJECT ? NodeFilter.FILTER_REJECT : 2;
           }
           return typeof NodeFilter !== 'undefined' && NodeFilter.FILTER_SKIP ? NodeFilter.FILTER_SKIP : 3;
@@ -782,6 +801,7 @@
     try {
       const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
       let cur = fk ? btn[fk] : null;
+      let sawLocalActiveFalse = false;
       for (let i = 0; i < 16 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
@@ -791,12 +811,23 @@
             if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
             if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
           }
+          // Immediate wrapper (<G_> at depth 2) transitions isActive: true -> false as soon as a thinking step finishes
+          // streaming ("Thought for Xs"), while <Lhc> at depth 4..11 carries turn-level isLastContainer / segment.isLatest.
           if (i <= 6) {
             if (mp.isActive === true) return true;
-            if (mp.isActive === false) return false;
+            if (mp.isActive === false || mp.isRunning === false) {
+              sawLocalActiveFalse = true;
+            }
           }
         }
         cur = cur.return;
+      }
+      if (
+        sawLocalActiveFalse &&
+        (!Array.isArray(workedBtns) || workedBtns.length === 0) &&
+        (!Array.isArray(thinkingBtns) || thinkingBtns.length === 0)
+      ) {
+        return false;
       }
     } catch (e) {}
     if (Array.isArray(workedBtns) && workedBtns.length > 0) {
@@ -1128,6 +1159,7 @@
             RC.prototype.__agyKoProbeHooked = true;
             for (const mName of [
               'handleIframeMessage',
+              'handleUrlChanged',
               'proxyCommand',
               'streamProxyCommand',
               'handlePortRequest',
@@ -1166,8 +1198,9 @@
             }
             if (!window.__agyRemoteControlInstance && typeof MessageEvent === 'function') {
               // When RC bound window.addEventListener('message', this.handleIframeMessage.bind(this)) at construction time,
-              // the bound listener still invokes methods on `this` (e.g. this.onIframeLoad() when ev.data.type === 'IFRAME_READY',
-              // or this.isDisconnected() / this.getSelectedInstance()) when the message comes from iframe.contentWindow.
+              // the bound listener still invokes methods on `this` (e.g. this.handleUrlChanged(a.data.path || '') when
+              // a.data.type === 'URL_CHANGED' in boq-jetski m=PGmR6b, or this.onIframeLoad() when a.data.type === 'IFRAME_READY')
+              // when the message comes from iframe.contentWindow.
               const innerIframe = rcEl && typeof rcEl.querySelector === 'function' ? rcEl.querySelector('iframe') : null;
               let innerCw = null;
               try {
@@ -1181,6 +1214,7 @@
                 }
               } catch (e) {}
               const origOnLoadProto = RC.prototype.onIframeLoad;
+              const origHandleUrlChangedProto = RC.prototype.handleUrlChanged;
               let probeIntercepting = true;
               RC.prototype.onIframeLoad = function () {
                 if (this && !this.destroyed) {
@@ -1189,11 +1223,20 @@
                 if (probeIntercepting) return Promise.resolve();
                 return typeof origOnLoadProto === 'function' ? origOnLoadProto.apply(this, arguments) : undefined;
               };
+              RC.prototype.handleUrlChanged = function () {
+                if (this && !this.destroyed) {
+                  window.__agyRemoteControlInstance = this;
+                }
+                if (probeIntercepting) return;
+                return typeof origHandleUrlChangedProto === 'function'
+                  ? origHandleUrlChangedProto.apply(this, arguments)
+                  : undefined;
+              };
               try {
                 window.dispatchEvent(new MessageEvent('message', { data: '__agy_ko_probe__' }));
-                if (!window.__agyRemoteControlInstance) {
+                const buildProbeMessageEvent = (dataPayload) => {
                   const evInit = {
-                    data: { type: 'IFRAME_READY', payload: { __agyKoProbe: true } },
+                    data: dataPayload,
                     origin: innerOrigin,
                   };
                   if (innerCw) {
@@ -1206,7 +1249,7 @@
                     probeMsgEv = new MessageEvent('message', evInit);
                   } catch (e) {
                     probeMsgEv = new MessageEvent('message', {
-                      data: { type: 'IFRAME_READY', payload: { __agyKoProbe: true } },
+                      data: dataPayload,
                       origin: innerOrigin,
                     });
                     if (innerCw) {
@@ -1215,11 +1258,22 @@
                       } catch (err) {}
                     }
                   }
-                  window.dispatchEvent(probeMsgEv);
+                  return probeMsgEv;
+                };
+                if (!window.__agyRemoteControlInstance) {
+                  window.dispatchEvent(
+                    buildProbeMessageEvent({ type: 'URL_CHANGED', path: '', __agyKoProbe: true })
+                  );
+                }
+                if (!window.__agyRemoteControlInstance) {
+                  window.dispatchEvent(
+                    buildProbeMessageEvent({ type: 'IFRAME_READY', payload: { __agyKoProbe: true } })
+                  );
                 }
               } finally {
                 probeIntercepting = false;
                 RC.prototype.onIframeLoad = origOnLoadProto;
+                RC.prototype.handleUrlChanged = origHandleUrlChangedProto;
               }
             }
           } catch (e) {}
@@ -1435,13 +1489,34 @@
       }
     };
 
+    const normalizeFileUriOrPath = (rawVal) => {
+      if (!rawVal) return '';
+      let str = String(rawVal).trim();
+      if (!str) return '';
+      try {
+        str = decodeURIComponent(str);
+      } catch (e) {}
+      str = str.replace(/^file:\/\//i, '').replace(/\\/g, '/');
+      // Strip leading slash before Windows drive letters (e.g. "/C:/Users/..." -> "C:/Users/...")
+      // while preserving leading slash on POSIX/Linux/macOS paths ("/home/...", "/Users/...")
+      str = str.replace(/^\/+([A-Za-z]:\/)/, '$1').replace(/\/+$/, '');
+      return str;
+    };
+
     try {
-      const userRes = await callRpc(['getLocalUserInfo', 'GetLocalUserInfo'], null, {});
-      let homeDir = String(
-        userRes?.homeDir || userRes?.userHome || userRes?.userInfo?.homeDir || ''
-      )
-        .replace(/\\/g, '/')
-        .replace(/\/+$/, '');
+      const userRes = await callRpc(
+        ['getLocalUserInfo', 'GetLocalUserInfo'],
+        '/exa.language_server_pb.LanguageServerService/GetLocalUserInfo',
+        {}
+      );
+      const homeDir = normalizeFileUriOrPath(
+        userRes?.homeDirUri ||
+          userRes?.homeDir ||
+          userRes?.userHome ||
+          userRes?.userInfo?.homeDirUri ||
+          userRes?.userInfo?.homeDir ||
+          ''
+      );
       if (homeDir) {
         const bundlePath = `${homeDir}/.gemini/antigravity/statusbar_autoinject.js`;
         const fileRes = await callRpc(
@@ -1476,20 +1551,37 @@
       ]);
 
       const candidatePaths = [];
+      const inspectPluginItemIdentity = (item) => {
+        if (!item || typeof item !== 'object') return;
+        const fields = [
+          item.name,
+          item.id,
+          item.pluginName,
+          item.pluginId,
+          item.slug,
+          item.path,
+          item.uri,
+          item.rootUri,
+          item.directory,
+        ];
+        for (const f of fields) {
+          if (!f) continue;
+          const s = String(f);
+          if (/antigravity-statusbar/i.test(s)) info.statusbarInstalled = true;
+          if (/antigravity-mcp-manager/i.test(s)) info.mcpManagerInstalled = true;
+        }
+        const pathCandidate = item.path || item.uri || item.rootUri || item.directory;
+        if (pathCandidate) candidatePaths.push(String(pathCandidate));
+      };
+
       for (const resObj of [pluginsRes, statesRes]) {
         if (!resObj) continue;
         info.resolved = true;
-        const rawJson = JSON.stringify(resObj);
-        if (/antigravity-statusbar/i.test(rawJson)) info.statusbarInstalled = true;
-        if (/antigravity-mcp-manager/i.test(rawJson)) info.mcpManagerInstalled = true;
-        if (Array.isArray(resObj.plugins)) {
-          for (const p of resObj.plugins) {
-            if (p?.path) candidatePaths.push(String(p.path));
-          }
-        }
-        if (Array.isArray(resObj.states)) {
-          for (const s of resObj.states) {
-            if (s?.path) candidatePaths.push(String(s.path));
+        for (const listKey of ['plugins', 'states', 'items', 'customizations']) {
+          if (Array.isArray(resObj[listKey])) {
+            for (const entry of resObj[listKey]) {
+              inspectPluginItemIdentity(entry);
+            }
           }
         }
       }
@@ -1503,30 +1595,24 @@
         if (Array.isArray(skillsRes?.skills)) {
           info.resolved = true;
           for (const sk of skillsRes.skills) {
-            if (sk?.path) candidatePaths.push(String(sk.path));
+            const skPath = sk?.path || sk?.uri || sk?.rootUri;
+            if (skPath) candidatePaths.push(String(skPath));
           }
         }
       }
 
       if (!homeDir && candidatePaths.length > 0) {
         for (const rawPath of candidatePaths) {
-          const norm = String(rawPath).replace(/^file:\/\/\/?/i, '').replace(/\\/g, '/');
+          const norm = normalizeFileUriOrPath(rawPath);
           const idx = norm.indexOf('/.gemini/');
           if (idx !== -1) {
-            const prefix =
-              String(rawPath).startsWith('file:///') && norm.startsWith('Users/')
-                ? '/'
-                : '';
-            const geminiDir = (prefix + norm.slice(0, idx + 8)).replace(
-              /^\/+([A-Za-z]:\/)/,
-              '$1'
-            );
-            const uriPrefix = geminiDir.startsWith('/') ? 'file://' : 'file:///';
-            const uri = `${uriPrefix}${geminiDir}/antigravity/statusbar_autoinject.js`;
+            const geminiDir = norm.slice(0, idx + 8);
+            const bundlePath = `${geminiDir}/antigravity/statusbar_autoinject.js`;
+            const uri = bundlePath.startsWith('/') ? `file://${bundlePath}` : `file:///${bundlePath}`;
             const rf = await callRpc(
               ['readFile', 'ReadFile'],
               '/exa.language_server_pb.LanguageServerService/ReadFile',
-              { uri, path: `${geminiDir}/antigravity/statusbar_autoinject.js` }
+              { uri, path: bundlePath, filePath: bundlePath, absolutePath: bundlePath }
             );
             const rawContent = String(rf?.content || rf?.text || rf?.data || '');
             const decoded =
@@ -2092,6 +2178,7 @@
   let scanTimerScheduled = false;
   let lastObservedCascadeId = null;
   let sessionSwitchFreezeTimer = null;
+  let sessionSwitchFreezeUntil = 0;
 
   function guardSessionSwitchTransitions() {
     try {
@@ -2111,6 +2198,15 @@
         if (single) views.push(single);
       }
       if (views.length === 0) return;
+
+      const hasMountedTurnElement = (viewEl) =>
+        Boolean(
+          viewEl &&
+            typeof viewEl.querySelector === 'function' &&
+            viewEl.querySelector(
+              'button[data-testid="worked-for-collapsible"], button[data-testid="thinking-collapsible-trigger"], [data-testid="user-message-bubble"]'
+            )
+        );
 
       let switched = false;
       for (const convView of views) {
@@ -2141,9 +2237,17 @@
             v.setAttribute('data-agy-session-switching', '1');
           }
         }
+        const now = typeof Date !== 'undefined' && typeof Date.now === 'function' ? Date.now() : 0;
+        const requestedUntil = now + durationMs;
+        if (sessionSwitchFreezeTimer && sessionSwitchFreezeUntil > requestedUntil) {
+          return;
+        }
+        sessionSwitchFreezeUntil = Math.max(sessionSwitchFreezeUntil, requestedUntil);
+        const remainingMs = Math.max(durationMs, sessionSwitchFreezeUntil - now);
         if (sessionSwitchFreezeTimer) clearTimeout(sessionSwitchFreezeTimer);
         sessionSwitchFreezeTimer = setTimeout(() => {
           sessionSwitchFreezeTimer = null;
+          sessionSwitchFreezeUntil = 0;
           try {
             const liveViews =
               typeof document.querySelectorAll === 'function'
@@ -2162,31 +2266,36 @@
               observer.takeRecords();
             }
           } catch (e) {}
-        }, durationMs);
+        }, remainingMs);
       };
 
       if (switched) {
         for (const v of views) {
-          if (v) v.__agyTrajectoryMountedForCascade = null;
+          if (!v) continue;
+          const cid = v.getAttribute ? v.getAttribute('data-cascade-id') : null;
+          if (hasMountedTurnElement(v)) {
+            v.__agyTrajectoryMountedForCascade = cid;
+            v.__agyAwaitingAsyncTrajectoryForCascade = null;
+          } else {
+            v.__agyTrajectoryMountedForCascade = null;
+            v.__agyAwaitingAsyncTrajectoryForCascade = cid;
+          }
         }
         armFreezeTimer(views, 650);
       } else {
         // When IEc finishes async trajectorySlice load after the spinner (tEc), turns mount into the view.
-        // Extend the transition-suppression window by 250ms on that first turn mount so delayed mounts never animate/flicker.
+        // Extend or re-arm the transition-suppression window by 250ms on that first turn mount (even if async load took >650ms)
+        // without ever shortening an active 650ms freeze timer.
         for (const v of views) {
           if (!v || typeof v.querySelector !== 'function') continue;
           const cid = v.getAttribute ? v.getAttribute('data-cascade-id') : null;
-          if (
-            cid &&
-            v.__agyTrajectoryMountedForCascade !== cid &&
-            v.querySelector(
-              'button[data-testid="worked-for-collapsible"], button[data-testid="thinking-collapsible-trigger"], [data-testid="user-message-bubble"]'
-            )
-          ) {
+          if (cid && v.__agyTrajectoryMountedForCascade !== cid && hasMountedTurnElement(v)) {
             const wasSwitching =
+              v.__agyAwaitingAsyncTrajectoryForCascade === cid ||
               v.getAttribute('data-agy-session-switching') === '1' ||
               Boolean(sessionSwitchFreezeTimer);
             v.__agyTrajectoryMountedForCascade = cid;
+            v.__agyAwaitingAsyncTrajectoryForCascade = null;
             if (wasSwitching) {
               armFreezeTimer(views, 250);
             }
@@ -2280,8 +2389,7 @@
         if (
           tEl &&
           tEl.closest &&
-          (tEl.closest('.agy-ko-thought-wrap') ||
-            tEl.closest('.agy-ko-settings-root') ||
+          (tEl.closest(CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR) ||
             tEl.classList?.contains('agy-ko-trigger-label'))
         ) {
           continue;
@@ -2294,7 +2402,7 @@
         if (
           parent &&
           !parent.classList.contains('agy-ko-trigger-label') &&
-          !parent.closest('.agy-ko-thought-wrap') &&
+          (!parent.closest || !parent.closest(CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR)) &&
           m.target.__agyKoApplied !== (m.target.nodeValue || '').trim()
         ) {
           scheduleCoalescedScan();
@@ -2302,6 +2410,9 @@
         }
       }
       if (m.type === 'attributes' && m.target && m.target.closest) {
+        if (m.target.closest(CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR)) {
+          continue;
+        }
         if (m.attributeName === 'data-cascade-id') {
           guardSessionSwitchTransitions();
           scheduleCoalescedScan();

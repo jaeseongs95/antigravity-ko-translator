@@ -35,14 +35,14 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 ```
 - 런타임 제어: `window.__agySetPretranslate(true)` / `window.__agySetPretranslate(false)`
 
-## 번역 어댑터(Provider) 전환 (`local-llm` / `google-translate`)
-- 기본값: `local-llm`
+## 번역 어댑터(Provider) 전환 (`google-translate` / `local-llm`)
+- 기본값: `google-translate`
 ```powershell
-# 로컬 LLM 어댑터 사용 (기본)
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --provider local-llm
-
-# Google 번역 어댑터 사용 (로컬 LLM 서버 자동 종료)
+# Google 번역 어댑터 사용 (기본, 로컬 LLM 서버 자동 종료)
 node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --provider google-translate
+
+# 로컬 LLM 어댑터 사용
+node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --provider local-llm
 ```
 - 런타임 제어 및 커스텀 어댑터 등록:
   - `window.__agySetTranslationProvider('local-llm' | 'google-translate')`

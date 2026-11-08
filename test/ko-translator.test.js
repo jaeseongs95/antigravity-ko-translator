@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.23';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.24';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -633,17 +633,45 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   const toolGroupWithoutThinking = makeCollapsibleBtn('__reactFiber$toolGrp2', {
     memoizedProps: { isLastTurn: true, steps: [{ step: { value: { thinking: '' } } }] },
   });
-  // KO-BUG-02: Historical completed thinking trigger (`isActive: false` on G_/A6b, `isLastContainer: false` on Lhc)
-  // vs active/latest thinking trigger (`isLastTurn: true` / `isActive: true`).
+  // KO-BUG-02 & KO-NEW-BUG-01: Realistic Antigravity v2.29.0 Fiber hierarchy (`button` i=0 -> `<div.relative>` i=1 -> `<G_ isActive>` i=2 -> `<A6b>` i=3 -> `<Lhc isLastContainer segment.isLatest>` i=4).
   const historicalThinkingTriggerBtn = makeCollapsibleBtn('__reactFiber$thinkingHist', {
-    memoizedProps: { isActive: false },
+    memoizedProps: {},
     return: {
-      memoizedProps: { isRunning: true, isLastContainer: false, segment: { isLatest: false } },
-      return: null,
+      memoizedProps: {},
+      return: {
+        // G_ at depth 2
+        memoizedProps: { isActive: false },
+        return: {
+          // A6b at depth 3
+          memoizedProps: {},
+          return: {
+            // Lhc at depth 4
+            memoizedProps: { isRunning: true, isLastContainer: false, segment: { isLatest: false } },
+            return: null,
+          },
+        },
+      },
     },
   });
+  const thinkingGWrapperProps = { isActive: true };
   const thinkingTriggerBtn = makeCollapsibleBtn('__reactFiber$thinking1', {
-    memoizedProps: { isActive: true, isLastTurn: true },
+    memoizedProps: {},
+    return: {
+      memoizedProps: {},
+      return: {
+        // G_ at depth 2: transitions isActive: true -> false when thinking step finishes streaming!
+        memoizedProps: thinkingGWrapperProps,
+        return: {
+          // A6b at depth 3
+          memoizedProps: {},
+          return: {
+            // Lhc at depth 4: carries turn-level isLastContainer: true, segment: { isLatest: true }
+            memoizedProps: { isRunning: true, isLastContainer: true, segment: { isLatest: true } },
+            return: null,
+          },
+        },
+      },
+    },
   });
 
   let showThinkingFlag = true;
@@ -695,11 +723,37 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'D-0013 & KO-BUG-01/02: must NOT force-expand historical completed workedWithThinking, historicalToolGroupInRunningConv, or historicalThinkingTriggerBtn on session switch'
   );
 
-  // Simulate React G_ collapsing toolGroupWithThinking, toolGroupWithoutThinking & thinkingTriggerBtn when step finishes (isActive: true -> false)
+  // Simulate React G_ collapsing toolGroupWithThinking, toolGroupWithoutThinking & thinkingTriggerBtn when step finishes (isActive: true -> false at depth 2 <G_>)
   clickedOrder = [];
+  thinkingGWrapperProps.isActive = false;
   toolGroupWithThinking.expandedState = 'false';
   toolGroupWithoutThinking.expandedState = 'false';
   thinkingTriggerBtn.expandedState = 'false';
+  assert.equal(
+    expandSandbox.__isThinkingActive(
+      thinkingTriggerBtn,
+      [workedWithThinking, activeHiddenWorked],
+      [historicalThinkingTriggerBtn, thinkingTriggerBtn]
+    ),
+    true,
+    'KO-NEW-BUG-01: isThinkingTriggerInActiveOrLatestTurn must still return true when <G_> at depth 2 sets isActive:false on completion while <Lhc> at depth 4 has isLastContainer:true'
+  );
+  // Also verify DOM fallback (lines 802+) is reachable when <G_> has isActive:false and <Lhc> lacks isLastContainer
+  const domFallbackThinkingBtn = makeCollapsibleBtn('__reactFiber$thinkingDomFallback', {
+    memoizedProps: {},
+    return: {
+      memoizedProps: {},
+      return: {
+        memoizedProps: { isActive: false },
+        return: null,
+      },
+    },
+  });
+  assert.equal(
+    expandSandbox.__isThinkingActive(domFallbackThinkingBtn, [], [historicalThinkingTriggerBtn, domFallbackThinkingBtn]),
+    true,
+    'KO-NEW-BUG-01: DOM fallback must be reachable when depth 2 <G_> has isActive:false and no higher Lhc fiber exists'
+  );
   expandSandbox.__scanTriggerButtonsSync();
   assert.deepEqual(
     clickedOrder,
@@ -822,7 +876,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.23',
+      __agyKoLocalizerActive: 'v13.24',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1214,8 +1268,10 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'D-0011: probeHostCompanionPluginsForRemote must safely catch cross-origin iframe.contentWindow SecurityError and return unresolved info'
   );
 
-  // KO-BUG-04a/b: Verify applyRawBundleInspection extracts baseSegment as statusbarCode (even without BEGIN_AGY_STATUSBAR)
-  // and line-start anchored extractCompanionBlock ignores inline string literals inside ko-thought-translator
+  // KO-BUG-04a/b & KO-NEW-BUG-02: Verify applyRawBundleInspection extracts baseSegment as statusbarCode (even without BEGIN_AGY_STATUSBAR),
+  // line-start anchored extractCompanionBlock ignores inline string literals inside ko-thought-translator,
+  // GetLocalUserInfoResponse.homeDirUri is decoded and used, GetAllPluginsResponse embedding ko-thought-translator's own README.md
+  // does NOT cause false-positive statusbarInstalled/mcpManagerInstalled on standalone hosts, and Linux candidatePaths preserve leading '/'.
   const realisticCombinedBundle = [
     '// ==UserScript==',
     '// @name         Antigravity Custom Statusbar (Local & Remote Control)',
@@ -1229,11 +1285,15 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     '/* === END_AGY_KO_THOUGHT_LOCALIZER_V2 === */',
     '// === END_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
   ].join('\n');
+  let capturedReadFileArgs = null;
   const bundleProbeSandbox = {
     window: {
       __agyCapturedLsClient: {
-        getLocalUserInfo: async () => ({ homeDir: 'C:/Users/Lenovo' }),
-        readFile: async () => ({ content: realisticCombinedBundle }),
+        getLocalUserInfo: async () => ({ homeDirUri: 'file:///C:/Users/Lenovo%20User' }),
+        readFile: async (args) => {
+          capturedReadFileArgs = args;
+          return { content: realisticCombinedBundle };
+        },
         getAllPlugins: async () => ({ plugins: [] }),
         getCustomizationStates: async () => ({ states: [] }),
       },
@@ -1250,6 +1310,11 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   );
   const bundleInfo = await bundleProbeSandbox.__probeBundle(null);
   assert.equal(bundleInfo.resolved, true);
+  assert.equal(
+    capturedReadFileArgs?.path,
+    'C:/Users/Lenovo User/.gemini/antigravity/statusbar_autoinject.js',
+    'KO-NEW-BUG-02: probeHostCompanionPluginsForRemote must decode homeDirUri (file:///C:/Users/...) and strip leading slash before Windows drive letter'
+  );
   assert.equal(bundleInfo.statusbarInstalled, true);
   assert.ok(
     bundleInfo.statusbarCode.includes('mountContextStatusBar') &&
@@ -1263,8 +1328,74 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'KO-BUG-04: extractCompanionBlock must use line-start anchors and ignore inline marker literals'
   );
 
-  // KO-BUG-04c: Verify getRemoteControlComponentInstance captures rcInst when Angular 19 debug APIs return null
-  // AND window.addEventListener('message', this.handleIframeMessage.bind(this)) was ALREADY bound at construction time!
+  // KO-NEW-BUG-02 standalone host check: GetAllPluginsResponse embeds ko-thought-translator's README.md mentioning
+  // both 'antigravity-statusbar' and 'antigravity-mcp-manager', and candidatePaths on Linux use 'file:///home/dev/.gemini/...'.
+  let linuxReadFileArgs = null;
+  const standaloneLinuxSandbox = {
+    window: {
+      __agyCapturedLsClient: {
+        getLocalUserInfo: async () => ({}),
+        readFile: async (args) => {
+          linuxReadFileArgs = args;
+          return {
+            content: [
+              '// === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
+              'console.log("standalone ko-thought-translator only");',
+              '// === END_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
+            ].join('\n'),
+          };
+        },
+        getAllPlugins: async () => ({
+          plugins: [
+            {
+              name: 'ko-thought-translator',
+              id: 'ko-thought-translator',
+              path: 'file:///home/dev%20user/.gemini/config/plugins/ko-thought-translator',
+              readme:
+                'Integrates with antigravity-statusbar (StatusBarAdapter) and antigravity-mcp-manager in Remote Control.',
+              description: 'Mentions antigravity-statusbar and antigravity-mcp-manager in docs.',
+            },
+          ],
+        }),
+        getCustomizationStates: async () => ({ states: [] }),
+      },
+    },
+    document: {},
+    getRemoteControlComponentInstance: () => null,
+    decodeBase64Utf8: (s) => s,
+    injectRemoteCompanionScript: () => {},
+    refreshStatusbarTranslatorAdapter: () => {},
+  };
+  vm.runInNewContext(
+    `${extractBlockFnsCode}\n${syncFnsCode}\n;globalThis.__probeStandalone = probeHostCompanionPluginsForRemote;`,
+    standaloneLinuxSandbox
+  );
+  const standaloneInfo = await standaloneLinuxSandbox.__probeStandalone(null);
+  assert.equal(standaloneInfo.resolved, true);
+  assert.equal(
+    standaloneInfo.statusbarInstalled,
+    false,
+    'KO-NEW-BUG-02: standalone ko-thought-translator README mentioning antigravity-statusbar must NOT set statusbarInstalled=true'
+  );
+  assert.equal(
+    standaloneInfo.mcpManagerInstalled,
+    false,
+    'KO-NEW-BUG-02: standalone ko-thought-translator README mentioning antigravity-mcp-manager must NOT set mcpManagerInstalled=true'
+  );
+  assert.equal(
+    linuxReadFileArgs?.path,
+    '/home/dev user/.gemini/antigravity/statusbar_autoinject.js',
+    'KO-NEW-BUG-02: Linux file:///home/... candidatePaths must preserve leading slash and decode percent-encoding'
+  );
+  assert.equal(
+    linuxReadFileArgs?.uri,
+    'file:///home/dev user/.gemini/antigravity/statusbar_autoinject.js',
+    'KO-NEW-BUG-02: Linux ReadFile uri must be file:///home/...'
+  );
+
+  // KO-BUG-04c & KO-NEW-BUG-03: Verify getRemoteControlComponentInstance captures rcInst when Angular 19 debug APIs return null
+  // AND window.addEventListener('message', this.handleIframeMessage.bind(this)) was ALREADY bound at construction time
+  // matching real boq-jetski (m=PGmR6b offset 8845378) where handleIframeMessage checks `a.data.type === 'URL_CHANGED'` -> `this.handleUrlChanged(a.data.path || '')`!
   function MockRemoteControlComponent() {
     this.destroyed = false;
   }
@@ -1272,9 +1403,14 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   MockRemoteControlComponent.prototype.onIframeLoad = function () {
     throw new Error('real onIframeLoad should be suppressed during probe!');
   };
-  MockRemoteControlComponent.prototype.handleIframeMessage = function (ev) {
-    if (!ev || !ev.data || ev.data.type !== 'IFRAME_READY') return;
-    this.onIframeLoad();
+  MockRemoteControlComponent.prototype.handleUrlChanged = function () {
+    throw new Error('real handleUrlChanged should be suppressed during probe!');
+  };
+  MockRemoteControlComponent.prototype.handleIframeMessage = function (a) {
+    if (!a || !a.data) return;
+    if (a.data.type === 'URL_CHANGED') {
+      this.handleUrlChanged(a.data.path || '');
+    }
   };
   const preConstructedRc = new MockRemoteControlComponent();
   const boundListeners = [];
@@ -1322,22 +1458,30 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(
     capturedBoundRc,
     preConstructedRc,
-    'KO-BUG-04: getRemoteControlComponentInstance must capture pre-constructed RC instance via bound handleIframeMessage -> onIframeLoad without running real teardownProxyPort'
+    'KO-NEW-BUG-03: getRemoteControlComponentInstance must capture pre-constructed RC instance via bound boq-jetski handleIframeMessage (URL_CHANGED -> handleUrlChanged) without running real side effects'
   );
 
-  // 14. D-0013 & KO-BUG-03/05 regression checks: session switch flicker prevention (historical collapsible stability, transition suppression on both conversation-view and subagent-tab-conversation, microtask coalescing, TreeWalker subtree pruning, conditional root attribute sync, README accuracy)
+  // 14. D-0013 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, timer non-shortening, >650ms async trajectorySlice mount protection, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.23') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.23 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v13.24') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.24 and must NOT claim verboseConversationSteps: true is force-enabled'
+  );
+  const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
+  assert.ok(
+    skillMdText.includes('기본값: `google-translate`') && !skillMdText.includes('기본값: `local-llm`'),
+    'KO-NEW-BUG-05: skills/ko-thought-translator/SKILL.md must document google-translate as the default provider'
   );
   assert.ok(
     mod06.includes('[data-testid="conversation-view"][data-agy-session-switching="1"]'),
     'D-0013: STYLE_CSS must suppress transitions on conversation-view during session switching'
   );
   assert.ok(
-    mod08.includes('STATIC_UI_SUBTREE_PRUNE_SELECTOR') && mod08.includes('NodeFilter.FILTER_REJECT'),
-    'D-0013: localizeStaticUiInRoot must prune excluded subtrees via NodeFilter.FILTER_REJECT'
+    mod08.includes('STATIC_UI_SUBTREE_PRUNE_SELECTOR') &&
+      mod08.includes('CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR') &&
+      mod08.includes('[data-agy-no-translate="true"]') &&
+      mod08.includes('NodeFilter.FILTER_REJECT'),
+    'D-0013: localizeStaticUiInRoot and MutationObserver must prune excluded and [data-agy-no-translate="true"] subtrees'
   );
   assert.ok(
     mod08.includes('fastScanMicrotaskScheduled') && mod08.includes('guardSessionSwitchTransitions'),
@@ -1387,13 +1531,20 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'D-0013: syncShowThinkingDomAttribute must NOT call setAttribute repeatedly when data-agy-hide-thinking="1" is already set'
   );
 
-  // Verify guardSessionSwitchTransitions sets data-agy-session-switching="1" on both conversation-view and subagent-tab-conversation on cascadeId change
+  // Verify guardSessionSwitchTransitions:
+  // 1) sets data-agy-session-switching="1" on both conversation-view and subagent-tab-conversation on cascadeId change
+  // 2) does NOT shorten the 650ms timer to 250ms on the next microtask when turns are already present
+  // 3) arms a 250ms timer when an empty view finishes async trajectorySlice load even after >650ms (700ms)
   const guardSwitchMatch = mod08.match(
-    /let lastObservedCascadeId = null;\r?\n  let sessionSwitchFreezeTimer = null;\r?\n\r?\n  function guardSessionSwitchTransitions\(\)\s*\{[\s\S]*?\r?\n  \}/
+    /let lastObservedCascadeId = null;\r?\n  let sessionSwitchFreezeTimer = null;\r?\n  let sessionSwitchFreezeUntil = 0;\r?\n\r?\n  function guardSessionSwitchTransitions\(\)\s*\{[\s\S]*?\r?\n  \}/
   );
   assert.ok(guardSwitchMatch, 'guardSessionSwitchTransitions must exist in 08-dom-observer.js');
-  const convAttrs = { 'data-cascade-id': 'session-alpha' };
-  const subagentAttrs = { 'data-cascade-id': 'subagent-alpha' };
+  const convAttrs = { 'data-testid': 'conversation-view', 'data-cascade-id': 'session-alpha' };
+  const subagentAttrs = { 'data-testid': 'subagent-tab-conversation', 'data-cascade-id': 'subagent-alpha' };
+  let convHasTurns = true;
+  let fakeNow = 1000;
+  let scheduledTimers = [];
+  let activeTimerCallback = null;
   const mockConvEl = {
     getAttribute: (k) => convAttrs[k] ?? null,
     setAttribute: (k, v) => {
@@ -1402,7 +1553,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     removeAttribute: (k) => {
       delete convAttrs[k];
     },
-    querySelector: () => null,
+    querySelector: () => (convHasTurns ? {} : null),
   };
   const mockSubagentEl = {
     getAttribute: (k) => subagentAttrs[k] ?? null,
@@ -1415,26 +1566,68 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     querySelector: () => null,
   };
   const switchSandbox = {
+    Date: { now: () => fakeNow },
     document: {
       querySelectorAll: () => [mockConvEl, mockSubagentEl],
       querySelector: () => mockConvEl,
     },
-    setTimeout: () => 1,
-    clearTimeout: () => {},
+    setTimeout: (cb, ms) => {
+      activeTimerCallback = cb;
+      scheduledTimers.push(ms);
+      return scheduledTimers.length;
+    },
+    clearTimeout: () => {
+      activeTimerCallback = null;
+    },
   };
   vm.runInNewContext(`${guardSwitchMatch[0]}\n;globalThis.__guardSwitch = guardSessionSwitchTransitions;`, switchSandbox);
   switchSandbox.__guardSwitch();
   assert.equal(convAttrs['data-agy-session-switching'], undefined, 'initial session observation must not mark session switching');
+
+  // Case A: Switch to session-beta where turns are already in DOM at t=1000ms, then next microtask runs at t=1001ms
   convAttrs['data-cascade-id'] = 'session-beta';
+  convHasTurns = true;
+  scheduledTimers = [];
+  switchSandbox.__guardSwitch();
+  assert.equal(convAttrs['data-agy-session-switching'], '1');
+  assert.equal(subagentAttrs['data-agy-session-switching'], '1');
+  assert.deepEqual(scheduledTimers, [650], 'initial switch must arm 650ms freeze timer');
+  fakeNow = 1001;
+  switchSandbox.__guardSwitch();
+  assert.deepEqual(
+    scheduledTimers,
+    [650],
+    'KO-NEW-BUG-04: next microtask with switched=false and turns present must NOT overwrite 650ms timer with 250ms'
+  );
+
+  // Expire the 650ms timer
+  fakeNow = 1700;
+  if (activeTimerCallback) activeTimerCallback();
+  assert.equal(convAttrs['data-agy-session-switching'], undefined);
+
+  // Case B: Switch to session-gamma with empty view (spinner) at t=2000ms; async trajectorySlice mounts at t=2700ms (>650ms after timer expired)
+  fakeNow = 2000;
+  convAttrs['data-cascade-id'] = 'session-gamma';
+  convHasTurns = false;
+  scheduledTimers = [];
+  switchSandbox.__guardSwitch();
+  assert.deepEqual(scheduledTimers, [650]);
+  // 650ms timer expires at t=2650ms while view is still empty
+  fakeNow = 2650;
+  if (activeTimerCallback) activeTimerCallback();
+  assert.equal(convAttrs['data-agy-session-switching'], undefined);
+  // At t=2700ms (700ms after switch), async trajectorySlice finally mounts turns into the view
+  fakeNow = 2700;
+  convHasTurns = true;
   switchSandbox.__guardSwitch();
   assert.equal(
     convAttrs['data-agy-session-switching'],
     '1',
-    'D-0013 & KO-BUG-03: switching data-cascade-id must set data-agy-session-switching="1" on conversation-view'
+    'KO-NEW-BUG-04: async trajectorySlice mounting after >650ms must still re-arm data-agy-session-switching="1"'
   );
-  assert.equal(
-    subagentAttrs['data-agy-session-switching'],
-    '1',
-    'KO-BUG-03: switching data-cascade-id must also protect subagent-tab-conversation'
+  assert.deepEqual(
+    scheduledTimers,
+    [650, 250],
+    'KO-NEW-BUG-04: async trajectorySlice mounting after >650ms must arm the 250ms transition-suppression window'
   );
 });

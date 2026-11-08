@@ -7,6 +7,7 @@
     }
     .agy-ko-thought-wrap {
       position: relative;
+      contain: layout style;
     }
     button[data-testid="thinking-collapsible-trigger"] > span[data-agy-orig-label="1"],
     button[data-testid="worked-for-collapsible"] > span[data-agy-orig-label="1"],
