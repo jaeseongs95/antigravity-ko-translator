@@ -27,10 +27,10 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.26';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.27';"));
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugin.json'), 'utf8'));
-  assert.equal(pkgJson.version, '1.2.31');
+  assert.equal(pkgJson.version, '1.2.32');
   assert.equal(pluginJson.version, pkgJson.version, 'D-0019: plugin.json version must stay synchronized with package.json');
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
@@ -993,13 +993,15 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.26',
+      __agyKoLocalizerActive: 'v13.27',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
       __agyTranslateStaticUiSync: (s) => {
         if (s === 'Open IDE') return 'IDE 열기';
         if (s === 'Exited with code 0') return '종료 코드 0';
+        if (s === '2 subagents/tasks running') return '서브에이전트/작업 2개 실행 중';
+        if (s === 'CLI Project') return 'CLI 프로젝트';
         return null;
       },
       __agyLastDefaultPretranslate: false,
@@ -1586,8 +1588,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 14. D-0013~D-0019 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, .no-animations Web Animations suppression, 16ms FOUC elimination, worked-for latest turn guard, retranslateVisibleThoughts parent propagation, queued messages card & new strings, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.26') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.26 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v13.27') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.27 and must NOT claim verboseConversationSteps: true is force-enabled'
   );
   const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
   assert.ok(
@@ -1912,4 +1914,133 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     [650, 250],
     'KO-NEW-BUG-04: async trajectorySlice mounting after >650ms must arm the 250ms transition-suppression window'
   );
+});
+
+test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Project header localization, and bilingual README contract', () => {
+  const mod02 = fs.readFileSync(path.join(RENDERER_DIR, '02-static-ui-dict.js'), 'utf8');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+
+  const dictSandbox = { window: {} };
+  vm.runInNewContext(`${mod02}\n;globalThis.__tr = translateStaticUiSync;`, dictSandbox);
+  const tr = dictSandbox.__tr;
+
+  // D-0020: idle-status-text & browser status patterns
+  assert.equal(tr('2 subagents/tasks running'), '서브에이전트/작업 2개 실행 중');
+  assert.equal(tr('3 subagents/tasks running, 1 blocked'), '서브에이전트/작업 3개 실행 중, 1개 차단됨');
+  assert.equal(tr('1 subagent blocked'), '서브에이전트 1개 차단됨');
+  assert.equal(tr('2 blocked'), '2개 차단됨');
+  assert.equal(tr('Using browser'), '브라우저 사용 중');
+  assert.equal(tr('Using browser · Thinking…'), '브라우저 사용 중 · 생각하는 중…');
+  assert.equal(tr('Using browser · Thinking (4s)…'), '브라우저 사용 중 · 생각하는 중 (4초)…');
+  assert.equal(tr('Thinking (12s)…'), '생각하는 중 (12초)…');
+
+  // D-0020: conversation-navigator patterns
+  assert.equal(tr('Conversation turns'), '대화 턴 목록');
+  assert.equal(tr('Scroll turns up'), '이전 턴으로 스크롤');
+  assert.equal(tr('Scroll turns down'), '다음 턴으로 스크롤');
+  assert.equal(tr('Turn 3 of 18'), '전체 18개 중 3번째 턴');
+  assert.equal(tr('Turns 1–5'), '1–5번째 턴');
+  assert.equal(tr('Turn 7'), '7번째 턴');
+  assert.equal(tr('24 turns'), '24개 턴');
+  assert.equal(tr('11월 8일 (일), 오전 8:21 – 오후 10:31, 24 turns'), '11월 8일 (일), 오전 8:21 – 오후 10:31, 24개 턴');
+
+  // D-0020: cron / schedule / subagents / compacting / checkpoint / retry / tool steps
+  assert.equal(tr('cron (every 20 minutes): Cron trigger #1'), '크론 (20분마다): 크론 트리거 #1');
+  assert.equal(tr('cron (every 5 hours)'), '크론 (5시간마다)');
+  assert.equal(tr('cron (*/5 * * * *): Cron trigger #3'), '크론 (*/5 * * * *): 크론 트리거 #3');
+  assert.equal(tr('Cron trigger #2'), '크론 트리거 #2');
+  assert.equal(tr('Found'), '조회됨');
+  assert.equal(tr('5 subagents'), '서브에이전트 5개');
+  assert.equal(tr('(3 subagents)'), '(서브에이전트 3개)');
+  assert.equal(tr('Starting 2 subagents'), '서브에이전트 2개 시작 중');
+  assert.equal(tr('Started 2 subagents'), '서브에이전트 2개 시작됨');
+  assert.equal(tr('Collapse subagents'), '서브에이전트 접기');
+  assert.equal(tr('Expand subagents'), '서브에이전트 펼치기');
+  assert.equal(tr('Stop subagent'), '서브에이전트 중지');
+  assert.equal(tr('Cancel Task'), '작업 취소');
+  assert.equal(tr('No background tasks'), '실행 중인 백그라운드 작업 없음');
+  assert.equal(tr('Wait for 10s'), '10초 대기');
+  assert.equal(tr('Compacting'), '컨텍스트 압축 중');
+  assert.equal(tr('Compacting · 15s'), '컨텍스트 압축 중 · 15초');
+  assert.equal(
+    tr('Model unavailable, retrying in 5s (attempt 2/4)'),
+    '모델 응답 지연, 5초 후 재시도 중 (2/4차 시도)'
+  );
+  assert.equal(
+    tr('Checkpoint #2 (Steps 1–45) (Intent Only)'),
+    '체크포인트 #2 (단계 1–45) (의도만 요약)'
+  );
+  assert.equal(tr('Waiting for command completion (up to 30 seconds)'), '명령 완료 대기 중 (최대 30초)');
+  assert.equal(tr('4 chunks'), '청크 4개');
+  assert.equal(tr('Chunk 2'), '청크 2');
+  assert.equal(tr('3 text resources'), '텍스트 리소스 3개');
+  assert.equal(tr('2 images'), '이미지 2개');
+  assert.equal(tr('12 results'), '결과 12개');
+  assert.equal(tr('Show 5 more'), '5개 더 보기');
+  assert.equal(tr('Generation Steps (4)'), '생성 단계 (4개)');
+  assert.equal(tr('(4 steps)'), '(4단계)');
+  assert.equal(tr('3 questions'), '질문 3개');
+  assert.equal(tr('Open the Ledger plugin'), 'Ledger 플러그인 열기');
+  assert.equal(tr('Fork in Shared Workspace'), '공유 작업공간에서 포크');
+
+  // D-0021: CLI Project fixed system header is allowed while custom project names are excluded
+  assert.equal(tr('CLI Project'), 'CLI 프로젝트');
+  const exclMatch = mod08.match(
+    /const CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR =[\s\S]*?function isExcludedFromStaticUiLocalization\(el,\s*forAttributes\s*=\s*false\)\s*\{[\s\S]*?\r?\n  \}/
+  );
+  assert.ok(exclMatch, 'isExcludedFromStaticUiLocalization must exist in 08-dom-observer.js');
+  const exclSandbox = {};
+  vm.runInNewContext(`${exclMatch[0]}\n;globalThis.__isExcl = isExcludedFromStaticUiLocalization;`, exclSandbox);
+  const isExcl = exclSandbox.__isExcl;
+
+  const makeHeaderSpan = (label) => {
+    const headerBtn = {
+      tagName: 'BUTTON',
+      textContent: label,
+      getAttribute: (k) => {
+        if (k === 'data-testid') return 'project-header';
+        if (k === 'data-project-label') return label;
+        return null;
+      },
+      closest: (sel) => (sel.includes('project-header') ? headerBtn : null),
+    };
+    return {
+      tagName: 'SPAN',
+      textContent: label,
+      classList: { contains: () => false },
+      getAttribute: () => null,
+      closest: (sel) => {
+        if (sel === '[data-testid]' || sel === '[data-testid="project-header"]') return headerBtn;
+        return null;
+      },
+    };
+  };
+
+  assert.equal(
+    isExcl(makeHeaderSpan('CLI Project'), false),
+    false,
+    'D-0021: fixed system header "CLI Project" must NOT be excluded from static UI localization'
+  );
+  assert.equal(
+    isExcl(makeHeaderSpan('No Project'), false),
+    false,
+    'D-0021: fixed system header "No Project" must NOT be excluded from static UI localization'
+  );
+  assert.equal(
+    isExcl(makeHeaderSpan('my-custom-workspace'), false),
+    true,
+    'D-0021: user workspace name on project-header MUST remain excluded from static UI localization'
+  );
+
+  // D-0022: English README.md and Korean README.ko.md cross-links and version synchronization
+  const readmeEnPath = path.join(ROOT, 'README.md');
+  const readmeKoPath = path.join(ROOT, 'README.ko.md');
+  assert.ok(fs.existsSync(readmeEnPath), 'D-0022: README.md must exist');
+  assert.ok(fs.existsSync(readmeKoPath), 'D-0022: README.ko.md must exist');
+  const readmeEn = fs.readFileSync(readmeEnPath, 'utf8');
+  const readmeKo = fs.readFileSync(readmeKoPath, 'utf8');
+  assert.ok(readmeEn.includes('[한국어 문서 (README.ko.md)](./README.ko.md)'), 'D-0022: English README.md must link to README.ko.md at the top');
+  assert.ok(readmeKo.includes('[English Documentation (README.md)](./README.md)'), 'D-0022: Korean README.ko.md must link to README.md at the top');
+  assert.ok(readmeEn.includes('v1.2.32') && readmeEn.includes('v13.27'), 'D-0022: README.md must reflect v1.2.32 / v13.27');
+  assert.ok(readmeKo.includes('v1.2.32') && readmeKo.includes('v13.27'), 'D-0022: README.ko.md must reflect v1.2.32 / v13.27');
 });

@@ -1205,6 +1205,145 @@
     'Switch Roles': '역할 전환',
     'By continuing, you agree to the': '계속 진행하면 다음에 동의하게 됩니다:',
     'and acknowledge the': '및 확인:',
+
+    // Antigravity v2.29.0 idle-status-text, conversation-navigator, subagents/cron, compacting, checkpoint, fork & tool/browser steps (D-0020, D-0021)
+    'CLI Project': 'CLI 프로젝트',
+    'Using browser': '브라우저 사용 중',
+    'Using browser · Thinking…': '브라우저 사용 중 · 생각하는 중…',
+    'Using browser · Thinking...': '브라우저 사용 중 · 생각하는 중...',
+    'Conversation turns': '대화 턴 목록',
+    'Scroll turns up': '이전 턴으로 스크롤',
+    'Scroll turns down': '다음 턴으로 스크롤',
+    'Found': '조회됨',
+    'Starting': '시작 중',
+    'Started': '시작됨',
+    'Collapse subagents': '서브에이전트 접기',
+    'Expand subagents': '서브에이전트 펼치기',
+    'Stop subagent': '서브에이전트 중지',
+    'Cancel Task': '작업 취소',
+    'No background tasks': '실행 중인 백그라운드 작업 없음',
+    'Wait for': '대기:',
+    'Compacting': '컨텍스트 압축 중',
+    'Model unavailable, retrying': '모델 응답 지연, 재시도 중',
+    'Checkpoint': '체크포인트',
+    'Model Summarization Failed': '모델 요약 실패',
+    'Fallback Summary Used': '대체 요약 사용됨',
+    'User Intent': '사용자 의도',
+    'Session Summary': '세션 요약',
+    'Code Change Summary': '코드 변경 요약',
+    'Goal Verification': '목표 달성 검증',
+    'Idle Guard Warning': '유휴 보호 경고',
+    'Fork Environment Notice': '포크 환경 안내',
+    'System Message': '시스템 메시지',
+    'Checking command status': '명령 상태 확인 중',
+    'Checked command status': '명령 상태 확인함',
+    'Sending input to command': '명령에 입력 전송 중',
+    'Sending termination request to command': '명령에 종료 요청 전송 중',
+    'Sent input to command': '명령에 입력 전송함',
+    'Sent termination request to command': '명령에 종료 요청 전송함',
+    'Suggested sending input to command': '명령에 입력 전송 제안함',
+    'Suggested sending termination request to command': '명령에 종료 요청 전송 제안함',
+    'Rejected sending input to command': '명령에 입력 전송 거절됨',
+    'Rejected sending termination request to command': '명령에 종료 요청 전송 거절됨',
+    'Error sending input to command': '명령에 입력 전송 오류',
+    'Error sending termination request to command': '명령에 종료 요청 전송 오류',
+    'Send command input?': '명령 입력을 전송하시겠습니까?',
+    'Error Details:': '오류 상세 정보:',
+    'This command ran in the sandbox.': '이 명령은 샌드박스에서 실행되었습니다.',
+    'Analyzing content': '콘텐츠 분석 중',
+    'Analyzed content': '콘텐츠 분석함',
+    'Page title:': '페이지 제목:',
+    'Section header:': '섹션 헤더:',
+    'Open in side pane': '사이드 패널에서 열기',
+    'Read resource:': '리소스 읽음:',
+    'List resources:': '리소스 목록 조회:',
+    'No resources available': '사용 가능한 리소스 없음',
+    'Unnamed resource': '이름 없는 리소스',
+    'Show fewer resources': '리소스 접기',
+    'Show all resources': '모든 리소스 보기',
+    'No content available for this resource': '이 리소스에 표시할 내용이 없습니다',
+    'Some non-image binary content was truncated.': '이미지가 아닌 일부 바이너리 콘텐츠가 생략되었습니다.',
+    'Reading terminal:': '터미널 읽는 중:',
+    'Read terminal:': '터미널 읽음:',
+    'Found references to': '참조 검색됨:',
+    'Semantic searching': '시맨틱 검색 중',
+    'Semantic searched': '시맨틱 검색함',
+    'Analyzing Task Log': '작업 로그 분석 중',
+    'Analyzed Task Log': '작업 로그 분석함',
+    'Unknown file edit': '알 수 없는 파일 편집',
+    'Reading page': '페이지 읽는 중',
+    'Read page': '페이지 읽음',
+    'Created outline': '목차 생성함',
+    'View Page': '페이지 보기',
+    'Document Answers': '문서 검색 결과',
+    'Image Answers': '이미지 검색 결과',
+    'Opening URL in Browser': '브라우저에서 URL 여는 중',
+    'Opened URL in Browser': '브라우저에서 URL 엶',
+    'Reading Browser Page in Browser': '브라우저 페이지 읽는 중',
+    'Read Browser Page in Browser': '브라우저 페이지 읽음',
+    'Extracting DOM elements': 'DOM 요소 추출 중',
+    'Extracted DOM elements': 'DOM 요소 추출함',
+    'Open extracted DOM in editor': '추출된 DOM을 에디터에서 열기',
+    'Fetching network requests': '네트워크 요청 가져오는 중',
+    'Fetched network requests': '네트워크 요청 가져옴',
+    'View network requests': '네트워크 요청 보기',
+    'Fetching network request': '네트워크 요청 가져오는 중',
+    'Fetched network request': '네트워크 요청 가져옴',
+    'View network request': '네트워크 요청 보기',
+    'Retrieving Browser Pages': '브라우저 페이지 목록 조회 중',
+    'Retrieved Browser Pages': '브라우저 페이지 목록 조회함',
+    'Retrieving Console Logs from Browser': '브라우저 콘솔 로그 가져오는 중',
+    'Retrieved Console Logs from Browser': '브라우저 콘솔 로그 가져옴',
+    'Refreshing Browser page': '브라우저 페이지 새로고침 중',
+    'Refreshed Browser page': '브라우저 페이지 새로고침함',
+    'Scrolling down in Browser': '브라우저에서 아래로 스크롤 중',
+    'Scrolled down in Browser': '브라우저에서 아래로 스크롤함',
+    'Scrolling up in Browser': '브라우저에서 위로 스크롤 중',
+    'Scrolled up in Browser': '브라우저에서 위로 스크롤함',
+    'Scrolling in Browser': '브라우저에서 스크롤 중',
+    'Scrolled in Browser': '브라우저에서 스크롤함',
+    'Resizing Browser window': '브라우저 창 크기 조절 중',
+    'Resized Browser window': '브라우저 창 크기 조절함',
+    'Taking Screenshot': '스크린샷 캡처 중',
+    'Took Screenshot': '스크린샷 캡처함',
+    'Clicking in Browser': '브라우저에서 클릭 중',
+    'Clicked in Browser': '브라우저에서 클릭함',
+    'Dragging in Browser': '브라우저에서 드래그 중',
+    'Dragged in Browser': '브라우저에서 드래그함',
+    'Mouse button released': '마우스 버튼 놓음',
+    'Mouse button pressed': '마우스 버튼 누름',
+    'Typing into Browser': '브라우저에 입력 중',
+    'Typed into Browser': '브라우저에 입력함',
+    'Selecting Option in Browser': '브라우저에서 옵션 선택 중',
+    'Selected Option in Browser': '브라우저에서 옵션 선택함',
+    'Simulating Key Press in Browser': '브라우저에서 키 입력 시뮬레이션 중',
+    'Simulated Key Press in Browser': '브라우저에서 키 입력 시뮬레이션함',
+    'Moving Mouse in Browser': '브라우저에서 마우스 이동 중',
+    'Moved Mouse in Browser': '브라우저에서 마우스 이동함',
+    'Knowledge Generation': '지식 생성',
+    'Skipping...': '건너뛰는 중...',
+    '(skipped)': '(건너뜀)',
+    'Expand': '펼치기',
+    'Goal': '목표',
+    'Asking': '질문 중',
+    'Asked': '질문함',
+    'Record voice memo': '음성 메모 녹음',
+    'Stop recording': '녹음 중지',
+    'Cancel recording': '녹음 취소',
+    'Start Voice mode': '음성 모드 시작',
+    'Recording...': '녹음 중...',
+    'Processing...': '처리 중...',
+    'Toggle Side Panel': '사이드 패널 전환',
+    'Toggle Maximize Side Panel': '사이드 패널 최대화 전환',
+    'Typeahead menu': '자동 완성 메뉴',
+    'Fork in Current Workspace': '현재 작업공간에서 포크',
+    'Fork in Shared Workspace': '공유 작업공간에서 포크',
+    'Fork in New Workspace': '새 작업공간에서 포크',
+    'Duplicate this conversation in the same project directory': '같은 프로젝트 디렉터리에서 이 대화를 복제합니다',
+    'Create a lightweight worktree sharing the repository storage': '저장소 스토리지를 공유하는 경량 워크트리를 생성합니다',
+    'Clone into an isolated workspace directory': '독립된 작업공간 디렉터리로 복제합니다',
+    'Shared Workspace requires a Git or Mercurial repository': '공유 작업공간은 Git 또는 Mercurial 저장소가 필요합니다',
+    'New Workspace requires a version-controlled repository': '새 작업공간은 버전 관리되는 저장소가 필요합니다',
   };
 
   // Pre-compiled dynamic single-target tool group patterns (e.g. "Reading http-engine-client.ts", "Editing App.tsx", "Listing src/")
@@ -1260,6 +1399,8 @@
     if (!rawDur) return rawDur;
     let s = rawDur.trim();
     if (s === '<1s' || s === '< 1s') return '1초 미만';
+    s = s.replace(/(\d+)\s*w(?:eeks?|k)?\b/gi, '$1주');
+    s = s.replace(/(\d+)\s*d(?:ays?)?\b/gi, '$1일');
     s = s.replace(/(\d+)\s*h(?:ours?|r)?\b/gi, '$1시간');
     s = s.replace(/(\d+)\s*m(?:in(?:ute)?s?)?\b/gi, '$1분');
     s = s.replace(/(\d+)\s*s(?:ec(?:ond)?s?)?\b/gi, '$1초');
@@ -1788,6 +1929,161 @@
 
     m = t.match(/^Exited with code\s+(-?\d+)$/i);
     if (m) return `종료 코드 ${m[1]}`;
+
+    // Antigravity v2.29.0 idle-status-text, conversation-navigator, cron/schedule, subagent/task, compacting, checkpoint, retry & tool/browser step patterns (D-0020)
+    m = t.match(/^(\d+)\s+subagents\/tasks\s+running,\s*(\d+)\s+(?:subagents?\s+)?blocked$/i);
+    if (m) return `서브에이전트/작업 ${m[1]}개 실행 중, ${m[2]}개 차단됨`;
+
+    m = t.match(/^(\d+)\s+subagents?\s+running,\s*(\d+)\s+(?:subagents?\s+)?blocked$/i);
+    if (m) return `서브에이전트 ${m[1]}개 실행 중, ${m[2]}개 차단됨`;
+
+    m = t.match(/^(\d+)\s+tasks?\s+running,\s*(\d+)\s+(?:subagents?\s+)?blocked$/i);
+    if (m) return `작업 ${m[1]}개 실행 중, ${m[2]}개 차단됨`;
+
+    m = t.match(/^(\d+)\s+subagents\/tasks\s+running$/i);
+    if (m) return `서브에이전트/작업 ${m[1]}개 실행 중`;
+
+    m = t.match(/^(\d+)\s+subagents?\s+blocked$/i);
+    if (m) return `서브에이전트 ${m[1]}개 차단됨`;
+
+    m = t.match(/^(\d+)\s+blocked$/i);
+    if (m) return `${m[1]}개 차단됨`;
+
+    m = t.match(/^Using browser\s*(?:·|\u00b7|\u2022)\s*Thinking\s*\((\d+)s\)\s*(?:…|\.\.\.)?$/i);
+    if (m) return `브라우저 사용 중 \u00b7 생각하는 중 (${m[1]}초)…`;
+
+    m = t.match(/^Using browser\s*(?:·|\u00b7|\u2022)\s*(.+)$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `브라우저 사용 중 \u00b7 ${inner}`;
+    }
+
+    m = t.match(/^Thinking\s*\((\d+)s\)\s*(?:…|\.\.\.)?$/i);
+    if (m) return `생각하는 중 (${m[1]}초)…`;
+
+    m = t.match(/^Turn\s+(\d+)\s+of\s+(\d+)$/i);
+    if (m) return `전체 ${m[2]}개 중 ${m[1]}번째 턴`;
+
+    m = t.match(/^Turns\s+(\d+)\s*([–\u2013-])\s*(\d+)$/i);
+    if (m) return `${m[1]}${m[2]}${m[3]}번째 턴`;
+
+    m = t.match(/^Turn\s+(\d+)$/i);
+    if (m) return `${m[1]}번째 턴`;
+
+    m = t.match(/^(\d+)\s+turns?$/i);
+    if (m) return `${m[1]}개 턴`;
+
+    m = t.match(/^(.+?),\s*(\d+)\s+turns?$/i);
+    if (m) return `${m[1]}, ${m[2]}개 턴`;
+
+    m = t.match(/^(.+?)\s*(?:·|\u00b7|\u2022)\s*(\d+)\s+turns?$/i);
+    if (m) return `${m[1].trim()} \u00b7 ${m[2]}개 턴`;
+
+    m = t.match(/^cron\s*\(every\s+(.+?)\):\s*Cron trigger\s+#(\d+)$/i);
+    if (m) return `크론 (${formatDurationKo(m[1])}마다): 크론 트리거 #${m[2]}`;
+
+    m = t.match(/^cron\s*\(every\s+(.+?)\)$/i);
+    if (m) return `크론 (${formatDurationKo(m[1])}마다)`;
+
+    m = t.match(/^cron\s*\((.+?)\):\s*Cron trigger\s+#(\d+)$/i);
+    if (m) return `크론 (${m[1]}): 크론 트리거 #${m[2]}`;
+
+    m = t.match(/^cron\s*\((.+?)\)$/i);
+    if (m) return `크론 (${m[1]})`;
+
+    m = t.match(/^Cron trigger\s+#(\d+)$/i);
+    if (m) return `크론 트리거 #${m[1]}`;
+
+    m = t.match(/^Starting\s+(\d+)\s+subagents?$/i);
+    if (m) return `서브에이전트 ${m[1]}개 시작 중`;
+
+    m = t.match(/^Started\s+(\d+)\s+subagents?$/i);
+    if (m) return `서브에이전트 ${m[1]}개 시작됨`;
+
+    m = t.match(/^\((\d+)\s+subagents?\)$/i);
+    if (m) return `(서브에이전트 ${m[1]}개)`;
+
+    m = t.match(/^(\d+)\s+subagents?$/i);
+    if (m) return `서브에이전트 ${m[1]}개`;
+
+    m = t.match(/^Wait for\s+(.+)$/i);
+    if (m) return `${formatDurationKo(m[1])} 대기`;
+
+    m = t.match(/^Compacting\s*(?:·|\u00b7|\u2022)\s*(.+)$/i);
+    if (m) return `컨텍스트 압축 중 \u00b7 ${formatDurationKo(m[1])}`;
+
+    m = t.match(/^Model unavailable,\s*retrying in\s+(\d+)s\s*\(attempt\s+(\d+)\/(\d+)\)$/i);
+    if (m) return `모델 응답 지연, ${m[1]}초 후 재시도 중 (${m[2]}/${m[3]}차 시도)`;
+
+    m = t.match(/^Model unavailable,\s*retrying in\s+(\d+)s$/i);
+    if (m) return `모델 응답 지연, ${m[1]}초 후 재시도 중`;
+
+    m = t.match(/^Model unavailable,\s*retrying\s*\(attempt\s+(\d+)\/(\d+)\)$/i);
+    if (m) return `모델 응답 지연, 재시도 중 (${m[1]}/${m[2]}차 시도)`;
+
+    m = t.match(/^Checkpoint\s+#(\d+)\s*\(Steps\s+(\d+)\s*([–\u2013-])\s*(\d+)\)\s*\(Intent Only\)$/i);
+    if (m) return `체크포인트 #${m[1]} (단계 ${m[2]}${m[3]}${m[4]}) (의도만 요약)`;
+
+    m = t.match(/^Checkpoint\s+#(\d+)\s*\(Steps\s+(\d+)\s*([–\u2013-])\s*(\d+)\)$/i);
+    if (m) return `체크포인트 #${m[1]} (단계 ${m[2]}${m[3]}${m[4]})`;
+
+    m = t.match(/^Checkpoint\s+#(\d+)\s*\(Intent Only\)$/i);
+    if (m) return `체크포인트 #${m[1]} (의도만 요약)`;
+
+    m = t.match(/^Checkpoint\s+#(\d+)$/i);
+    if (m) return `체크포인트 #${m[1]}`;
+
+    m = t.match(/^Waiting for command completion\s*\(up to\s+(\d+)\s+seconds?\)$/i);
+    if (m) return `명령 완료 대기 중 (최대 ${m[1]}초)`;
+
+    m = t.match(/^(\d+)\s+chunks?$/i);
+    if (m) return `청크 ${m[1]}개`;
+
+    m = t.match(/^Chunk\s+(\d+)$/i);
+    if (m) return `청크 ${m[1]}`;
+
+    m = t.match(/^(\d+)\s+text resources?$/i);
+    if (m) return `텍스트 리소스 ${m[1]}개`;
+
+    m = t.match(/^(\d+)\s+images?$/i);
+    if (m) return `이미지 ${m[1]}개`;
+
+    m = t.match(/^(\d+)\s+results?$/i);
+    if (m) return `결과 ${m[1]}개`;
+
+    m = t.match(/^Show\s+(\d+)\s+more$/i);
+    if (m) return `${m[1]}개 더 보기`;
+
+    m = t.match(/^Generation Steps\s*\((\d+)\)$/i);
+    if (m) return `생성 단계 (${m[1]}개)`;
+
+    m = t.match(/^\((\d+)\s+steps?\)$/i);
+    if (m) return `(${m[1]}단계)`;
+
+    m = t.match(/^(\d+)\s+questions?$/i);
+    if (m) return `질문 ${m[1]}개`;
+
+    m = t.match(/^Agent permissions preset selector,\s*current:\s*(.+)$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[1]) || m[1];
+      return `에이전트 권한 프리셋 선택기, 현재: ${inner}`;
+    }
+
+    m = t.match(/^Agent permissions preset:\s*(.+?),\s*(.+)$/i);
+    if (m) {
+      const p1 = translateStaticUiSync(m[1]) || m[1];
+      const p2 = translateStaticUiSync(m[2]) || m[2];
+      return `에이전트 권한 프리셋: ${p1}, ${p2}`;
+    }
+
+    m = t.match(/^Open conversation\s+(.+)$/i);
+    if (m) return `대화 ${m[1]} 열기`;
+
+    m = t.match(/^Conversation\s+([0-9a-f-]{6,}|#\d+|\d+)$/i);
+    if (m) return `대화 ${m[1]}`;
+
+    m = t.match(/^Open the\s+(.+?)\s+plugin$/i);
+    if (m) return `${m[1]} 플러그인 열기`;
 
     // Multi-clause tool group summary (e.g. "Explored files, ran commands, edited files")
     if (t.includes(',')) {

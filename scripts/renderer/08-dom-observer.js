@@ -470,10 +470,31 @@
       if (!forAttributes && el.closest('[data-screenshot-volatile="true"]')) return false;
       return true;
     }
-    if (
-      testId === 'breadcrumb-segment' ||
-      testId === 'project-header'
-    ) {
+    if (testId === 'breadcrumb-segment') {
+      return true;
+    }
+    if (testId === 'project-header') {
+      const headerEl =
+        (el.getAttribute && el.getAttribute('data-testid') === 'project-header' ? el : null) ||
+        (el.closest ? el.closest('[data-testid="project-header"]') : null);
+      const projLabel =
+        (headerEl && headerEl.getAttribute && headerEl.getAttribute('data-project-label')) ||
+        (el.textContent || '').trim();
+      const trimmedLabel = (projLabel || '').trim();
+      if (
+        trimmedLabel === 'CLI Project' ||
+        trimmedLabel === 'CLI 프로젝트' ||
+        trimmedLabel === 'No Project' ||
+        trimmedLabel === '프로젝트 없음' ||
+        trimmedLabel === 'Not in Project' ||
+        trimmedLabel === '프로젝트 미지정' ||
+        trimmedLabel === 'Outside of Project' ||
+        trimmedLabel === '프로젝트 외부' ||
+        trimmedLabel === 'Untitled project' ||
+        trimmedLabel === '이름 없는 프로젝트'
+      ) {
+        return false;
+      }
       return true;
     }
     return false;
@@ -2514,7 +2535,9 @@
       ensureThinkingDisplayMenuIntegration();
       if (document.querySelectorAll) {
         document
-          .querySelectorAll('[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"]')
+          .querySelectorAll(
+            '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="idle-status-text"], [data-testid="conversation-navigator"]'
+          )
           .forEach((convEl) => localizeStaticUiInRoot(convEl));
       } else if (document.querySelector) {
         const convEl =

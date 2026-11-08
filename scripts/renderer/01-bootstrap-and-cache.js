@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.26';
+  const KO_LOCALIZER_VERSION = 'v13.27';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -394,6 +394,8 @@
       typeof window.__agyTranslateStaticUiSync === 'function' &&
       window.__agyTranslateStaticUiSync('Open IDE') === 'IDE 열기' &&
       window.__agyTranslateStaticUiSync('Exited with code 0') === '종료 코드 0' &&
+      window.__agyTranslateStaticUiSync('2 subagents/tasks running') === '서브에이전트/작업 2개 실행 중' &&
+      window.__agyTranslateStaticUiSync('CLI Project') === 'CLI 프로젝트' &&
       !document.getElementById('agy-ko-settings-card')
     ) {
       if (typeof window.__agySyncPersistentSettings === 'function') {
