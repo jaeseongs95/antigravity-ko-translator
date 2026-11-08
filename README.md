@@ -133,7 +133,7 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 ## 6. 모듈 구조 (SOLID Architecture)
 
 - **렌더러 계층 (`scripts/renderer/`)**:
-  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.24`), `remove-conversation-history: false`(`대화 기록` 메뉴) 자동 활성화, 네이티브 `verboseConversationSteps`(`대화 단계 표시: 기본값/상세히`) 설정 읽기 전용 조회, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
+  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.25`), `remove-conversation-history: false`(`대화 기록` 메뉴) 자동 활성화, 네이티브 `verboseConversationSteps`(`대화 단계 표시: 기본값/상세히`) 설정 읽기 전용 조회, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
   - `02-static-ui-dict.js`: 0ms 정적 UI 한국어 사전(`STATIC_UI_MAP`) 및 동기 패턴 매처
   - `03-text-tokenizer.js`: 코드(`⟦C0⟧`)·식별자/인용구(`⟦T0⟧`) 보호 토크나이저, 조사 교정, 마크다운 세그먼트 추출
   - `04-translation-adapters.js`: Port & Adapter 번역 엔진(`local-llm`, `google-translate`, 커스텀 어댑터) 및 동시성/취소 큐

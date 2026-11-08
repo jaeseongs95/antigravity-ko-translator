@@ -586,22 +586,33 @@
       const trimmed = raw.trim();
       if (!trimmed) continue;
 
-      const btn = parent.closest('button');
-      const isStandaloneNewBtn =
-        !!btn &&
-        !btn.closest('[role="menu"], [role="listbox"], [role="menuitem"]') &&
-        ((btn.textContent || '').trim() === 'New' || (btn.textContent || '').trim() === '새로 만들기');
-
-      if (textNode.__agyOrigValue && textNode.__agyOrigValue.trim() === 'New' && !isStandaloneNewBtn) {
-        textNode.nodeValue = textNode.__agyOrigValue;
-        delete textNode.__agyOrigValue;
-        delete textNode.__agyKoApplied;
-        continue;
+      if (textNode.__agyOrigValue && textNode.__agyOrigValue.trim() === 'New') {
+        const btn = parent.closest('button');
+        const isStandaloneNewBtn =
+          !!btn &&
+          !btn.closest('[role="menu"], [role="listbox"], [role="menuitem"]') &&
+          ((btn.textContent || '').trim() === 'New' || (btn.textContent || '').trim() === '새로 만들기');
+        if (!isStandaloneNewBtn) {
+          textNode.nodeValue = textNode.__agyOrigValue;
+          delete textNode.__agyOrigValue;
+          delete textNode.__agyKoApplied;
+          continue;
+        }
       }
 
       if (textNode.__agyKoApplied === trimmed && !/^\(권장\)\s+[A-Za-z]/.test(trimmed)) continue;
 
-      const syncKo = trimmed === 'New' ? (isStandaloneNewBtn ? '새로 만들기' : null) : translateStaticUiSync(trimmed);
+      let syncKo;
+      if (trimmed === 'New') {
+        const btn = parent.closest('button');
+        const isStandaloneNewBtn =
+          !!btn &&
+          !btn.closest('[role="menu"], [role="listbox"], [role="menuitem"]') &&
+          ((btn.textContent || '').trim() === 'New' || (btn.textContent || '').trim() === '새로 만들기');
+        syncKo = isStandaloneNewBtn ? '새로 만들기' : null;
+      } else {
+        syncKo = translateStaticUiSync(trimmed);
+      }
       if (syncKo && syncKo !== trimmed) {
         const leading = raw.match(/^\s*/)[0];
         const trailing = raw.match(/\s*$/)[0];
@@ -621,8 +632,13 @@
     if (!btn) return false;
     if (btn.__agyHasThinking) return true;
     try {
-      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-      let cur = fk ? btn[fk] : null;
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
       for (let i = 0; i < 12 && cur; i++) {
         const segSteps = cur.memoizedProps?.segment?.steps;
         if (Array.isArray(segSteps)) {
@@ -646,8 +662,13 @@
     if (!btn) return false;
     if (btn.__agyHasThinking) return true;
     try {
-      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-      let cur = fk ? btn[fk] : null;
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
       for (let i = 0; i < 12 && cur; i++) {
         const grpSteps = cur.memoizedProps?.steps || cur.memoizedProps?.group?.steps;
         if (Array.isArray(grpSteps)) {
@@ -726,8 +747,13 @@
     if (!btn) return false;
     if (btn.classList && btn.classList.contains('hidden')) return true;
     try {
-      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-      let cur = fk ? btn[fk] : null;
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
       for (let i = 0; i < 8 && cur; i++) {
         if (cur.memoizedProps && cur.memoizedProps.triggerVisible === false) {
           return true;
@@ -740,11 +766,16 @@
 
   function isToolGroupInActiveOrLatestTurn(btn, workedBtns) {
     if (!btn) return false;
+    let sawLocalActiveFalse = false;
     try {
-      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-      let cur = fk ? btn[fk] : null;
-      let sawLocalActiveFalse = false;
-      for (let i = 0; i < 16 && cur; i++) {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 36 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
           if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
@@ -753,8 +784,12 @@
             if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
             if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
           }
+          if (mp.container && typeof mp.container === 'object') {
+            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
+            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
+          }
           // Immediate wrapper (e.g. yhc / G_ at depth <= 6) carries turn/step-local isActive/isRunning,
-          // whereas higher container fibers (Lhc/oic) carry conversation-wide isRunning (status === RUNNING).
+          // whereas higher container fibers (Lhc/oic/pCb at depth 16..31) carry conversation-wide isRunning (status === RUNNING).
           if (i <= 6) {
             if (mp.isActive === true) return true;
             if (mp.isActive === false || mp.isRunning === false) {
@@ -764,10 +799,27 @@
         }
         cur = cur.return;
       }
-      if (sawLocalActiveFalse && (!Array.isArray(workedBtns) || workedBtns.length === 0)) {
-        return false;
-      }
     } catch (e) {}
+    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
+      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
+      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
+        return Boolean(latestTurnEl.contains(btn));
+      }
+    }
+    if (
+      typeof document !== 'undefined' &&
+      document &&
+      typeof document.querySelectorAll === 'function' &&
+      typeof btn.compareDocumentPosition === 'function' &&
+      typeof Node !== 'undefined'
+    ) {
+      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
+      for (const ub of userBubbles) {
+        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+          return false;
+        }
+      }
+    }
     if (Array.isArray(workedBtns) && workedBtns.length > 0) {
       const lastWorked = workedBtns[workedBtns.length - 1];
       const lastContainer =
@@ -780,6 +832,9 @@
         return Boolean(c && typeof c.contains === 'function' && c.contains(btn));
       });
       if (anyHistoricalWorkedContains) {
+        return false;
+      }
+      if (sawLocalActiveFalse) {
         return false;
       }
       const lastTrigger = workedBtns[workedBtns.length - 1];
@@ -798,11 +853,16 @@
 
   function isThinkingTriggerInActiveOrLatestTurn(btn, workedBtns, thinkingBtns) {
     if (!btn) return false;
+    let sawLocalActiveFalse = false;
     try {
-      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-      let cur = fk ? btn[fk] : null;
-      let sawLocalActiveFalse = false;
-      for (let i = 0; i < 16 && cur; i++) {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 36 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
           if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
@@ -811,8 +871,13 @@
             if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
             if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
           }
+          if (mp.container && typeof mp.container === 'object') {
+            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
+            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
+          }
           // Immediate wrapper (<G_> at depth 2) transitions isActive: true -> false as soon as a thinking step finishes
-          // streaming ("Thought for Xs"), while <Lhc> at depth 4..11 carries turn-level isLastContainer / segment.isLatest.
+          // streaming ("Thought for Xs"), while <Lhc> (depth 4..26 in <u_> CascadeStepItem hierarchy) and <pCb> (depth 21..31)
+          // carry turn-level isLastContainer / segment.isLatest / container.isLatest.
           if (i <= 6) {
             if (mp.isActive === true) return true;
             if (mp.isActive === false || mp.isRunning === false) {
@@ -822,14 +887,27 @@
         }
         cur = cur.return;
       }
-      if (
-        sawLocalActiveFalse &&
-        (!Array.isArray(workedBtns) || workedBtns.length === 0) &&
-        (!Array.isArray(thinkingBtns) || thinkingBtns.length === 0)
-      ) {
-        return false;
-      }
     } catch (e) {}
+    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
+      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
+      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
+        return Boolean(latestTurnEl.contains(btn));
+      }
+    }
+    if (
+      typeof document !== 'undefined' &&
+      document &&
+      typeof document.querySelectorAll === 'function' &&
+      typeof btn.compareDocumentPosition === 'function' &&
+      typeof Node !== 'undefined'
+    ) {
+      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
+      for (const ub of userBubbles) {
+        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+          return false;
+        }
+      }
+    }
     if (Array.isArray(workedBtns) && workedBtns.length > 0) {
       const lastWorked = workedBtns[workedBtns.length - 1];
       const lastContainer =
@@ -844,6 +922,9 @@
       if (anyHistoricalWorkedContains) {
         return false;
       }
+      if (sawLocalActiveFalse) {
+        return false;
+      }
       if (
         lastWorked &&
         typeof lastWorked.compareDocumentPosition === 'function' &&
@@ -852,6 +933,9 @@
       ) {
         return true;
       }
+      return false;
+    }
+    if (sawLocalActiveFalse) {
       return false;
     }
     if (Array.isArray(thinkingBtns) && thinkingBtns.length > 0) {

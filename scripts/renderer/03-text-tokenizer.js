@@ -1,5 +1,17 @@
 // Module: 03-text-tokenizer.js
 // Responsibility: Code/identifier/quote placeholder tokenization, Korean particle correction, and Markdown segment extraction.
+  const PLACEHOLDER_TOKEN_REGEX = /(?:⟦|\[|【)\s*[CT]\d+\s*(?:⟧|\]|】)/gi;
+  const CODE_AND_QUOTED_KO_REGEX =
+    /`[^`]+`|"(?=[^"\n]*[가-힣])[^"\n]{1,140}"|“(?=[^”\n]*[가-힣])[^”\n]{1,140}”|(?<![A-Za-z0-9⟧])'(?=[^'\n]*[가-힣])[^'\n]{1,80}'(?![A-Za-z0-9])|\bhttps?:\/\/\S+/g;
+  const FILE_EXT_PATH_REGEX =
+    /\b[A-Za-z0-9_.-]+\.(?:md|js|mjs|cjs|ts|tsx|json|jsonl|py|sh|ps1|yaml|yml|toml|html|css|asar|exe|lock)\b/g;
+  const CLI_AND_IDENTIFIER_REGEX =
+    /(?:--[a-z0-9-]+)|\b(?:[A-Z0-9]+-[A-Za-z0-9-]+|[a-z]+-[0-9][a-z0-9-]*)\b|\b[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b/g;
+  const PROTECT_IDENTIFIERS_REGEX =
+    /(`[^`]+`|"(?=[^"\n]*[가-힣])[^"\n]{1,140}"|“(?=[^”\n]*[가-힣])[^”\n]{1,140}”|(?<![A-Za-z0-9⟧])'(?=[^'\n]*[가-힣])[^'\n]{1,80}'(?![A-Za-z0-9])|\bhttps?:\/\/\S+|\b[A-Za-z0-9_.-]+\.(?:md|js|mjs|cjs|ts|tsx|json|jsonl|py|sh|ps1|yaml|yml|toml|html|css|asar|exe|lock)\b|(?:--[a-z0-9-]+)|\b(?:[A-Z0-9]+-[A-Za-z0-9-]+|[a-z]+-[0-9][a-z0-9-]*)\b|\b[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b)/g;
+  const RESTORE_TOKEN_REGEX = /(?:⟦|\[|【)\s*T(\d+)\s*(?:⟧|\]|】)/gi;
+  const KOREAN_PARTICLE_REGEX = /([가-힣])(['"”’⟧\]】]*)(와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g;
+
   function isAlreadyKoreanOrNonEnglish(text) {
     if (!text) return true;
     const trimmed = text.trim();
@@ -8,10 +20,10 @@
     // Strip inline code, Korean quoted strings, placeholders (⟦C0⟧, ⟦T0⟧), URLs, file paths, CLI flags, and code identifiers first.
     // Note: Quotes are matched ONLY when containing Korean (or backticks) so English quoted prose and hyphenated compound words are translated naturally.
     const stripped = trimmed
-      .replace(/(?:⟦|\[|【)\s*[CT]\d+\s*(?:⟧|\]|】)/gi, ' ')
-      .replace(/`[^`]+`|"(?=[^"\n]*[가-힣])[^"\n]{1,140}"|“(?=[^”\n]*[가-힣])[^”\n]{1,140}”|(?<![A-Za-z0-9⟧])'(?=[^'\n]*[가-힣])[^'\n]{1,80}'(?![A-Za-z0-9])|\bhttps?:\/\/\S+/g, ' ')
-      .replace(/\b[A-Za-z0-9_.-]+\.(?:md|js|mjs|cjs|ts|tsx|json|jsonl|py|sh|ps1|yaml|yml|toml|html|css|asar|exe|lock)\b/g, ' ')
-      .replace(/(?:--[a-z0-9-]+)|\b(?:[A-Z0-9]+-[A-Za-z0-9-]+|[a-z]+-[0-9][a-z0-9-]*)\b|\b[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b/g, ' ');
+      .replace(PLACEHOLDER_TOKEN_REGEX, ' ')
+      .replace(CODE_AND_QUOTED_KO_REGEX, ' ')
+      .replace(FILE_EXT_PATH_REGEX, ' ')
+      .replace(CLI_AND_IDENTIFIER_REGEX, ' ');
 
     const koCount = (stripped.match(/[가-힣]/g) || []).length;
     const enWords = stripped.match(/[A-Za-z]{2,}/g) || [];
@@ -27,26 +39,21 @@
   // Protects backtick code, Korean quoted strings, CLI flags, uppercase/numeric IDs (e.g. AGS-D-0281, SHA-256), snake_case, camelCase, file paths, and URLs
   function protectIdentifiersInThoughtText(text) {
     const savedTokens = [];
-    const protectedText = text.replace(
-      /(`[^`]+`|"(?=[^"\n]*[가-힣])[^"\n]{1,140}"|“(?=[^”\n]*[가-힣])[^”\n]{1,140}”|(?<![A-Za-z0-9⟧])'(?=[^'\n]*[가-힣])[^'\n]{1,80}'(?![A-Za-z0-9])|\bhttps?:\/\/\S+|\b[A-Za-z0-9_.-]+\.(?:md|js|mjs|cjs|ts|tsx|json|jsonl|py|sh|ps1|yaml|yml|toml|html|css|asar|exe|lock)\b|(?:--[a-z0-9-]+)|\b(?:[A-Z0-9]+-[A-Za-z0-9-]+|[a-z]+-[0-9][a-z0-9-]*)\b|\b[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b)/g,
-      (match) => {
-        const idx = savedTokens.length;
-        savedTokens.push(match);
-        return `⟦T${idx}⟧`;
-      }
-    );
+    const protectedText = text.replace(PROTECT_IDENTIFIERS_REGEX, (match) => {
+      const idx = savedTokens.length;
+      savedTokens.push(match);
+      return `⟦T${idx}⟧`;
+    });
     return { protectedText, savedTokens };
   }
 
   function restoreIdentifiersInThoughtText(translatedText, savedTokens) {
     if (!savedTokens.length) return translatedText;
-    const restored = translatedText.replace(/(?:⟦|\[|【)\s*T(\d+)\s*(?:⟧|\]|】)/gi, (full, num) => {
+    const restored = translatedText.replace(RESTORE_TOKEN_REGEX, (full, num) => {
       const idx = parseInt(num, 10);
       return savedTokens[idx] !== undefined ? savedTokens[idx] : full;
     });
-    return restored.replace(
-      /([가-힣])(['"”’⟧\]】]*)(와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g,
-      (full, lastKo, closingQuote, particle) => {
+    return restored.replace(KOREAN_PARTICLE_REGEX, (full, lastKo, closingQuote, particle) => {
         const code = lastKo.charCodeAt(0);
         if (code < 0xac00 || code > 0xd7a3) return full;
         const hasJong = (code - 0xac00) % 28 !== 0;

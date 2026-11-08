@@ -284,6 +284,8 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
   let lastProvider = initialCanonical.translationProvider;
   let lastPretranslate = initialCanonical.pretranslateEnabled;
   let lastDevToolsPort = readCurrentDevToolsPort();
+  let lastStorageMtimeMs = -1;
+  let lastStorageSize = -1;
   let tickCount = 0;
   let busy = false;
 
@@ -302,28 +304,33 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
     busy = true;
     tickCount++;
     try {
-      // 1. Check Native Settings UI changes in app_storage.json every 400ms
+      // 1. Check Native Settings UI changes in app_storage.json every 400ms (skip readFileSync + JSON.parse when mtimeMs & size are unchanged)
       if (fs.existsSync(APP_STORAGE_PATH)) {
-        const appStorage = JSON.parse(fs.readFileSync(APP_STORAGE_PATH, 'utf8'));
-        const curProvider =
-          normalizeProviderName(appStorage['agy-ko-thought-provider']) || lastProvider || 'google-translate';
-        const curPre =
-          appStorage['agy-ko-thought-pretranslate'] === '1' || appStorage['agy-ko-thought-pretranslate'] === true;
+        const stat = fs.statSync(APP_STORAGE_PATH);
+        if (stat.mtimeMs !== lastStorageMtimeMs || stat.size !== lastStorageSize) {
+          lastStorageMtimeMs = stat.mtimeMs;
+          lastStorageSize = stat.size;
+          const appStorage = JSON.parse(fs.readFileSync(APP_STORAGE_PATH, 'utf8'));
+          const curProvider =
+            normalizeProviderName(appStorage['agy-ko-thought-provider']) || lastProvider || 'google-translate';
+          const curPre =
+            appStorage['agy-ko-thought-pretranslate'] === '1' || appStorage['agy-ko-thought-pretranslate'] === true;
 
-        if (lastProvider === null) {
-          lastProvider = curProvider;
-          lastPretranslate = curPre;
-        } else if (curProvider !== lastProvider || curPre !== lastPretranslate) {
-          const prevProvider = lastProvider;
-          lastProvider = curProvider;
-          lastPretranslate = curPre;
-          const opts = getOrSetTranslatorOptions(curPre, curProvider);
-          if (typeof onSettingsChanged === 'function') {
-            await onSettingsChanged({
-              pretranslateEnabled: opts.pretranslateEnabled,
-              translationProvider: opts.translationProvider,
-              prevProvider,
-            });
+          if (lastProvider === null) {
+            lastProvider = curProvider;
+            lastPretranslate = curPre;
+          } else if (curProvider !== lastProvider || curPre !== lastPretranslate) {
+            const prevProvider = lastProvider;
+            lastProvider = curProvider;
+            lastPretranslate = curPre;
+            const opts = getOrSetTranslatorOptions(curPre, curProvider);
+            if (typeof onSettingsChanged === 'function') {
+              await onSettingsChanged({
+                pretranslateEnabled: opts.pretranslateEnabled,
+                translationProvider: opts.translationProvider,
+                prevProvider,
+              });
+            }
           }
         }
       }

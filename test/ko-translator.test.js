@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.24';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.25';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -738,8 +738,19 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     true,
     'KO-NEW-BUG-01: isThinkingTriggerInActiveOrLatestTurn must still return true when <G_> at depth 2 sets isActive:false on completion while <Lhc> at depth 4 has isLastContainer:true'
   );
-  // Also verify DOM fallback (lines 802+) is reachable when <G_> has isActive:false and <Lhc> lacks isLastContainer
-  const domFallbackThinkingBtn = makeCollapsibleBtn('__reactFiber$thinkingDomFallback', {
+  // Also verify DOM fallback is reachable when <G_> IS active (or lacks sawLocalActiveFalse) and no higher Lhc fiber exists,
+  // whereas when depth 2 <G_> has isActive:false (sawLocalActiveFalse === true) and no latest turn container proves it is in the latest turn,
+  // DOM fallback returns false so historical completed thinking blocks are NEVER force-expanded when a new turn starts (KO-NEW-BUG-01-RESIDUAL / D-0013).
+  const domFallbackActiveThinkingBtn = makeCollapsibleBtn('__reactFiber$thinkingDomFallbackActive', {
+    memoizedProps: {},
+    return: null,
+  });
+  assert.equal(
+    expandSandbox.__isThinkingActive(domFallbackActiveThinkingBtn, [], [historicalThinkingTriggerBtn, domFallbackActiveThinkingBtn]),
+    true,
+    'KO-NEW-BUG-01: DOM fallback must return true for the last thinking button when sawLocalActiveFalse is false and no higher Lhc fiber exists'
+  );
+  const domFallbackInactiveHistoricalBtn = makeCollapsibleBtn('__reactFiber$thinkingDomFallbackInactive', {
     memoizedProps: {},
     return: {
       memoizedProps: {},
@@ -750,10 +761,110 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     },
   });
   assert.equal(
-    expandSandbox.__isThinkingActive(domFallbackThinkingBtn, [], [historicalThinkingTriggerBtn, domFallbackThinkingBtn]),
-    true,
-    'KO-NEW-BUG-01: DOM fallback must be reachable when depth 2 <G_> has isActive:false and no higher Lhc fiber exists'
+    expandSandbox.__isThinkingActive(domFallbackInactiveHistoricalBtn, [], [historicalThinkingTriggerBtn, domFallbackInactiveHistoricalBtn]),
+    false,
+    'KO-NEW-BUG-01-RESIDUAL (D-0013): DOM fallback must return false when depth 2 <G_> has isActive:false and no latest turn container proves it is in the latest turn'
   );
+
+  // KO-NEW-BUG-01-RESIDUAL: Verify realistic 26+ depth <u_> (CascadeStepItem -> KZb -> div.flex-row -> div.min-w-0 -> JZb -> HZb -> GZb -> wZb.Provider -> IZb -> plannerResponse.renderer -> div.flex-col -> A6b -> G_ -> div.relative -> button) hierarchy:
+  // 1) Historical completed turn's <u_> thinking button with <G_ isActive:false> at depth 2, <Lhc isLastContainer:false, segment:{isLatest:false}> at depth 26, and <pCb container:{isLatest:false}> at depth 30 must return FALSE.
+  // 2) Latest turn with TWO <u_> thinking buttons where the 1st thinking step finished (<G_ isActive:false> at depth 2) and the 2nd thinking step mounted (<G_ isActive:true> at depth 2), both sharing <Lhc isLastContainer:true, segment:{isLatest:true}> at depth 26 and <pCb container:{isLatest:true}> at depth 30, must return TRUE for BOTH buttons!
+  const buildDeepCascadeStepFiber = (gActive, lhcDepth, isLastLhc, pCbDepth, isLatestPCb) => {
+    const pCbFiber = {
+      memoizedProps: { container: { isLatest: isLatestPCb } },
+      return: null,
+    };
+    let topChain = pCbFiber;
+    for (let d = pCbDepth - 1; d > lhcDepth; d--) {
+      topChain = { memoizedProps: {}, return: topChain };
+    }
+    const lhcFiber = {
+      memoizedProps: { isRunning: true, isLastContainer: isLastLhc, segment: { isLatest: isLastLhc } },
+      return: topChain,
+    };
+    let curChain = lhcFiber;
+    for (let d = lhcDepth - 1; d >= 3; d--) {
+      curChain = { memoizedProps: {}, return: curChain };
+    }
+    // depth 2: <G_ isActive={gActive}>
+    const gFiber = {
+      memoizedProps: { isActive: gActive },
+      return: curChain,
+    };
+    // depth 1: <div.relative>
+    const relFiber = {
+      memoizedProps: {},
+      return: gFiber,
+    };
+    // depth 0: <button>
+    return {
+      memoizedProps: {},
+      return: relFiber,
+    };
+  };
+  const deepHistThinkingBtn = makeCollapsibleBtn(
+    '__reactFiber$deepHist26',
+    buildDeepCascadeStepFiber(false, 26, false, 30, false)
+  );
+  const deepLatestFirstCompletedThinkingBtn = makeCollapsibleBtn(
+    '__reactFiber$deepLatestFirst26',
+    buildDeepCascadeStepFiber(false, 26, true, 30, true)
+  );
+  const deepLatestSecondActiveThinkingBtn = makeCollapsibleBtn(
+    '__reactFiber$deepLatestSecond26',
+    buildDeepCascadeStepFiber(true, 26, true, 30, true)
+  );
+  const deepThinkingList = [
+    deepHistThinkingBtn,
+    deepLatestFirstCompletedThinkingBtn,
+    deepLatestSecondActiveThinkingBtn,
+  ];
+  assert.equal(
+    expandSandbox.__isThinkingActive(deepHistThinkingBtn, [], deepThinkingList),
+    false,
+    'KO-NEW-BUG-01-RESIDUAL (D-0013): 26-depth <u_> historical completed thinking button must return false'
+  );
+  assert.equal(
+    expandSandbox.__isThinkingActive(deepLatestFirstCompletedThinkingBtn, [], deepThinkingList),
+    true,
+    'KO-NEW-BUG-01-RESIDUAL (D-0002 & D-0005): 1st completed thinking button (isActive:false at depth 2) in latest turn (<Lhc> at depth 26) must return true even when 2nd thinking button is mounted after it'
+  );
+  assert.equal(
+    expandSandbox.__isThinkingActive(deepLatestSecondActiveThinkingBtn, [], deepThinkingList),
+    true,
+    'KO-NEW-BUG-01-RESIDUAL: 2nd active thinking button in latest turn (<Lhc> at depth 26) must return true'
+  );
+
+  // Also verify [data-turn-content="latest"] and [data-testid="user-message-bubble"] DOM fallback guards
+  const latestTurnWrapperBtn = makeCollapsibleBtn('__reactFiber$inLatestTurnAttr', { memoizedProps: {}, return: null });
+  const oldTurnBeforeUserBubbleBtn = makeCollapsibleBtn('__reactFiber$beforeUserBubble', { memoizedProps: {}, return: null });
+  const mockUserBubble = {};
+  oldTurnBeforeUserBubbleBtn.compareDocumentPosition = (other) => (other === mockUserBubble ? 4 : 0);
+  expandSandbox.Node = { DOCUMENT_POSITION_FOLLOWING: 4 };
+  expandSandbox.document.querySelector = (sel) =>
+    sel === '[data-turn-content="latest"]'
+      ? { contains: (el) => el === latestTurnWrapperBtn }
+      : null;
+  assert.equal(
+    expandSandbox.__isThinkingActive(latestTurnWrapperBtn, [], [latestTurnWrapperBtn, oldTurnBeforeUserBubbleBtn]),
+    true,
+    'KO-NEW-BUG-01-RESIDUAL: [data-turn-content="latest"] wrapper must immediately identify buttons inside the latest turn'
+  );
+  assert.equal(
+    expandSandbox.__isThinkingActive(oldTurnBeforeUserBubbleBtn, [], [latestTurnWrapperBtn, oldTurnBeforeUserBubbleBtn]),
+    false,
+    'KO-NEW-BUG-01-RESIDUAL: [data-turn-content="latest"] wrapper must immediately reject buttons outside the latest turn'
+  );
+  expandSandbox.document.querySelector = () => null;
+  const origQsa = expandSandbox.document.querySelectorAll;
+  expandSandbox.document.querySelectorAll = (sel) =>
+    sel === '[data-testid="user-message-bubble"]' ? [mockUserBubble] : origQsa(sel);
+  assert.equal(
+    expandSandbox.__isThinkingActive(oldTurnBeforeUserBubbleBtn, [], [oldTurnBeforeUserBubbleBtn]),
+    false,
+    'KO-NEW-BUG-01-RESIDUAL: DOM fallback must return false when a subsequent [data-testid="user-message-bubble"] follows the button'
+  );
+  expandSandbox.document.querySelectorAll = origQsa;
   expandSandbox.__scanTriggerButtonsSync();
   assert.deepEqual(
     clickedOrder,
@@ -876,7 +987,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.24',
+      __agyKoLocalizerActive: 'v13.25',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1464,8 +1575,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 14. D-0013 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, timer non-shortening, >650ms async trajectorySlice mount protection, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.24') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.24 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v13.25') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.25 and must NOT claim verboseConversationSteps: true is force-enabled'
   );
   const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
   assert.ok(

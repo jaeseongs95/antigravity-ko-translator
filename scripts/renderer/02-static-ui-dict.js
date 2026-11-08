@@ -1189,6 +1189,55 @@
     'and acknowledge the': '및 확인:',
   };
 
+  // Pre-compiled dynamic single-target tool group patterns (e.g. "Reading http-engine-client.ts", "Editing App.tsx", "Listing src/")
+  const DYNAMIC_TOOL_VERB_PATTERNS = [
+    [/^Reading\s+(.+)$/i, '읽는 중'],
+    [/^Read\s+(.+)$/i, '읽음'],
+    [/^Editing\s+(.+)$/i, '수정 중'],
+    [/^Edited\s+(.+)$/i, '수정함'],
+    [/^Creating\s+(.+)$/i, '생성 중'],
+    [/^Created\s+(.+)$/i, '생성함'],
+    [/^Deleting\s+(.+)$/i, '삭제 중'],
+    [/^Deleted\s+(.+)$/i, '삭제함'],
+    [/^Listing\s+(.+)$/i, '목록 조회 중'],
+    [/^Listed\s+(.+)$/i, '목록 조회함'],
+    [/^Searching\s+(?:for\s+)?(.+)$/i, '검색 중'],
+    [/^Searched\s+(?:for\s+)?(.+)$/i, '검색함'],
+    [/^Analyzing\s+(.+)$/i, '분석 중'],
+    [/^Analyzed\s+(.+)$/i, '분석함'],
+    [/^Running\s+(.+)$/i, '실행 중'],
+    [/^Ran\s+(.+)$/i, '실행함'],
+    [/^Viewing\s+(.+)$/i, '확인 중'],
+    [/^Viewed\s+(.+)$/i, '확인함'],
+    [/^Fetching\s+(.+)$/i, '가져오는 중'],
+    [/^Fetched\s+(.+)$/i, '가져옴'],
+    [/^Exploring\s+(.+)$/i, '탐색 중'],
+    [/^Explored\s+(.+)$/i, '탐색함'],
+  ];
+
+  const SEARCH_NO_MATCH_NOUN_MAP = {
+    automations: '자동화',
+    'scheduled tasks': '예약 작업',
+    tasks: '작업',
+    conversations: '대화',
+    projects: '프로젝트',
+    skills: '스킬',
+    rules: '규칙',
+    plugins: '플러그인',
+    results: '결과',
+  };
+
+  const ADD_ITEM_NOUN_MAP = {
+    automation: '자동화',
+    'scheduled task': '예약 작업',
+    task: '작업',
+    project: '프로젝트',
+    workspace: '작업공간',
+  };
+
+  const STATIC_UI_PATTERN_CACHE = new Map();
+  const MAX_STATIC_UI_PATTERN_CACHE = 512;
+
   function formatDurationKo(rawDur) {
     if (!rawDur) return rawDur;
     let s = rawDur.trim();
@@ -1247,32 +1296,7 @@
     m = c.match(/^Listed\s+(\d+)\s+(?:files?|directories|folders?)$/i);
     if (m) return `항목 ${m[1]}개 목록 조회함`;
 
-    // Dynamic single-target tool group labels (e.g. "Reading http-engine-client.ts", "Editing App.tsx", "Listing src/")
-    const dynamicVerbMap = [
-      [/^Reading\s+(.+)$/i, '읽는 중'],
-      [/^Read\s+(.+)$/i, '읽음'],
-      [/^Editing\s+(.+)$/i, '수정 중'],
-      [/^Edited\s+(.+)$/i, '수정함'],
-      [/^Creating\s+(.+)$/i, '생성 중'],
-      [/^Created\s+(.+)$/i, '생성함'],
-      [/^Deleting\s+(.+)$/i, '삭제 중'],
-      [/^Deleted\s+(.+)$/i, '삭제함'],
-      [/^Listing\s+(.+)$/i, '목록 조회 중'],
-      [/^Listed\s+(.+)$/i, '목록 조회함'],
-      [/^Searching\s+(?:for\s+)?(.+)$/i, '검색 중'],
-      [/^Searched\s+(?:for\s+)?(.+)$/i, '검색함'],
-      [/^Analyzing\s+(.+)$/i, '분석 중'],
-      [/^Analyzed\s+(.+)$/i, '분석함'],
-      [/^Running\s+(.+)$/i, '실행 중'],
-      [/^Ran\s+(.+)$/i, '실행함'],
-      [/^Viewing\s+(.+)$/i, '확인 중'],
-      [/^Viewed\s+(.+)$/i, '확인함'],
-      [/^Fetching\s+(.+)$/i, '가져오는 중'],
-      [/^Fetched\s+(.+)$/i, '가져옴'],
-      [/^Exploring\s+(.+)$/i, '탐색 중'],
-      [/^Explored\s+(.+)$/i, '탐색함'],
-    ];
-    for (const [re, koVerb] of dynamicVerbMap) {
+    for (const [re, koVerb] of DYNAMIC_TOOL_VERB_PATTERNS) {
       const dm = c.match(re);
       if (dm && dm[1]) {
         return `${koVerb}: ${dm[1].trim()}`;
@@ -1281,14 +1305,7 @@
     return null;
   }
 
-  function translateStaticUiSync(raw) {
-    if (!raw) return null;
-    const t = raw.trim();
-    if (!t) return null;
-
-    if (Object.prototype.hasOwnProperty.call(STATIC_UI_MAP, t)) {
-      return STATIC_UI_MAP[t];
-    }
+  function matchStaticUiPatternUncached(t) {
 
     // Multiline Terminal Command Auto Execution description
     if (t.startsWith('Controls whether terminal commands require your approval before running.')) {
@@ -1358,47 +1375,19 @@
 
     m = t.match(/^No\s+(automations|scheduled tasks|tasks|conversations|projects|skills|rules|plugins|results)\s+matching your search\.?$/i);
     if (m) {
-      const nounMap = {
-        'automations': '자동화',
-        'scheduled tasks': '예약 작업',
-        'tasks': '작업',
-        'conversations': '대화',
-        'projects': '프로젝트',
-        'skills': '스킬',
-        'rules': '규칙',
-        'plugins': '플러그인',
-        'results': '결과',
-      };
-      const koNoun = nounMap[m[1].toLowerCase()] || m[1];
+      const koNoun = SEARCH_NO_MATCH_NOUN_MAP[m[1].toLowerCase()] || m[1];
       return `검색과 일치하는 ${koNoun} 항목이 없습니다`;
     }
 
     m = t.match(/^No\s+(automations|scheduled tasks|tasks|conversations|projects|skills|rules|plugins)\s+configured\.?$/i);
     if (m) {
-      const nounMap = {
-        'automations': '자동화',
-        'scheduled tasks': '예약 작업',
-        'tasks': '작업',
-        'conversations': '대화',
-        'projects': '프로젝트',
-        'skills': '스킬',
-        'rules': '규칙',
-        'plugins': '플러그인',
-      };
-      const koNoun = nounMap[m[1].toLowerCase()] || m[1];
+      const koNoun = SEARCH_NO_MATCH_NOUN_MAP[m[1].toLowerCase()] || m[1];
       return `설정된 ${koNoun} 항목이 없습니다.`;
     }
 
     m = t.match(/^Add\s+(automation|scheduled task|task|project|workspace)$/i);
     if (m) {
-      const nounMap = {
-        'automation': '자동화',
-        'scheduled task': '예약 작업',
-        'task': '작업',
-        'project': '프로젝트',
-        'workspace': '작업공간',
-      };
-      const koNoun = nounMap[m[1].toLowerCase()] || m[1];
+      const koNoun = ADD_ITEM_NOUN_MAP[m[1].toLowerCase()] || m[1];
       return `${koNoun} 추가`;
     }
 
@@ -1773,4 +1762,26 @@
     if (singleTool) return singleTool;
 
     return null;
+  }
+
+  function translateStaticUiSync(raw) {
+    if (!raw) return null;
+    const t = raw.trim();
+    if (!t) return null;
+
+    if (Object.prototype.hasOwnProperty.call(STATIC_UI_MAP, t)) {
+      return STATIC_UI_MAP[t];
+    }
+
+    if (STATIC_UI_PATTERN_CACHE.has(t)) {
+      return STATIC_UI_PATTERN_CACHE.get(t);
+    }
+
+    const matched = matchStaticUiPatternUncached(t);
+    if (STATIC_UI_PATTERN_CACHE.size >= MAX_STATIC_UI_PATTERN_CACHE) {
+      const oldestKey = STATIC_UI_PATTERN_CACHE.keys().next().value;
+      if (oldestKey !== undefined) STATIC_UI_PATTERN_CACHE.delete(oldestKey);
+    }
+    STATIC_UI_PATTERN_CACHE.set(t, matched);
+    return matched;
   }

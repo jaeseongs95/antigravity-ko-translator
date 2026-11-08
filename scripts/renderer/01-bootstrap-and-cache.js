@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.24';
+  const KO_LOCALIZER_VERSION = 'v13.25';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -11,6 +11,48 @@
   const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';
   const PROVIDER_STORAGE_KEY = 'agy-ko-thought-provider';
   let disposed = false;
+
+  let cachedReactFiberKey = null;
+  let cachedReactContainerKey = null;
+
+  function getReactFiberFromElement(el) {
+    if (!el || typeof el !== 'object') return null;
+    try {
+      if (cachedReactFiberKey && el[cachedReactFiberKey]) {
+        return el[cachedReactFiberKey];
+      }
+      const fk = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+      if (fk) {
+        cachedReactFiberKey = fk;
+        return el[fk];
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function getReactContainerOrFiberFromElement(el) {
+    if (!el || typeof el !== 'object') return null;
+    try {
+      if (cachedReactContainerKey && el[cachedReactContainerKey]) {
+        return el[cachedReactContainerKey];
+      }
+      if (cachedReactFiberKey && el[cachedReactFiberKey]) {
+        return el[cachedReactFiberKey];
+      }
+      const keys = Object.keys(el);
+      const ck = keys.find((k) => k.startsWith('__reactContainer$'));
+      if (ck) {
+        cachedReactContainerKey = ck;
+        return el[ck];
+      }
+      const fk = keys.find((k) => k.startsWith('__reactFiber$'));
+      if (fk) {
+        cachedReactFiberKey = fk;
+        return el[fk];
+      }
+    } catch (e) {}
+    return null;
+  }
 
   // 1. Restore all previously mutated DOM text nodes and attributes to clean original state (only on full plugin disable)
   function restoreAllMutatedNodes() {
@@ -84,9 +126,18 @@
   }
 
   let saveCacheTimer = null;
+  function enforceMemCacheBound() {
+    while (memCache.size > MAX_CACHE_ENTRIES) {
+      const oldestKey = memCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      memCache.delete(oldestKey);
+    }
+  }
+
   function flushCleanCacheToStorage() {
     if (disposed) return;
     try {
+      enforceMemCacheBound();
       const entries = Array.from(memCache.entries())
         .filter(([k, v]) => !isInvalidCachedOrTranslatedText(v, k))
         .slice(-MAX_CACHE_ENTRIES);
@@ -99,6 +150,7 @@
   }
 
   function scheduleSaveCache() {
+    enforceMemCacheBound();
     if (disposed || saveCacheTimer) return;
     saveCacheTimer = setTimeout(() => {
       saveCacheTimer = null;
@@ -207,6 +259,8 @@
     return null;
   }
 
+  let cachedUserSettingsStore = null;
+
   function resolveUserSettingsStoreFromDoc(doc) {
     if (!doc) return null;
     try {
@@ -217,32 +271,18 @@
         doc.querySelector('#root, #app')?.firstElementChild ||
         doc.body?.firstElementChild;
       if (anchor) {
-        const fk = Object.keys(anchor).find(
-          (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$')
-        );
-        if (fk) {
-          let cur = anchor[fk];
-          for (let i = 0; i < 260 && cur; i++) {
-            const st = extractSettingsStoreFromFiberNode(cur);
-            if (st) return st;
-            cur = cur.return;
-          }
+        let cur = getReactContainerOrFiberFromElement(anchor);
+        for (let i = 0; i < 260 && cur; i++) {
+          const st = extractSettingsStoreFromFiberNode(cur);
+          if (st) return st;
+          cur = cur.return;
         }
       }
       const rootHost = doc.querySelector('#root, #app') || doc.body;
       if (rootHost) {
-        const rfk = Object.keys(rootHost).find(
-          (k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$')
-        );
         const startFiber =
-          (rfk && rootHost[rfk]) ||
-          (rootHost.firstElementChild &&
-            (() => {
-              const cfk = Object.keys(rootHost.firstElementChild).find((k) =>
-                k.startsWith('__reactFiber$')
-              );
-              return cfk ? rootHost.firstElementChild[cfk] : null;
-            })());
+          getReactContainerOrFiberFromElement(rootHost) ||
+          (rootHost.firstElementChild ? getReactFiberFromElement(rootHost.firstElementChild) : null);
         if (startFiber) {
           let topFiber = startFiber;
           for (let i = 0; i < 80 && topFiber.return; i++) {
@@ -266,8 +306,14 @@
   }
 
   function resolveUserSettingsStore() {
+    if (cachedUserSettingsStore && typeof cachedUserSettingsStore.getPrefValue === 'function') {
+      return cachedUserSettingsStore;
+    }
     const direct = resolveUserSettingsStoreFromDoc(document);
-    if (direct) return direct;
+    if (direct) {
+      cachedUserSettingsStore = direct;
+      return direct;
+    }
     try {
       const iframes = document.querySelectorAll ? document.querySelectorAll('iframe') : [];
       for (const ifr of iframes) {
@@ -275,7 +321,10 @@
           const cd = ifr.contentDocument;
           if (cd && cd !== document) {
             const sub = resolveUserSettingsStoreFromDoc(cd);
-            if (sub) return sub;
+            if (sub) {
+              cachedUserSettingsStore = sub;
+              return sub;
+            }
           }
         } catch (e) {}
       }

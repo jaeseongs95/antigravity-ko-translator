@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.29
+// @version      1.2.30
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.24';
+  const KO_LOCALIZER_VERSION = 'v13.25';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -36,6 +36,48 @@
   const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';
   const PROVIDER_STORAGE_KEY = 'agy-ko-thought-provider';
   let disposed = false;
+
+  let cachedReactFiberKey = null;
+  let cachedReactContainerKey = null;
+
+  function getReactFiberFromElement(el) {
+    if (!el || typeof el !== 'object') return null;
+    try {
+      if (cachedReactFiberKey && el[cachedReactFiberKey]) {
+        return el[cachedReactFiberKey];
+      }
+      const fk = Object.keys(el).find((k) => k.startsWith('__reactFiber$'));
+      if (fk) {
+        cachedReactFiberKey = fk;
+        return el[fk];
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  function getReactContainerOrFiberFromElement(el) {
+    if (!el || typeof el !== 'object') return null;
+    try {
+      if (cachedReactContainerKey && el[cachedReactContainerKey]) {
+        return el[cachedReactContainerKey];
+      }
+      if (cachedReactFiberKey && el[cachedReactFiberKey]) {
+        return el[cachedReactFiberKey];
+      }
+      const keys = Object.keys(el);
+      const ck = keys.find((k) => k.startsWith('__reactContainer$'));
+      if (ck) {
+        cachedReactContainerKey = ck;
+        return el[ck];
+      }
+      const fk = keys.find((k) => k.startsWith('__reactFiber$'));
+      if (fk) {
+        cachedReactFiberKey = fk;
+        return el[fk];
+      }
+    } catch (e) {}
+    return null;
+  }
 
   // 1. Restore all previously mutated DOM text nodes and attributes to clean original state (only on full plugin disable)
   function restoreAllMutatedNodes() {
@@ -109,9 +151,18 @@
   }
 
   let saveCacheTimer = null;
+  function enforceMemCacheBound() {
+    while (memCache.size > MAX_CACHE_ENTRIES) {
+      const oldestKey = memCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      memCache.delete(oldestKey);
+    }
+  }
+
   function flushCleanCacheToStorage() {
     if (disposed) return;
     try {
+      enforceMemCacheBound();
       const entries = Array.from(memCache.entries())
         .filter(([k, v]) => !isInvalidCachedOrTranslatedText(v, k))
         .slice(-MAX_CACHE_ENTRIES);
@@ -124,6 +175,7 @@
   }
 
   function scheduleSaveCache() {
+    enforceMemCacheBound();
     if (disposed || saveCacheTimer) return;
     saveCacheTimer = setTimeout(() => {
       saveCacheTimer = null;
@@ -232,6 +284,8 @@
     return null;
   }
 
+  let cachedUserSettingsStore = null;
+
   function resolveUserSettingsStoreFromDoc(doc) {
     if (!doc) return null;
     try {
@@ -242,32 +296,18 @@
         doc.querySelector('#root, #app')?.firstElementChild ||
         doc.body?.firstElementChild;
       if (anchor) {
-        const fk = Object.keys(anchor).find(
-          (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactContainer$')
-        );
-        if (fk) {
-          let cur = anchor[fk];
-          for (let i = 0; i < 260 && cur; i++) {
-            const st = extractSettingsStoreFromFiberNode(cur);
-            if (st) return st;
-            cur = cur.return;
-          }
+        let cur = getReactContainerOrFiberFromElement(anchor);
+        for (let i = 0; i < 260 && cur; i++) {
+          const st = extractSettingsStoreFromFiberNode(cur);
+          if (st) return st;
+          cur = cur.return;
         }
       }
       const rootHost = doc.querySelector('#root, #app') || doc.body;
       if (rootHost) {
-        const rfk = Object.keys(rootHost).find(
-          (k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$')
-        );
         const startFiber =
-          (rfk && rootHost[rfk]) ||
-          (rootHost.firstElementChild &&
-            (() => {
-              const cfk = Object.keys(rootHost.firstElementChild).find((k) =>
-                k.startsWith('__reactFiber$')
-              );
-              return cfk ? rootHost.firstElementChild[cfk] : null;
-            })());
+          getReactContainerOrFiberFromElement(rootHost) ||
+          (rootHost.firstElementChild ? getReactFiberFromElement(rootHost.firstElementChild) : null);
         if (startFiber) {
           let topFiber = startFiber;
           for (let i = 0; i < 80 && topFiber.return; i++) {
@@ -291,8 +331,14 @@
   }
 
   function resolveUserSettingsStore() {
+    if (cachedUserSettingsStore && typeof cachedUserSettingsStore.getPrefValue === 'function') {
+      return cachedUserSettingsStore;
+    }
     const direct = resolveUserSettingsStoreFromDoc(document);
-    if (direct) return direct;
+    if (direct) {
+      cachedUserSettingsStore = direct;
+      return direct;
+    }
     try {
       const iframes = document.querySelectorAll ? document.querySelectorAll('iframe') : [];
       for (const ifr of iframes) {
@@ -300,7 +346,10 @@
           const cd = ifr.contentDocument;
           if (cd && cd !== document) {
             const sub = resolveUserSettingsStoreFromDoc(cd);
-            if (sub) return sub;
+            if (sub) {
+              cachedUserSettingsStore = sub;
+              return sub;
+            }
           }
         } catch (e) {}
       }
@@ -1610,6 +1659,55 @@
     'and acknowledge the': '및 확인:',
   };
 
+  // Pre-compiled dynamic single-target tool group patterns (e.g. "Reading http-engine-client.ts", "Editing App.tsx", "Listing src/")
+  const DYNAMIC_TOOL_VERB_PATTERNS = [
+    [/^Reading\s+(.+)$/i, '읽는 중'],
+    [/^Read\s+(.+)$/i, '읽음'],
+    [/^Editing\s+(.+)$/i, '수정 중'],
+    [/^Edited\s+(.+)$/i, '수정함'],
+    [/^Creating\s+(.+)$/i, '생성 중'],
+    [/^Created\s+(.+)$/i, '생성함'],
+    [/^Deleting\s+(.+)$/i, '삭제 중'],
+    [/^Deleted\s+(.+)$/i, '삭제함'],
+    [/^Listing\s+(.+)$/i, '목록 조회 중'],
+    [/^Listed\s+(.+)$/i, '목록 조회함'],
+    [/^Searching\s+(?:for\s+)?(.+)$/i, '검색 중'],
+    [/^Searched\s+(?:for\s+)?(.+)$/i, '검색함'],
+    [/^Analyzing\s+(.+)$/i, '분석 중'],
+    [/^Analyzed\s+(.+)$/i, '분석함'],
+    [/^Running\s+(.+)$/i, '실행 중'],
+    [/^Ran\s+(.+)$/i, '실행함'],
+    [/^Viewing\s+(.+)$/i, '확인 중'],
+    [/^Viewed\s+(.+)$/i, '확인함'],
+    [/^Fetching\s+(.+)$/i, '가져오는 중'],
+    [/^Fetched\s+(.+)$/i, '가져옴'],
+    [/^Exploring\s+(.+)$/i, '탐색 중'],
+    [/^Explored\s+(.+)$/i, '탐색함'],
+  ];
+
+  const SEARCH_NO_MATCH_NOUN_MAP = {
+    automations: '자동화',
+    'scheduled tasks': '예약 작업',
+    tasks: '작업',
+    conversations: '대화',
+    projects: '프로젝트',
+    skills: '스킬',
+    rules: '규칙',
+    plugins: '플러그인',
+    results: '결과',
+  };
+
+  const ADD_ITEM_NOUN_MAP = {
+    automation: '자동화',
+    'scheduled task': '예약 작업',
+    task: '작업',
+    project: '프로젝트',
+    workspace: '작업공간',
+  };
+
+  const STATIC_UI_PATTERN_CACHE = new Map();
+  const MAX_STATIC_UI_PATTERN_CACHE = 512;
+
   function formatDurationKo(rawDur) {
     if (!rawDur) return rawDur;
     let s = rawDur.trim();
@@ -1668,32 +1766,7 @@
     m = c.match(/^Listed\s+(\d+)\s+(?:files?|directories|folders?)$/i);
     if (m) return `항목 ${m[1]}개 목록 조회함`;
 
-    // Dynamic single-target tool group labels (e.g. "Reading http-engine-client.ts", "Editing App.tsx", "Listing src/")
-    const dynamicVerbMap = [
-      [/^Reading\s+(.+)$/i, '읽는 중'],
-      [/^Read\s+(.+)$/i, '읽음'],
-      [/^Editing\s+(.+)$/i, '수정 중'],
-      [/^Edited\s+(.+)$/i, '수정함'],
-      [/^Creating\s+(.+)$/i, '생성 중'],
-      [/^Created\s+(.+)$/i, '생성함'],
-      [/^Deleting\s+(.+)$/i, '삭제 중'],
-      [/^Deleted\s+(.+)$/i, '삭제함'],
-      [/^Listing\s+(.+)$/i, '목록 조회 중'],
-      [/^Listed\s+(.+)$/i, '목록 조회함'],
-      [/^Searching\s+(?:for\s+)?(.+)$/i, '검색 중'],
-      [/^Searched\s+(?:for\s+)?(.+)$/i, '검색함'],
-      [/^Analyzing\s+(.+)$/i, '분석 중'],
-      [/^Analyzed\s+(.+)$/i, '분석함'],
-      [/^Running\s+(.+)$/i, '실행 중'],
-      [/^Ran\s+(.+)$/i, '실행함'],
-      [/^Viewing\s+(.+)$/i, '확인 중'],
-      [/^Viewed\s+(.+)$/i, '확인함'],
-      [/^Fetching\s+(.+)$/i, '가져오는 중'],
-      [/^Fetched\s+(.+)$/i, '가져옴'],
-      [/^Exploring\s+(.+)$/i, '탐색 중'],
-      [/^Explored\s+(.+)$/i, '탐색함'],
-    ];
-    for (const [re, koVerb] of dynamicVerbMap) {
+    for (const [re, koVerb] of DYNAMIC_TOOL_VERB_PATTERNS) {
       const dm = c.match(re);
       if (dm && dm[1]) {
         return `${koVerb}: ${dm[1].trim()}`;
@@ -1702,14 +1775,7 @@
     return null;
   }
 
-  function translateStaticUiSync(raw) {
-    if (!raw) return null;
-    const t = raw.trim();
-    if (!t) return null;
-
-    if (Object.prototype.hasOwnProperty.call(STATIC_UI_MAP, t)) {
-      return STATIC_UI_MAP[t];
-    }
+  function matchStaticUiPatternUncached(t) {
 
     // Multiline Terminal Command Auto Execution description
     if (t.startsWith('Controls whether terminal commands require your approval before running.')) {
@@ -1779,47 +1845,19 @@
 
     m = t.match(/^No\s+(automations|scheduled tasks|tasks|conversations|projects|skills|rules|plugins|results)\s+matching your search\.?$/i);
     if (m) {
-      const nounMap = {
-        'automations': '자동화',
-        'scheduled tasks': '예약 작업',
-        'tasks': '작업',
-        'conversations': '대화',
-        'projects': '프로젝트',
-        'skills': '스킬',
-        'rules': '규칙',
-        'plugins': '플러그인',
-        'results': '결과',
-      };
-      const koNoun = nounMap[m[1].toLowerCase()] || m[1];
+      const koNoun = SEARCH_NO_MATCH_NOUN_MAP[m[1].toLowerCase()] || m[1];
       return `검색과 일치하는 ${koNoun} 항목이 없습니다`;
     }
 
     m = t.match(/^No\s+(automations|scheduled tasks|tasks|conversations|projects|skills|rules|plugins)\s+configured\.?$/i);
     if (m) {
-      const nounMap = {
-        'automations': '자동화',
-        'scheduled tasks': '예약 작업',
-        'tasks': '작업',
-        'conversations': '대화',
-        'projects': '프로젝트',
-        'skills': '스킬',
-        'rules': '규칙',
-        'plugins': '플러그인',
-      };
-      const koNoun = nounMap[m[1].toLowerCase()] || m[1];
+      const koNoun = SEARCH_NO_MATCH_NOUN_MAP[m[1].toLowerCase()] || m[1];
       return `설정된 ${koNoun} 항목이 없습니다.`;
     }
 
     m = t.match(/^Add\s+(automation|scheduled task|task|project|workspace)$/i);
     if (m) {
-      const nounMap = {
-        'automation': '자동화',
-        'scheduled task': '예약 작업',
-        'task': '작업',
-        'project': '프로젝트',
-        'workspace': '작업공간',
-      };
-      const koNoun = nounMap[m[1].toLowerCase()] || m[1];
+      const koNoun = ADD_ITEM_NOUN_MAP[m[1].toLowerCase()] || m[1];
       return `${koNoun} 추가`;
     }
 
@@ -2196,8 +2234,42 @@
     return null;
   }
 
+  function translateStaticUiSync(raw) {
+    if (!raw) return null;
+    const t = raw.trim();
+    if (!t) return null;
+
+    if (Object.prototype.hasOwnProperty.call(STATIC_UI_MAP, t)) {
+      return STATIC_UI_MAP[t];
+    }
+
+    if (STATIC_UI_PATTERN_CACHE.has(t)) {
+      return STATIC_UI_PATTERN_CACHE.get(t);
+    }
+
+    const matched = matchStaticUiPatternUncached(t);
+    if (STATIC_UI_PATTERN_CACHE.size >= MAX_STATIC_UI_PATTERN_CACHE) {
+      const oldestKey = STATIC_UI_PATTERN_CACHE.keys().next().value;
+      if (oldestKey !== undefined) STATIC_UI_PATTERN_CACHE.delete(oldestKey);
+    }
+    STATIC_UI_PATTERN_CACHE.set(t, matched);
+    return matched;
+  }
+
 // Module: 03-text-tokenizer.js
 // Responsibility: Code/identifier/quote placeholder tokenization, Korean particle correction, and Markdown segment extraction.
+  const PLACEHOLDER_TOKEN_REGEX = /(?:⟦|\[|【)\s*[CT]\d+\s*(?:⟧|\]|】)/gi;
+  const CODE_AND_QUOTED_KO_REGEX =
+    /`[^`]+`|"(?=[^"\n]*[가-힣])[^"\n]{1,140}"|“(?=[^”\n]*[가-힣])[^”\n]{1,140}”|(?<![A-Za-z0-9⟧])'(?=[^'\n]*[가-힣])[^'\n]{1,80}'(?![A-Za-z0-9])|\bhttps?:\/\/\S+/g;
+  const FILE_EXT_PATH_REGEX =
+    /\b[A-Za-z0-9_.-]+\.(?:md|js|mjs|cjs|ts|tsx|json|jsonl|py|sh|ps1|yaml|yml|toml|html|css|asar|exe|lock)\b/g;
+  const CLI_AND_IDENTIFIER_REGEX =
+    /(?:--[a-z0-9-]+)|\b(?:[A-Z0-9]+-[A-Za-z0-9-]+|[a-z]+-[0-9][a-z0-9-]*)\b|\b[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b/g;
+  const PROTECT_IDENTIFIERS_REGEX =
+    /(`[^`]+`|"(?=[^"\n]*[가-힣])[^"\n]{1,140}"|“(?=[^”\n]*[가-힣])[^”\n]{1,140}”|(?<![A-Za-z0-9⟧])'(?=[^'\n]*[가-힣])[^'\n]{1,80}'(?![A-Za-z0-9])|\bhttps?:\/\/\S+|\b[A-Za-z0-9_.-]+\.(?:md|js|mjs|cjs|ts|tsx|json|jsonl|py|sh|ps1|yaml|yml|toml|html|css|asar|exe|lock)\b|(?:--[a-z0-9-]+)|\b(?:[A-Z0-9]+-[A-Za-z0-9-]+|[a-z]+-[0-9][a-z0-9-]*)\b|\b[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b)/g;
+  const RESTORE_TOKEN_REGEX = /(?:⟦|\[|【)\s*T(\d+)\s*(?:⟧|\]|】)/gi;
+  const KOREAN_PARTICLE_REGEX = /([가-힣])(['"”’⟧\]】]*)(와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g;
+
   function isAlreadyKoreanOrNonEnglish(text) {
     if (!text) return true;
     const trimmed = text.trim();
@@ -2206,10 +2278,10 @@
     // Strip inline code, Korean quoted strings, placeholders (⟦C0⟧, ⟦T0⟧), URLs, file paths, CLI flags, and code identifiers first.
     // Note: Quotes are matched ONLY when containing Korean (or backticks) so English quoted prose and hyphenated compound words are translated naturally.
     const stripped = trimmed
-      .replace(/(?:⟦|\[|【)\s*[CT]\d+\s*(?:⟧|\]|】)/gi, ' ')
-      .replace(/`[^`]+`|"(?=[^"\n]*[가-힣])[^"\n]{1,140}"|“(?=[^”\n]*[가-힣])[^”\n]{1,140}”|(?<![A-Za-z0-9⟧])'(?=[^'\n]*[가-힣])[^'\n]{1,80}'(?![A-Za-z0-9])|\bhttps?:\/\/\S+/g, ' ')
-      .replace(/\b[A-Za-z0-9_.-]+\.(?:md|js|mjs|cjs|ts|tsx|json|jsonl|py|sh|ps1|yaml|yml|toml|html|css|asar|exe|lock)\b/g, ' ')
-      .replace(/(?:--[a-z0-9-]+)|\b(?:[A-Z0-9]+-[A-Za-z0-9-]+|[a-z]+-[0-9][a-z0-9-]*)\b|\b[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b/g, ' ');
+      .replace(PLACEHOLDER_TOKEN_REGEX, ' ')
+      .replace(CODE_AND_QUOTED_KO_REGEX, ' ')
+      .replace(FILE_EXT_PATH_REGEX, ' ')
+      .replace(CLI_AND_IDENTIFIER_REGEX, ' ');
 
     const koCount = (stripped.match(/[가-힣]/g) || []).length;
     const enWords = stripped.match(/[A-Za-z]{2,}/g) || [];
@@ -2225,26 +2297,21 @@
   // Protects backtick code, Korean quoted strings, CLI flags, uppercase/numeric IDs (e.g. AGS-D-0281, SHA-256), snake_case, camelCase, file paths, and URLs
   function protectIdentifiersInThoughtText(text) {
     const savedTokens = [];
-    const protectedText = text.replace(
-      /(`[^`]+`|"(?=[^"\n]*[가-힣])[^"\n]{1,140}"|“(?=[^”\n]*[가-힣])[^”\n]{1,140}”|(?<![A-Za-z0-9⟧])'(?=[^'\n]*[가-힣])[^'\n]{1,80}'(?![A-Za-z0-9])|\bhttps?:\/\/\S+|\b[A-Za-z0-9_.-]+\.(?:md|js|mjs|cjs|ts|tsx|json|jsonl|py|sh|ps1|yaml|yml|toml|html|css|asar|exe|lock)\b|(?:--[a-z0-9-]+)|\b(?:[A-Z0-9]+-[A-Za-z0-9-]+|[a-z]+-[0-9][a-z0-9-]*)\b|\b[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b)/g,
-      (match) => {
-        const idx = savedTokens.length;
-        savedTokens.push(match);
-        return `⟦T${idx}⟧`;
-      }
-    );
+    const protectedText = text.replace(PROTECT_IDENTIFIERS_REGEX, (match) => {
+      const idx = savedTokens.length;
+      savedTokens.push(match);
+      return `⟦T${idx}⟧`;
+    });
     return { protectedText, savedTokens };
   }
 
   function restoreIdentifiersInThoughtText(translatedText, savedTokens) {
     if (!savedTokens.length) return translatedText;
-    const restored = translatedText.replace(/(?:⟦|\[|【)\s*T(\d+)\s*(?:⟧|\]|】)/gi, (full, num) => {
+    const restored = translatedText.replace(RESTORE_TOKEN_REGEX, (full, num) => {
       const idx = parseInt(num, 10);
       return savedTokens[idx] !== undefined ? savedTokens[idx] : full;
     });
-    return restored.replace(
-      /([가-힣])(['"”’⟧\]】]*)(와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g,
-      (full, lastKo, closingQuote, particle) => {
+    return restored.replace(KOREAN_PARTICLE_REGEX, (full, lastKo, closingQuote, particle) => {
         const code = lastKo.charCodeAt(0);
         if (code < 0xac00 || code > 0xd7a3) return full;
         const hasJong = (code - 0xac00) % 28 !== 0;
@@ -2910,10 +2977,15 @@
     try {
       const rootEl = document.querySelector('#root, #app') || (document.body && document.body.firstElementChild);
       if (!rootEl) return found;
-      const fiberKey = Object.keys(rootEl).find(
-        (k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$')
-      );
-      const startFiber = fiberKey ? rootEl[fiberKey] : null;
+      const startFiber =
+        typeof getReactContainerOrFiberFromElement === 'function'
+          ? getReactContainerOrFiberFromElement(rootEl)
+          : (() => {
+              const fiberKey = Object.keys(rootEl).find(
+                (k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$')
+              );
+              return fiberKey ? rootEl[fiberKey] : null;
+            })();
       const seenObj = new WeakSet();
 
       function scanObj(obj, depth) {
@@ -4947,22 +5019,33 @@
       const trimmed = raw.trim();
       if (!trimmed) continue;
 
-      const btn = parent.closest('button');
-      const isStandaloneNewBtn =
-        !!btn &&
-        !btn.closest('[role="menu"], [role="listbox"], [role="menuitem"]') &&
-        ((btn.textContent || '').trim() === 'New' || (btn.textContent || '').trim() === '새로 만들기');
-
-      if (textNode.__agyOrigValue && textNode.__agyOrigValue.trim() === 'New' && !isStandaloneNewBtn) {
-        textNode.nodeValue = textNode.__agyOrigValue;
-        delete textNode.__agyOrigValue;
-        delete textNode.__agyKoApplied;
-        continue;
+      if (textNode.__agyOrigValue && textNode.__agyOrigValue.trim() === 'New') {
+        const btn = parent.closest('button');
+        const isStandaloneNewBtn =
+          !!btn &&
+          !btn.closest('[role="menu"], [role="listbox"], [role="menuitem"]') &&
+          ((btn.textContent || '').trim() === 'New' || (btn.textContent || '').trim() === '새로 만들기');
+        if (!isStandaloneNewBtn) {
+          textNode.nodeValue = textNode.__agyOrigValue;
+          delete textNode.__agyOrigValue;
+          delete textNode.__agyKoApplied;
+          continue;
+        }
       }
 
       if (textNode.__agyKoApplied === trimmed && !/^\(권장\)\s+[A-Za-z]/.test(trimmed)) continue;
 
-      const syncKo = trimmed === 'New' ? (isStandaloneNewBtn ? '새로 만들기' : null) : translateStaticUiSync(trimmed);
+      let syncKo;
+      if (trimmed === 'New') {
+        const btn = parent.closest('button');
+        const isStandaloneNewBtn =
+          !!btn &&
+          !btn.closest('[role="menu"], [role="listbox"], [role="menuitem"]') &&
+          ((btn.textContent || '').trim() === 'New' || (btn.textContent || '').trim() === '새로 만들기');
+        syncKo = isStandaloneNewBtn ? '새로 만들기' : null;
+      } else {
+        syncKo = translateStaticUiSync(trimmed);
+      }
       if (syncKo && syncKo !== trimmed) {
         const leading = raw.match(/^\s*/)[0];
         const trailing = raw.match(/\s*$/)[0];
@@ -4982,8 +5065,13 @@
     if (!btn) return false;
     if (btn.__agyHasThinking) return true;
     try {
-      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-      let cur = fk ? btn[fk] : null;
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
       for (let i = 0; i < 12 && cur; i++) {
         const segSteps = cur.memoizedProps?.segment?.steps;
         if (Array.isArray(segSteps)) {
@@ -5007,8 +5095,13 @@
     if (!btn) return false;
     if (btn.__agyHasThinking) return true;
     try {
-      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-      let cur = fk ? btn[fk] : null;
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
       for (let i = 0; i < 12 && cur; i++) {
         const grpSteps = cur.memoizedProps?.steps || cur.memoizedProps?.group?.steps;
         if (Array.isArray(grpSteps)) {
@@ -5087,8 +5180,13 @@
     if (!btn) return false;
     if (btn.classList && btn.classList.contains('hidden')) return true;
     try {
-      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-      let cur = fk ? btn[fk] : null;
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
       for (let i = 0; i < 8 && cur; i++) {
         if (cur.memoizedProps && cur.memoizedProps.triggerVisible === false) {
           return true;
@@ -5101,11 +5199,16 @@
 
   function isToolGroupInActiveOrLatestTurn(btn, workedBtns) {
     if (!btn) return false;
+    let sawLocalActiveFalse = false;
     try {
-      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-      let cur = fk ? btn[fk] : null;
-      let sawLocalActiveFalse = false;
-      for (let i = 0; i < 16 && cur; i++) {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 36 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
           if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
@@ -5114,8 +5217,12 @@
             if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
             if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
           }
+          if (mp.container && typeof mp.container === 'object') {
+            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
+            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
+          }
           // Immediate wrapper (e.g. yhc / G_ at depth <= 6) carries turn/step-local isActive/isRunning,
-          // whereas higher container fibers (Lhc/oic) carry conversation-wide isRunning (status === RUNNING).
+          // whereas higher container fibers (Lhc/oic/pCb at depth 16..31) carry conversation-wide isRunning (status === RUNNING).
           if (i <= 6) {
             if (mp.isActive === true) return true;
             if (mp.isActive === false || mp.isRunning === false) {
@@ -5125,10 +5232,27 @@
         }
         cur = cur.return;
       }
-      if (sawLocalActiveFalse && (!Array.isArray(workedBtns) || workedBtns.length === 0)) {
-        return false;
-      }
     } catch (e) {}
+    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
+      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
+      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
+        return Boolean(latestTurnEl.contains(btn));
+      }
+    }
+    if (
+      typeof document !== 'undefined' &&
+      document &&
+      typeof document.querySelectorAll === 'function' &&
+      typeof btn.compareDocumentPosition === 'function' &&
+      typeof Node !== 'undefined'
+    ) {
+      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
+      for (const ub of userBubbles) {
+        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+          return false;
+        }
+      }
+    }
     if (Array.isArray(workedBtns) && workedBtns.length > 0) {
       const lastWorked = workedBtns[workedBtns.length - 1];
       const lastContainer =
@@ -5141,6 +5265,9 @@
         return Boolean(c && typeof c.contains === 'function' && c.contains(btn));
       });
       if (anyHistoricalWorkedContains) {
+        return false;
+      }
+      if (sawLocalActiveFalse) {
         return false;
       }
       const lastTrigger = workedBtns[workedBtns.length - 1];
@@ -5159,11 +5286,16 @@
 
   function isThinkingTriggerInActiveOrLatestTurn(btn, workedBtns, thinkingBtns) {
     if (!btn) return false;
+    let sawLocalActiveFalse = false;
     try {
-      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-      let cur = fk ? btn[fk] : null;
-      let sawLocalActiveFalse = false;
-      for (let i = 0; i < 16 && cur; i++) {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 36 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
           if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
@@ -5172,8 +5304,13 @@
             if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
             if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
           }
+          if (mp.container && typeof mp.container === 'object') {
+            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
+            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
+          }
           // Immediate wrapper (<G_> at depth 2) transitions isActive: true -> false as soon as a thinking step finishes
-          // streaming ("Thought for Xs"), while <Lhc> at depth 4..11 carries turn-level isLastContainer / segment.isLatest.
+          // streaming ("Thought for Xs"), while <Lhc> (depth 4..26 in <u_> CascadeStepItem hierarchy) and <pCb> (depth 21..31)
+          // carry turn-level isLastContainer / segment.isLatest / container.isLatest.
           if (i <= 6) {
             if (mp.isActive === true) return true;
             if (mp.isActive === false || mp.isRunning === false) {
@@ -5183,14 +5320,27 @@
         }
         cur = cur.return;
       }
-      if (
-        sawLocalActiveFalse &&
-        (!Array.isArray(workedBtns) || workedBtns.length === 0) &&
-        (!Array.isArray(thinkingBtns) || thinkingBtns.length === 0)
-      ) {
-        return false;
-      }
     } catch (e) {}
+    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
+      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
+      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
+        return Boolean(latestTurnEl.contains(btn));
+      }
+    }
+    if (
+      typeof document !== 'undefined' &&
+      document &&
+      typeof document.querySelectorAll === 'function' &&
+      typeof btn.compareDocumentPosition === 'function' &&
+      typeof Node !== 'undefined'
+    ) {
+      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
+      for (const ub of userBubbles) {
+        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+          return false;
+        }
+      }
+    }
     if (Array.isArray(workedBtns) && workedBtns.length > 0) {
       const lastWorked = workedBtns[workedBtns.length - 1];
       const lastContainer =
@@ -5205,6 +5355,9 @@
       if (anyHistoricalWorkedContains) {
         return false;
       }
+      if (sawLocalActiveFalse) {
+        return false;
+      }
       if (
         lastWorked &&
         typeof lastWorked.compareDocumentPosition === 'function' &&
@@ -5213,6 +5366,9 @@
       ) {
         return true;
       }
+      return false;
+    }
+    if (sawLocalActiveFalse) {
       return false;
     }
     if (Array.isArray(thinkingBtns) && thinkingBtns.length > 0) {

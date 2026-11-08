@@ -115,10 +115,15 @@
     try {
       const rootEl = document.querySelector('#root, #app') || (document.body && document.body.firstElementChild);
       if (!rootEl) return found;
-      const fiberKey = Object.keys(rootEl).find(
-        (k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$')
-      );
-      const startFiber = fiberKey ? rootEl[fiberKey] : null;
+      const startFiber =
+        typeof getReactContainerOrFiberFromElement === 'function'
+          ? getReactContainerOrFiberFromElement(rootEl)
+          : (() => {
+              const fiberKey = Object.keys(rootEl).find(
+                (k) => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$')
+              );
+              return fiberKey ? rootEl[fiberKey] : null;
+            })();
       const seenObj = new WeakSet();
 
       function scanObj(obj, depth) {
