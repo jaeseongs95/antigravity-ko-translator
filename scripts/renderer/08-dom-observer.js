@@ -523,12 +523,36 @@
     }
   }
 
+  const STATIC_UI_SUBTREE_PRUNE_SELECTOR =
+    'style, script, code, pre, textarea, [contenteditable="true"], .monaco-editor, .xterm, ' +
+    '.agy-ctx-statusbar, .agy-ctx-modal-backdrop, .agy-ko-settings-root, #agy-ko-translator-modal, ' +
+    '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
+    'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
+    '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
+    '[data-uri], [data-quotable-inline="true"], .cursor-edit';
+
   function localizeStaticUiInRoot(rootNode) {
     if (!rootNode) return;
     localizeAttributesInRoot(rootNode);
-    const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT);
+    const showFilter =
+      typeof NodeFilter !== 'undefined' && NodeFilter
+        ? (NodeFilter.SHOW_ELEMENT || 1) | (NodeFilter.SHOW_TEXT || 4)
+        : 4;
+    const walker = document.createTreeWalker(rootNode, showFilter, {
+      acceptNode(node) {
+        if (!node) return typeof NodeFilter !== 'undefined' && NodeFilter.FILTER_REJECT ? NodeFilter.FILTER_REJECT : 2;
+        if (node.nodeType === 1) {
+          if (typeof node.matches === 'function' && node.matches(STATIC_UI_SUBTREE_PRUNE_SELECTOR)) {
+            return typeof NodeFilter !== 'undefined' && NodeFilter.FILTER_REJECT ? NodeFilter.FILTER_REJECT : 2;
+          }
+          return typeof NodeFilter !== 'undefined' && NodeFilter.FILTER_SKIP ? NodeFilter.FILTER_SKIP : 3;
+        }
+        return typeof NodeFilter !== 'undefined' && NodeFilter.FILTER_ACCEPT ? NodeFilter.FILTER_ACCEPT : 1;
+      },
+    });
     let textNode;
     while ((textNode = walker.nextNode())) {
+      if (textNode.nodeType && textNode.nodeType !== 3) continue;
       const parent = textNode.parentElement;
       if (!parent || isExcludedFromStaticUiLocalization(parent)) continue;
       if (
@@ -569,6 +593,9 @@
       }
     }
     localizeQuestionAndPermissionWidgets(rootNode);
+    if (typeof observer !== 'undefined' && observer && typeof observer.takeRecords === 'function') {
+      observer.takeRecords();
+    }
   }
 
   function doesWorkedForButtonContainThinking(btn) {
@@ -692,6 +719,39 @@
     return false;
   }
 
+  function isToolGroupInActiveOrLatestTurn(btn, workedBtns) {
+    if (!btn) return false;
+    try {
+      const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+      let cur = fk ? btn[fk] : null;
+      for (let i = 0; i < 16 && cur; i++) {
+        const mp = cur.memoizedProps;
+        if (mp) {
+          if (mp.isRunning === true || mp.isActive === true) return true;
+          if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
+          if (mp.segment && mp.segment.isLatest === true) return true;
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    if (Array.isArray(workedBtns) && workedBtns.length > 0) {
+      const lastWorked = workedBtns[workedBtns.length - 1];
+      const lastContainer =
+        lastWorked && typeof lastWorked.closest === 'function' ? lastWorked.closest('.relative') : null;
+      if (lastContainer && typeof lastContainer.contains === 'function' && lastContainer.contains(btn)) {
+        return true;
+      }
+      const anyHistoricalWorkedContains = workedBtns.slice(0, -1).some((wb) => {
+        const c = wb && typeof wb.closest === 'function' ? wb.closest('.relative') : null;
+        return Boolean(c && typeof c.contains === 'function' && c.contains(btn));
+      });
+      if (anyHistoricalWorkedContains) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   function scanTriggerButtonsSync(forceCollapseAll = false) {
     ensureStyle();
     if (typeof syncShowThinkingDomAttribute === 'function') {
@@ -720,13 +780,9 @@
         }
         continue;
       }
-      if (autoExpand) {
-        if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
-          expandTriggerButtonIfNeeded(btn);
-        }
-      } else if (isLastWorked) {
-        // Always keep the latest turn's worked-for-collapsible expanded (unless manually collapsed by the user)
-        // regardless of whether it contains a thinking step, so the latest message's tool/work items never disappear.
+      if (isLastWorked) {
+        // D-0005 & D-0013: Keep ONLY the latest/active turn's worked-for-collapsible expanded (unless manually collapsed by the user).
+        // Never force-expand historical completed turns' worked-for-collapsible on session switch (prevents multi-frame height jump & ResizeObserver scroll flicker).
         if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
           expandTriggerButtonIfNeeded(btn);
         }
@@ -742,7 +798,12 @@
     const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
     for (const btn of toolGroupBtns) {
       processTriggerButton(btn);
-      if (nativeVerboseSteps && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+      if (
+        nativeVerboseSteps &&
+        btn.getAttribute('aria-expanded') === 'false' &&
+        !btn.__agyUserCollapsed &&
+        isToolGroupInActiveOrLatestTurn(btn, workedBtns)
+      ) {
         expandTriggerButtonIfNeeded(btn);
       }
     }
@@ -1838,12 +1899,43 @@
   window.__agyForceRescanAll = scanAll;
 
   // Fast pre-paint pass for Thinking/Worked triggers and .cursor-edit blocks (prevents session-switch FOUC)
-  // paired with a 16ms coalesced timer for full-document static UI localization (prevents main-thread starvation/freeze).
+  // paired with microtask deduplication and a 16ms coalesced timer for full-document static UI localization.
   let inFastScan = false;
+  let fastScanMicrotaskScheduled = false;
   let scanTimerScheduled = false;
+  let lastObservedCascadeId = null;
+  let sessionSwitchFreezeTimer = null;
+
+  function guardSessionSwitchTransitions() {
+    try {
+      if (!document || typeof document.querySelector !== 'function') return;
+      const convView = document.querySelector('[data-testid="conversation-view"]');
+      if (!convView || typeof convView.getAttribute !== 'function') return;
+      const currentCascadeId = convView.getAttribute('data-cascade-id') || null;
+      if (currentCascadeId && currentCascadeId !== lastObservedCascadeId) {
+        const hadPrev = lastObservedCascadeId !== null;
+        lastObservedCascadeId = currentCascadeId;
+        if (hadPrev && typeof convView.setAttribute === 'function') {
+          if (convView.getAttribute('data-agy-session-switching') !== '1') {
+            convView.setAttribute('data-agy-session-switching', '1');
+          }
+          if (sessionSwitchFreezeTimer) clearTimeout(sessionSwitchFreezeTimer);
+          sessionSwitchFreezeTimer = setTimeout(() => {
+            sessionSwitchFreezeTimer = null;
+            try {
+              if (convView && typeof convView.removeAttribute === 'function') {
+                convView.removeAttribute('data-agy-session-switching');
+              }
+            } catch (e) {}
+          }, 180);
+        }
+      }
+    } catch (e) {}
+  }
 
   function runFastThoughtAndTriggerScan() {
     ensureVerboseConversationStepsEnabled();
+    guardSessionSwitchTransitions();
     if (disposed || inFastScan) return;
     inFastScan = true;
     try {
@@ -1878,7 +1970,15 @@
 
   function scheduleCoalescedScan() {
     if (disposed) return;
-    runFastThoughtAndTriggerScan();
+    if (!fastScanMicrotaskScheduled) {
+      fastScanMicrotaskScheduled = true;
+      Promise.resolve().then(() => {
+        fastScanMicrotaskScheduled = false;
+        if (!disposed) {
+          runFastThoughtAndTriggerScan();
+        }
+      });
+    }
     if (!scanTimerScheduled) {
       scanTimerScheduled = true;
       setTimeout(() => {
@@ -1897,6 +1997,9 @@
           }
         }
         runFastThoughtAndTriggerScan();
+        if (typeof observer !== 'undefined' && observer && typeof observer.takeRecords === 'function') {
+          observer.takeRecords();
+        }
       }, 16);
     }
     if (isPretranslateEnabled() && !thoughtDebounceTimer) {
@@ -1999,6 +2102,7 @@
     if (saveCacheTimer) clearTimeout(saveCacheTimer);
     if (thoughtDebounceTimer) clearTimeout(thoughtDebounceTimer);
     if (settingsFeedbackTimer) clearTimeout(settingsFeedbackTimer);
+    if (sessionSwitchFreezeTimer) clearTimeout(sessionSwitchFreezeTimer);
     observer.disconnect();
     if (document.removeEventListener) {
       document.removeEventListener('click', onTriggerButtonClickCapture, true);

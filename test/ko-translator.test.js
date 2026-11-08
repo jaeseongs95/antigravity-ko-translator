@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.21';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.22';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -548,12 +548,20 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   const toolGrpFnMatch = mod08.match(/function doesToolGroupButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const workedFnMatch = mod08.match(/function doesWorkedForButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const hiddenActiveFnMatch = mod08.match(/function isHiddenActiveWorkedForButton\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
+  const toolGrpActiveFnMatch = mod08.match(/function isToolGroupInActiveOrLatestTurn\(btn, workedBtns\)\s*\{[\s\S]*?\r?\n  \}/);
   const expandBtnFnMatch = mod08.match(/function expandTriggerButtonIfNeeded\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const clickCapFnMatch = mod08.match(/function onTriggerButtonClickCapture\(e\)\s*\{[\s\S]*?\r?\n  \}/);
   const collapseBtnFnMatch = mod08.match(/function collapseTriggerButtonIfNeeded\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const scanBtnsMatch = mod08.match(/function scanTriggerButtonsSync\(forceCollapseAll = false\)\s*\{[\s\S]*?\r?\n  \}/);
   assert.ok(
-    toolGrpFnMatch && workedFnMatch && hiddenActiveFnMatch && expandBtnFnMatch && collapseBtnFnMatch && clickCapFnMatch && scanBtnsMatch,
+    toolGrpFnMatch &&
+      workedFnMatch &&
+      hiddenActiveFnMatch &&
+      toolGrpActiveFnMatch &&
+      expandBtnFnMatch &&
+      collapseBtnFnMatch &&
+      clickCapFnMatch &&
+      scanBtnsMatch,
     '3-tier collapsible expand/collapse and active-turn hidden worked-for protection functions must exist in 08-dom-observer.js'
   );
   assert.ok(mod06.includes('html[data-agy-hide-thinking="1"]'), 'STYLE_CSS must hide thinking trigger and .cursor-edit when data-agy-hide-thinking="1"');
@@ -585,6 +593,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     },
   });
 
+  // Historical completed worked-for button: D-0013 ensures it is NOT force-expanded on session switch!
   const workedWithThinking = makeCollapsibleBtn('__reactFiber$worked1', {
     memoizedProps: { segment: { steps: [{ step: { value: { thinking: 'Step 1 thought' } } }] } },
   });
@@ -597,10 +606,10 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     true
   );
   const toolGroupWithThinking = makeCollapsibleBtn('__reactFiber$toolGrp1', {
-    memoizedProps: { steps: [{ step: { value: { thinking: 'Intermediate tool thought' } } }] },
+    memoizedProps: { isLastTurn: true, steps: [{ step: { value: { thinking: 'Intermediate tool thought' } } }] },
   });
   const toolGroupWithoutThinking = makeCollapsibleBtn('__reactFiber$toolGrp2', {
-    memoizedProps: { steps: [{ step: { value: { thinking: '' } } }] },
+    memoizedProps: { isLastTurn: true, steps: [{ step: { value: { thinking: '' } } }] },
   });
   const thinkingTriggerBtn = makeCollapsibleBtn('__reactFiber$thinking1', {});
 
@@ -622,18 +631,17 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     },
   };
   vm.runInNewContext(
-    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${hiddenActiveFnMatch[0]}\n${expandBtnFnMatch[0]}\n${collapseBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
+    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${hiddenActiveFnMatch[0]}\n${toolGrpActiveFnMatch[0]}\n${expandBtnFnMatch[0]}\n${collapseBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
     expandSandbox
   );
   assert.equal(expandSandbox.__doesToolGroupContainThinking(toolGroupWithThinking), true);
   assert.equal(expandSandbox.__doesToolGroupContainThinking(toolGroupWithoutThinking), false);
   expandSandbox.__scanTriggerButtonsSync();
-  assert.deepEqual(clickedOrder, [
-    '__reactFiber$worked1',
-    '__reactFiber$toolGrp1',
-    '__reactFiber$toolGrp2',
-    '__reactFiber$thinking1',
-  ]);
+  assert.deepEqual(
+    clickedOrder,
+    ['__reactFiber$toolGrp1', '__reactFiber$toolGrp2', '__reactFiber$thinking1'],
+    'D-0013: must NOT force-expand historical completed workedWithThinking on session switch, only active/latest turn tool-groups and thinking triggers'
+  );
 
   // Simulate React G_ collapsing toolGroupWithThinking, toolGroupWithoutThinking & thinkingTriggerBtn when step finishes (isActive: true -> false)
   clickedOrder = [];
@@ -644,7 +652,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.deepEqual(
     clickedOrder,
     ['__reactFiber$toolGrp1', '__reactFiber$toolGrp2', '__reactFiber$thinking1'],
-    'must automatically re-expand all tool-group-collapsibles and thinkingTriggerBtn when React G_ collapses active step on completion'
+    'must automatically re-expand active/latest turn tool-group-collapsibles and thinkingTriggerBtn when React G_ collapses active step on completion'
   );
 
   // Simulate user manually clicking thinkingTriggerBtn while expanded ('true') -> records __agyUserCollapsed = true
@@ -659,15 +667,17 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
 
   // Simulate turning Show Thinking OFF (showThinkingFlag = false) ->
   // MUST NEVER collapse activeHiddenWorked (.hidden) or toolGroup buttons (which hold work items like Analyzed/Ran/Edited),
-  // and must only collapse thinkingTriggerBtn (plus older non-active worked-for if forceCollapseAll=true).
+  // and must only collapse thinkingTriggerBtn (plus older auto-expanded worked-for if forceCollapseAll=true).
   showThinkingFlag = false;
+  workedWithThinking.expandedState = 'true';
+  workedWithThinking.__agyAutoExpanded = true;
   thinkingTriggerBtn.expandedState = 'true';
   clickedOrder = [];
   expandSandbox.__scanTriggerButtonsSync(true);
   assert.deepEqual(
     clickedOrder,
     ['__reactFiber$worked1', '__reactFiber$thinking1'],
-    'when Show Thinking is OFF, must collapse thinkingTriggerBtn and older worked-for, but NEVER collapse activeHiddenWorked or tool-group-collapsible'
+    'when Show Thinking is OFF, must collapse thinkingTriggerBtn and older auto-expanded worked-for, but NEVER collapse activeHiddenWorked or tool-group-collapsible'
   );
   assert.equal(activeHiddenWorked.expandedState, 'true', 'active hidden worked-for button must remain expanded so latest message work steps never disappear');
   assert.equal(toolGroupWithThinking.expandedState, 'true', 'tool-group-collapsible must remain expanded so Analyzed/Ran/Edited work steps remain visible');
@@ -760,7 +770,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.21',
+      __agyKoLocalizerActive: 'v13.22',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1146,5 +1156,97 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     probeRes.resolved,
     false,
     'D-0011: probeHostCompanionPluginsForRemote must safely catch cross-origin iframe.contentWindow SecurityError and return unresolved info'
+  );
+
+  // 14. D-0013 regression checks: session switch flicker prevention (historical collapsible stability, transition suppression, microtask coalescing, TreeWalker subtree pruning, conditional root attribute sync)
+  assert.ok(
+    mod06.includes('[data-testid="conversation-view"][data-agy-session-switching="1"]'),
+    'D-0013: STYLE_CSS must suppress transitions on conversation-view during session switching'
+  );
+  assert.ok(
+    mod08.includes('STATIC_UI_SUBTREE_PRUNE_SELECTOR') && mod08.includes('NodeFilter.FILTER_REJECT'),
+    'D-0013: localizeStaticUiInRoot must prune excluded subtrees via NodeFilter.FILTER_REJECT'
+  );
+  assert.ok(
+    mod08.includes('fastScanMicrotaskScheduled') && mod08.includes('guardSessionSwitchTransitions'),
+    'D-0013: scheduleCoalescedScan must deduplicate rapid synchronous mutations into a single microtask and freeze session switch transitions'
+  );
+
+  // Verify syncShowThinkingDomAttribute does NOT repeatedly mutate <html> attributes when state is unchanged
+  const syncAttrFnMatch = mod01.match(/function syncShowThinkingDomAttribute\(\)\s*\{[\s\S]*?\r?\n  \}/);
+  assert.ok(syncAttrFnMatch, 'syncShowThinkingDomAttribute must exist in 01-bootstrap-and-cache.js');
+  let rootSetAttrCalls = 0;
+  let rootRemoveAttrCalls = 0;
+  const mockRootAttrs = {};
+  const attrSandbox = {
+    showThinkingEnabled: true,
+    document: {
+      documentElement: {
+        hasAttribute: (k) => Object.prototype.hasOwnProperty.call(mockRootAttrs, k),
+        getAttribute: (k) => mockRootAttrs[k] ?? null,
+        setAttribute: (k, v) => {
+          rootSetAttrCalls++;
+          mockRootAttrs[k] = String(v);
+        },
+        removeAttribute: (k) => {
+          rootRemoveAttrCalls++;
+          delete mockRootAttrs[k];
+        },
+      },
+      querySelectorAll: () => [],
+    },
+  };
+  vm.runInNewContext(`${syncAttrFnMatch[0]}\n;globalThis.__syncAttr = syncShowThinkingDomAttribute;`, attrSandbox);
+  attrSandbox.__syncAttr();
+  attrSandbox.__syncAttr();
+  assert.equal(
+    rootRemoveAttrCalls,
+    0,
+    'D-0013: syncShowThinkingDomAttribute must NOT call removeAttribute when data-agy-hide-thinking is already absent'
+  );
+  attrSandbox.showThinkingEnabled = false;
+  attrSandbox.__syncAttr();
+  assert.equal(rootSetAttrCalls, 1, 'D-0013: syncShowThinkingDomAttribute must set data-agy-hide-thinking="1" once when turned off');
+  attrSandbox.__syncAttr();
+  attrSandbox.__syncAttr();
+  assert.equal(
+    rootSetAttrCalls,
+    1,
+    'D-0013: syncShowThinkingDomAttribute must NOT call setAttribute repeatedly when data-agy-hide-thinking="1" is already set'
+  );
+
+  // Verify guardSessionSwitchTransitions sets data-agy-session-switching="1" only on cascadeId change
+  const guardSwitchMatch = mod08.match(
+    /let lastObservedCascadeId = null;\r?\n  let sessionSwitchFreezeTimer = null;\r?\n\r?\n  function guardSessionSwitchTransitions\(\)\s*\{[\s\S]*?\r?\n  \}/
+  );
+  assert.ok(guardSwitchMatch, 'guardSessionSwitchTransitions must exist in 08-dom-observer.js');
+  const convAttrs = { 'data-cascade-id': 'session-alpha' };
+  const switchSandbox = {
+    document: {
+      querySelector: (sel) =>
+        sel === '[data-testid="conversation-view"]'
+          ? {
+              getAttribute: (k) => convAttrs[k] ?? null,
+              setAttribute: (k, v) => {
+                convAttrs[k] = String(v);
+              },
+              removeAttribute: (k) => {
+                delete convAttrs[k];
+              },
+            }
+          : null,
+    },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+  };
+  vm.runInNewContext(`${guardSwitchMatch[0]}\n;globalThis.__guardSwitch = guardSessionSwitchTransitions;`, switchSandbox);
+  switchSandbox.__guardSwitch();
+  assert.equal(convAttrs['data-agy-session-switching'], undefined, 'initial session observation must not mark session switching');
+  convAttrs['data-cascade-id'] = 'session-beta';
+  switchSandbox.__guardSwitch();
+  assert.equal(
+    convAttrs['data-agy-session-switching'],
+    '1',
+    'D-0013: switching data-cascade-id must set data-agy-session-switching="1" to suppress layout/fade transitions'
   );
 });

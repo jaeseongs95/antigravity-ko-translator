@@ -15,12 +15,29 @@
       font-size: 0 !important;
       visibility: hidden !important;
     }
+    button[data-testid="thinking-collapsible-trigger"][data-agy-auto-expanded="1"],
+    button[data-testid="worked-for-collapsible"][data-agy-auto-expanded="1"],
+    button[data-testid="tool-group-collapsible"][data-agy-auto-expanded="1"],
+    button[data-testid="thinking-collapsible-trigger"][data-agy-auto-expanded="1"] *,
+    button[data-testid="worked-for-collapsible"][data-agy-auto-expanded="1"] *,
+    button[data-testid="tool-group-collapsible"][data-agy-auto-expanded="1"] *,
     button[data-testid="thinking-collapsible-trigger"][data-agy-auto-expanded="1"][aria-expanded="true"] + div,
     button[data-testid="worked-for-collapsible"][data-agy-auto-expanded="1"][aria-expanded="true"] + div,
-    button[data-testid="tool-group-collapsible"][data-agy-auto-expanded="1"][aria-expanded="true"] + div {
+    button[data-testid="tool-group-collapsible"][data-agy-auto-expanded="1"][aria-expanded="true"] + div,
+    button[data-testid="thinking-collapsible-trigger"][data-agy-auto-expanded="1"][aria-expanded="true"] + div *,
+    button[data-testid="worked-for-collapsible"][data-agy-auto-expanded="1"][aria-expanded="true"] + div *,
+    button[data-testid="tool-group-collapsible"][data-agy-auto-expanded="1"][aria-expanded="true"] + div * {
       opacity: 1 !important;
       transform: none !important;
       transition: none !important;
+      animation: none !important;
+    }
+    [data-testid="conversation-view"][data-agy-session-switching="1"],
+    [data-testid="conversation-view"][data-agy-session-switching="1"] *,
+    [data-testid="subagent-tab-conversation"][data-agy-session-switching="1"],
+    [data-testid="subagent-tab-conversation"][data-agy-session-switching="1"] * {
+      transition: none !important;
+      animation: none !important;
     }
     html[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"],
     html[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"] + div,

@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.21';
+  const KO_LOCALIZER_VERSION = 'v13.22';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -288,8 +288,10 @@
       const rootEl = document && document.documentElement;
       if (rootEl && typeof rootEl.setAttribute === 'function') {
         if (showThinkingEnabled) {
-          rootEl.removeAttribute('data-agy-hide-thinking');
-        } else {
+          if (typeof rootEl.hasAttribute !== 'function' || rootEl.hasAttribute('data-agy-hide-thinking')) {
+            rootEl.removeAttribute('data-agy-hide-thinking');
+          }
+        } else if (typeof rootEl.getAttribute !== 'function' || rootEl.getAttribute('data-agy-hide-thinking') !== '1') {
           rootEl.setAttribute('data-agy-hide-thinking', '1');
         }
       }
@@ -299,8 +301,10 @@
           const subRoot = ifr.contentDocument && ifr.contentDocument.documentElement;
           if (subRoot && typeof subRoot.setAttribute === 'function') {
             if (showThinkingEnabled) {
-              subRoot.removeAttribute('data-agy-hide-thinking');
-            } else {
+              if (typeof subRoot.hasAttribute !== 'function' || subRoot.hasAttribute('data-agy-hide-thinking')) {
+                subRoot.removeAttribute('data-agy-hide-thinking');
+              }
+            } else if (typeof subRoot.getAttribute !== 'function' || subRoot.getAttribute('data-agy-hide-thinking') !== '1') {
               subRoot.setAttribute('data-agy-hide-thinking', '1');
             }
           }
