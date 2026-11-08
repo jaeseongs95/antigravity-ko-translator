@@ -27,10 +27,10 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.27';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.28';"));
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugin.json'), 'utf8'));
-  assert.equal(pkgJson.version, '1.2.32');
+  assert.equal(pkgJson.version, '1.2.33');
   assert.equal(pluginJson.version, pkgJson.version, 'D-0019: plugin.json version must stay synchronized with package.json');
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
@@ -993,7 +993,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.27',
+      __agyKoLocalizerActive: 'v13.28',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1588,8 +1588,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 14. D-0013~D-0019 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, .no-animations Web Animations suppression, 16ms FOUC elimination, worked-for latest turn guard, retranslateVisibleThoughts parent propagation, queued messages card & new strings, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.27') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.27 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v13.28') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.28 and must NOT claim verboseConversationSteps: true is force-enabled'
   );
   const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
   assert.ok(
@@ -2041,6 +2041,82 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
   const readmeKo = fs.readFileSync(readmeKoPath, 'utf8');
   assert.ok(readmeEn.includes('[한국어 문서 (README.ko.md)](./README.ko.md)'), 'D-0022: English README.md must link to README.ko.md at the top');
   assert.ok(readmeKo.includes('[English Documentation (README.md)](./README.md)'), 'D-0022: Korean README.ko.md must link to README.md at the top');
-  assert.ok(readmeEn.includes('v1.2.32') && readmeEn.includes('v13.27'), 'D-0022: README.md must reflect v1.2.32 / v13.27');
-  assert.ok(readmeKo.includes('v1.2.32') && readmeKo.includes('v13.27'), 'D-0022: README.ko.md must reflect v1.2.32 / v13.27');
+  assert.ok(readmeEn.includes('v1.2.33') && readmeEn.includes('v13.28'), 'D-0022: README.md must reflect v1.2.33 / v13.28');
+  assert.ok(readmeKo.includes('v1.2.33') && readmeKo.includes('v13.28'), 'D-0022: README.ko.md must reflect v1.2.33 / v13.28');
+
+  // D-0023: Verify segment.isLatest:false overrides isLastContainer:true on Lhc fiber so historical execution segments inside the latest turn container are NEVER force-expanded on session switch
+  const activeHelperMatch = mod08.match(
+    /function isToolGroupInActiveOrLatestTurn\(btn, workedBtns\)\s*\{[\s\S]*?function scanTriggerButtonsSync/
+  );
+  assert.ok(activeHelperMatch, 'active/latest turn helpers must exist in 08-dom-observer.js');
+  const activeHelperCode = activeHelperMatch[0].replace(/\r?\n\r?\n  function scanTriggerButtonsSync$/, '');
+  const d0023Sandbox = {
+    getReactFiberFromElement: (el) => el?.__fiber || null,
+    document: {
+      querySelector: (sel) =>
+        sel === '[data-turn-content="latest"]' ? { contains: () => true } : null,
+      querySelectorAll: () => [],
+    },
+  };
+  vm.runInNewContext(
+    `${activeHelperCode}\n;globalThis.__isWorked = isWorkedForInActiveOrLatestTurn; globalThis.__isTool = isToolGroupInActiveOrLatestTurn; globalThis.__isThinking = isThinkingTriggerInActiveOrLatestTurn;`,
+    d0023Sandbox
+  );
+
+  // Build exact fiber hierarchy observed in Live CDP for historical segment inside latest turn:
+  // depth 2: <G_ isActive:false>, depth 4: <Lhc isLastContainer:true, segment:{isLatest:false}>, depth 10: <pCb container:{isLatest:true}>
+  const makeMultiSegmentTurnBtn = (segIsLatest) => ({
+    __fiber: {
+      memoizedProps: {},
+      return: {
+        memoizedProps: {},
+        return: {
+          memoizedProps: { isActive: false },
+          return: {
+            memoizedProps: { isActive: false },
+            return: {
+              memoizedProps: {
+                isRunning: true,
+                isLastContainer: true,
+                segment: { isLatest: segIsLatest, steps: [] },
+              },
+              return: {
+                memoizedProps: { container: { isLatest: true } },
+                return: null,
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  const histSegmentInLatestTurnBtn = makeMultiSegmentTurnBtn(false);
+  const latestSegmentInLatestTurnBtn = makeMultiSegmentTurnBtn(true);
+
+  assert.equal(
+    d0023Sandbox.__isWorked(histSegmentInLatestTurnBtn, true),
+    false,
+    'D-0023: isWorkedForInActiveOrLatestTurn must return false when segment.isLatest is false even if isLastContainer is true and inside [data-turn-content="latest"]'
+  );
+  assert.equal(
+    d0023Sandbox.__isTool(histSegmentInLatestTurnBtn, [histSegmentInLatestTurnBtn]),
+    false,
+    'D-0023: isToolGroupInActiveOrLatestTurn must return false when segment.isLatest is false even if isLastContainer is true'
+  );
+  assert.equal(
+    d0023Sandbox.__isThinking(histSegmentInLatestTurnBtn, [histSegmentInLatestTurnBtn], [histSegmentInLatestTurnBtn]),
+    false,
+    'D-0023: isThinkingTriggerInActiveOrLatestTurn must return false when segment.isLatest is false even if isLastContainer is true'
+  );
+  assert.equal(
+    d0023Sandbox.__isWorked(latestSegmentInLatestTurnBtn, true),
+    true,
+    'D-0023: isWorkedForInActiveOrLatestTurn must return true when segment.isLatest is true and isLastContainer is true'
+  );
+  assert.equal(
+    d0023Sandbox.__isThinking(latestSegmentInLatestTurnBtn, [latestSegmentInLatestTurnBtn], [latestSegmentInLatestTurnBtn]),
+    true,
+    'D-0023: isThinkingTriggerInActiveOrLatestTurn must return true when segment.isLatest is true and isLastContainer is true'
+  );
 });

@@ -816,12 +816,13 @@
       for (let i = 0; i < 36 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+          }
           if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
           if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-          if (mp.segment && typeof mp.segment === 'object') {
-            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
-            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
-          }
           if (mp.container && typeof mp.container === 'object') {
             if (mp.container.isLatest === true || mp.container.isActive === true) return true;
             if (mp.container.isLatest === false || mp.container.isActive === false) return false;
@@ -903,12 +904,13 @@
       for (let i = 0; i < 36 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+          }
           if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
           if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-          if (mp.segment && typeof mp.segment === 'object') {
-            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
-            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
-          }
           if (mp.container && typeof mp.container === 'object') {
             if (mp.container.isLatest === true || mp.container.isActive === true) return true;
             if (mp.container.isLatest === false || mp.container.isActive === false) return false;
@@ -996,12 +998,13 @@
       for (let i = 0; i < 36 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+          }
           if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
           if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-          if (mp.segment && typeof mp.segment === 'object') {
-            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
-            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
-          }
           if (mp.container && typeof mp.container === 'object') {
             if (mp.container.isLatest === true || mp.container.isActive === true) return true;
             if (mp.container.isLatest === false || mp.container.isActive === false) return false;

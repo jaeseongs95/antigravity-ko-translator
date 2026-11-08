@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.32
+// @version      1.2.33
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.27';
+  const KO_LOCALIZER_VERSION = 'v13.28';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -5593,12 +5593,13 @@
       for (let i = 0; i < 36 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+          }
           if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
           if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-          if (mp.segment && typeof mp.segment === 'object') {
-            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
-            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
-          }
           if (mp.container && typeof mp.container === 'object') {
             if (mp.container.isLatest === true || mp.container.isActive === true) return true;
             if (mp.container.isLatest === false || mp.container.isActive === false) return false;
@@ -5680,12 +5681,13 @@
       for (let i = 0; i < 36 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+          }
           if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
           if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-          if (mp.segment && typeof mp.segment === 'object') {
-            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
-            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
-          }
           if (mp.container && typeof mp.container === 'object') {
             if (mp.container.isLatest === true || mp.container.isActive === true) return true;
             if (mp.container.isLatest === false || mp.container.isActive === false) return false;
@@ -5773,12 +5775,13 @@
       for (let i = 0; i < 36 && cur; i++) {
         const mp = cur.memoizedProps;
         if (mp && typeof mp === 'object') {
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+          }
           if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
           if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-          if (mp.segment && typeof mp.segment === 'object') {
-            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
-            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
-          }
           if (mp.container && typeof mp.container === 'object') {
             if (mp.container.isLatest === true || mp.container.isActive === true) return true;
             if (mp.container.isLatest === false || mp.container.isActive === false) return false;
