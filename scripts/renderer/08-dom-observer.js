@@ -415,18 +415,35 @@
     if (el.closest(selector)) {
       return true;
     }
-    if (!forAttributes && el.closest('[data-testid="agent-input-box"]')) {
-      const txt = (el.textContent || '').trim();
-      if (
-        el.tagName === 'P' &&
-        (txt.startsWith('Ask anything') ||
-          txt.startsWith('Message subagent') ||
-          txt.startsWith('무엇이든 물어보세요') ||
-          txt.startsWith('서브에이전트에게 메시지 보내기'))
-      ) {
+    if (el.closest('[data-testid="agent-input-box"]')) {
+      const inQueuedCard = el.closest('[data-testid="queued-messages-card"]');
+      if (inQueuedCard) {
+        if (!forAttributes && el.classList && el.classList.contains('line-clamp-2')) {
+          const txt = (el.textContent || '').trim();
+          if (
+            txt !== 'Empty message' &&
+            txt !== '빈 메시지' &&
+            !/^\d+\s+comments?$/i.test(txt) &&
+            !/^댓글\s+\d+개$/.test(txt)
+          ) {
+            return true;
+          }
+        }
         return false;
       }
-      return true;
+      if (!forAttributes) {
+        const txt = (el.textContent || '').trim();
+        if (
+          el.tagName === 'P' &&
+          (txt.startsWith('Ask anything') ||
+            txt.startsWith('Message subagent') ||
+            txt.startsWith('무엇이든 물어보세요') ||
+            txt.startsWith('서브에이전트에게 메시지 보내기'))
+        ) {
+          return false;
+        }
+        return true;
+      }
     }
     if (
       !forAttributes &&
@@ -944,6 +961,66 @@
     return false;
   }
 
+  function isWorkedForInActiveOrLatestTurn(btn, isLastInDomList) {
+    if (!btn) return false;
+    let sawLocalActiveFalse = false;
+    try {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 36 && cur; i++) {
+        const mp = cur.memoizedProps;
+        if (mp && typeof mp === 'object') {
+          if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
+          if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+          }
+          if (mp.container && typeof mp.container === 'object') {
+            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
+            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
+          }
+          if (i <= 6) {
+            if (mp.isActive === true) return true;
+            if (mp.isActive === false || mp.isRunning === false) {
+              sawLocalActiveFalse = true;
+            }
+          }
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
+      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
+      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
+        return Boolean(latestTurnEl.contains(btn));
+      }
+    }
+    if (
+      typeof document !== 'undefined' &&
+      document &&
+      typeof document.querySelectorAll === 'function' &&
+      typeof btn.compareDocumentPosition === 'function' &&
+      typeof Node !== 'undefined'
+    ) {
+      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
+      for (const ub of userBubbles) {
+        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+          return false;
+        }
+      }
+    }
+    if (sawLocalActiveFalse) {
+      return false;
+    }
+    return Boolean(isLastInDomList);
+  }
+
   function scanTriggerButtonsSync(forceCollapseAll = false) {
     ensureStyle();
     if (typeof syncShowThinkingDomAttribute === 'function') {
@@ -957,7 +1034,7 @@
     const workedBtns = Array.from(document.querySelectorAll('button[data-testid="worked-for-collapsible"]'));
     for (let i = 0; i < workedBtns.length; i++) {
       const btn = workedBtns[i];
-      const isLastWorked = i === workedBtns.length - 1;
+      const isLastWorked = isWorkedForInActiveOrLatestTurn(btn, i === workedBtns.length - 1);
       processTriggerButton(btn);
       if (!nativeVerboseSteps) {
         continue;
@@ -1050,12 +1127,19 @@
           const cw = ifr.contentWindow;
           if (cw && cw !== window && typeof cw.__agyRetranslateVisibleThoughts === 'function') {
             if (!_fromCrossFrame) cw.__agyRetranslateVisibleThoughts(clearCache, true);
-            if (!_fromCrossFrame && window.parent && window.parent !== window && typeof window.parent.__agyRetranslateVisibleThoughts === 'function') {
-              window.parent.__agyRetranslateVisibleThoughts(clearCache, true);
-            }
           }
         } catch (e) {}
       });
+      if (
+        !_fromCrossFrame &&
+        window.parent &&
+        window.parent !== window &&
+        typeof window.parent.__agyRetranslateVisibleThoughts === 'function'
+      ) {
+        try {
+          window.parent.__agyRetranslateVisibleThoughts(clearCache, true);
+        } catch (e) {}
+      }
     } catch (e) {}
     return {
       clearedCache: Boolean(clearCache),
@@ -2317,8 +2401,27 @@
 
       const armFreezeTimer = (targetViews, durationMs) => {
         for (const v of targetViews) {
-          if (v && typeof v.setAttribute === 'function' && v.getAttribute('data-agy-session-switching') !== '1') {
+          if (!v) continue;
+          if (typeof v.setAttribute === 'function' && v.getAttribute('data-agy-session-switching') !== '1') {
             v.setAttribute('data-agy-session-switching', '1');
+          }
+          if (v.classList && typeof v.classList.contains === 'function' && typeof v.classList.add === 'function') {
+            if (!v.classList.contains('no-animations')) {
+              v.classList.add('no-animations');
+              if (typeof v.setAttribute === 'function') {
+                v.setAttribute('data-agy-added-no-animations', '1');
+              }
+            }
+          }
+          if (typeof v.getAnimations === 'function') {
+            try {
+              const anims = v.getAnimations({ subtree: true });
+              if (Array.isArray(anims)) {
+                for (const anim of anims) {
+                  if (anim && typeof anim.cancel === 'function') anim.cancel();
+                }
+              }
+            } catch (e) {}
           }
         }
         const now = typeof Date !== 'undefined' && typeof Date.now === 'function' ? Date.now() : 0;
@@ -2342,8 +2445,20 @@
                   )
                 : targetViews;
             for (const v of liveViews) {
-              if (v && typeof v.removeAttribute === 'function') {
+              if (!v) continue;
+              if (typeof v.removeAttribute === 'function') {
                 v.removeAttribute('data-agy-session-switching');
+              }
+              if (
+                typeof v.getAttribute === 'function' &&
+                v.getAttribute('data-agy-added-no-animations') === '1'
+              ) {
+                if (v.classList && typeof v.classList.remove === 'function') {
+                  v.classList.remove('no-animations');
+                }
+                if (typeof v.removeAttribute === 'function') {
+                  v.removeAttribute('data-agy-added-no-animations');
+                }
               }
             }
             if (typeof observer !== 'undefined' && observer && typeof observer.takeRecords === 'function') {
@@ -2397,6 +2512,16 @@
     try {
       scanTriggerButtonsSync();
       ensureThinkingDisplayMenuIntegration();
+      if (document.querySelectorAll) {
+        document
+          .querySelectorAll('[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"]')
+          .forEach((convEl) => localizeStaticUiInRoot(convEl));
+      } else if (document.querySelector) {
+        const convEl =
+          document.querySelector('[data-testid="conversation-view"]') ||
+          document.querySelector('[data-testid="subagent-tab-conversation"]');
+        if (convEl) localizeStaticUiInRoot(convEl);
+      }
       const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');
       if (mcpModal) localizeStaticUiInRoot(mcpModal);
       const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');

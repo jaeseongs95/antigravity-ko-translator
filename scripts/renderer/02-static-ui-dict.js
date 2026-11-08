@@ -85,6 +85,9 @@
     'yesterday': '어제',
     // Common buttons & actions
     'Open': '열기',
+    'Open IDE': 'IDE 열기',
+    'Open Antigravity IDE': 'Antigravity IDE 열기',
+    'Open in Antigravity IDE': 'Antigravity IDE에서 열기',
     'Open Folder': '폴더 열기',
     'Learn more': '자세히 알아보기',
     'Show Less': '접기',
@@ -184,6 +187,14 @@
     'Removed bookmark': '북마크 제거함',
     'Removing bookmark': '북마크 제거 중',
     'Canceled removal of bookmark': '북마크 제거 취소됨',
+    'Timed': '타이머 완료',
+    'Timing': '타이머 대기 중',
+    'Rejected': '거절됨',
+    'Canceled': '취소됨',
+    'Interrupted': '중단됨',
+    'Task not found': '작업을 찾을 수 없음',
+    'No browser pages open': '열려 있는 브라우저 페이지 없음',
+    'Full Error': '전체 오류 보기',
     // Navigation tooltips & context menus
     'Sidebar': '사이드바',
     'Display Options': '표시 옵션',
@@ -883,7 +894,14 @@
     'Edit task title': '작업 제목 편집',
     'Enter scheduled task name...': '예약 작업 이름 입력...',
     'Queued Messages': '대기 중인 메시지',
+    'Queued messages': '대기 중인 메시지',
     'Sends after agent finishes working': '에이전트 작업이 끝나면 전송됩니다',
+    'Collapse queued messages': '대기 중인 메시지 접기',
+    'Expand queued messages': '대기 중인 메시지 펼치기',
+    'Send Now': '지금 보내기',
+    'Cancel Sending Message': '메시지 전송 취소',
+    'Queued message deleted': '대기 중인 메시지가 삭제되었습니다',
+    'Empty message': '빈 메시지',
     'See all': '모두 보기',
     'Full View': '전체 보기',
     'Message from Parent Agent': '상위 에이전트의 메시지',
@@ -1749,6 +1767,28 @@
       return `모델 선택, 현재: ${inner}`;
     }
 
+    // Queued messages card & timer / command step status patterns (D-0018)
+    m = t.match(/^Queued messages\s*\((\d+)\)$/i);
+    if (m) return `대기 중인 메시지 (${m[1]}개)`;
+
+    m = t.match(/^(\d+)\s+comments?$/i);
+    if (m) return `댓글 ${m[1]}개`;
+
+    m = t.match(/^(.+?)\s+timer:\s*Timer has expired$/i);
+    if (m) return `${formatDurationKo(m[1])} 타이머: 타이머가 만료되었습니다`;
+
+    m = t.match(/^(.+?)\s+timer:\s*(.+)$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[2]) || m[2];
+      return `${formatDurationKo(m[1])} 타이머: ${inner}`;
+    }
+
+    m = t.match(/^(.+?)\s*(?:·|\u00b7|\u2022)\s*Exited with code\s+(-?\d+)$/i);
+    if (m) return `${m[1].trim()} \u00b7 종료 코드 ${m[2]}`;
+
+    m = t.match(/^Exited with code\s+(-?\d+)$/i);
+    if (m) return `종료 코드 ${m[1]}`;
+
     // Multi-clause tool group summary (e.g. "Explored files, ran commands, edited files")
     if (t.includes(',')) {
       const parts = t.split(',').map((p) => p.trim());
@@ -1784,4 +1824,7 @@
     }
     STATIC_UI_PATTERN_CACHE.set(t, matched);
     return matched;
+  }
+  if (typeof window !== 'undefined' && window) {
+    window.__agyTranslateStaticUiSync = translateStaticUiSync;
   }

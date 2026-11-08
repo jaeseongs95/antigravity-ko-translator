@@ -27,7 +27,11 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.25';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.26';"));
+  const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugin.json'), 'utf8'));
+  assert.equal(pkgJson.version, '1.2.31');
+  assert.equal(pluginJson.version, pkgJson.version, 'D-0019: plugin.json version must stay synchronized with package.json');
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -548,6 +552,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   const toolGrpFnMatch = mod08.match(/function doesToolGroupButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const workedFnMatch = mod08.match(/function doesWorkedForButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const hiddenActiveFnMatch = mod08.match(/function isHiddenActiveWorkedForButton\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
+  const workedActiveFnMatch = mod08.match(/function isWorkedForInActiveOrLatestTurn\(btn, isLastInDomList\)\s*\{[\s\S]*?\r?\n  \}/);
   const toolGrpActiveFnMatch = mod08.match(/function isToolGroupInActiveOrLatestTurn\(btn, workedBtns\)\s*\{[\s\S]*?\r?\n  \}/);
   const thinkingActiveFnMatch = mod08.match(/function isThinkingTriggerInActiveOrLatestTurn\(btn, workedBtns, thinkingBtns\)\s*\{[\s\S]*?\r?\n  \}/);
   const expandBtnFnMatch = mod08.match(/function expandTriggerButtonIfNeeded\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
@@ -558,6 +563,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     toolGrpFnMatch &&
       workedFnMatch &&
       hiddenActiveFnMatch &&
+      workedActiveFnMatch &&
       toolGrpActiveFnMatch &&
       thinkingActiveFnMatch &&
       expandBtnFnMatch &&
@@ -692,7 +698,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     },
   };
   vm.runInNewContext(
-    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${hiddenActiveFnMatch[0]}\n${toolGrpActiveFnMatch[0]}\n${thinkingActiveFnMatch[0]}\n${expandBtnFnMatch[0]}\n${collapseBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__isToolGrpActive = isToolGroupInActiveOrLatestTurn;globalThis.__isThinkingActive = isThinkingTriggerInActiveOrLatestTurn;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
+    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${hiddenActiveFnMatch[0]}\n${workedActiveFnMatch[0]}\n${toolGrpActiveFnMatch[0]}\n${thinkingActiveFnMatch[0]}\n${expandBtnFnMatch[0]}\n${collapseBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__isWorkedActive = isWorkedForInActiveOrLatestTurn;globalThis.__isToolGrpActive = isToolGroupInActiveOrLatestTurn;globalThis.__isThinkingActive = isThinkingTriggerInActiveOrLatestTurn;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
     expandSandbox
   );
   assert.equal(expandSandbox.__doesToolGroupContainThinking(toolGroupWithThinking), true);
@@ -987,10 +993,15 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.25',
+      __agyKoLocalizerActive: 'v13.26',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
+      __agyTranslateStaticUiSync: (s) => {
+        if (s === 'Open IDE') return 'IDE 열기';
+        if (s === 'Exited with code 0') return '종료 코드 0';
+        return null;
+      },
       __agyLastDefaultPretranslate: false,
       __agyLastDefaultProvider: 'local-llm',
       __agySetTranslationProvider(p) {
@@ -1572,16 +1583,18 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'KO-NEW-BUG-03: getRemoteControlComponentInstance must capture pre-constructed RC instance via bound boq-jetski handleIframeMessage (URL_CHANGED -> handleUrlChanged) without running real side effects'
   );
 
-  // 14. D-0013 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, timer non-shortening, >650ms async trajectorySlice mount protection, SKILL.md & README accuracy
+  // 14. D-0013~D-0019 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, .no-animations Web Animations suppression, 16ms FOUC elimination, worked-for latest turn guard, retranslateVisibleThoughts parent propagation, queued messages card & new strings, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.25') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.25 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v13.26') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.26 and must NOT claim verboseConversationSteps: true is force-enabled'
   );
   const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
   assert.ok(
-    skillMdText.includes('기본값: `google-translate`') && !skillMdText.includes('기본값: `local-llm`'),
-    'KO-NEW-BUG-05: skills/ko-thought-translator/SKILL.md must document google-translate as the default provider'
+    skillMdText.includes('기본값: `google-translate`') &&
+      !skillMdText.includes('기본값: `local-llm`') &&
+      !skillMdText.includes('일반 (General)` 탭 최상단'),
+    'D-0019 & KO-NEW-BUG-05: skills/ko-thought-translator/SKILL.md must document google-translate as default and must NOT claim removed General tab card exists'
   );
   assert.ok(
     mod06.includes('[data-testid="conversation-view"][data-agy-session-switching="1"]'),
@@ -1597,6 +1610,138 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.ok(
     mod08.includes('fastScanMicrotaskScheduled') && mod08.includes('guardSessionSwitchTransitions'),
     'D-0013: scheduleCoalescedScan must deduplicate rapid synchronous mutations into a single microtask and freeze session switch transitions'
+  );
+  // D-0014: runFastThoughtAndTriggerScan must localize conversation-view & subagent-tab-conversation immediately in pre-paint microtask
+  const fastScanFnMatch = mod08.match(/function runFastThoughtAndTriggerScan\(\)\s*\{[\s\S]*?\r?\n  \}/);
+  assert.ok(fastScanFnMatch, 'runFastThoughtAndTriggerScan must exist in 08-dom-observer.js');
+  assert.ok(
+    fastScanFnMatch[0].includes('[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"]') &&
+      fastScanFnMatch[0].includes('localizeStaticUiInRoot(convEl)'),
+    'D-0014: runFastThoughtAndTriggerScan must immediately localize conversation-view & subagent-tab-conversation before paint to eliminate 16ms timer FOUC'
+  );
+
+  // D-0016: Verify isWorkedForInActiveOrLatestTurn prevents historical completed worked-for-collapsible from auto-expanding when latest turn has no worked-for yet
+  const histCompletedWorkedAsLastInDom = makeCollapsibleBtn('__reactFiber$workedHistLast', {
+    memoizedProps: { isLastContainer: false, segment: { isLatest: false, steps: [] } },
+    return: null,
+  });
+  assert.equal(
+    expandSandbox.__isWorkedActive(histCompletedWorkedAsLastInDom, true),
+    false,
+    'D-0016: isWorkedForInActiveOrLatestTurn must return false when Lhc fiber has isLastContainer:false even if it is the last worked-for button in DOM'
+  );
+  const workedBeforeNewUserBubble = makeCollapsibleBtn('__reactFiber$workedBeforeBubble', {
+    memoizedProps: {},
+    return: null,
+  });
+  workedBeforeNewUserBubble.compareDocumentPosition = (other) => (other === mockUserBubble ? 4 : 0);
+  expandSandbox.document.querySelectorAll = (sel) =>
+    sel === '[data-testid="user-message-bubble"]' ? [mockUserBubble] : origQsa(sel);
+  assert.equal(
+    expandSandbox.__isWorkedActive(workedBeforeNewUserBubble, true),
+    false,
+    'D-0016: isWorkedForInActiveOrLatestTurn must return false when a subsequent [data-testid="user-message-bubble"] follows the button'
+  );
+  expandSandbox.document.querySelectorAll = origQsa;
+
+  // D-0017: Verify retranslateVisibleThoughts propagates to window.parent even when document.querySelectorAll('iframe') is empty
+  const retranslateFnMatch = mod08.match(
+    /function retranslateVisibleThoughts\(clearCache = false, _fromCrossFrame = false\)\s*\{[\s\S]*?\r?\n  \}/
+  );
+  assert.ok(retranslateFnMatch, 'retranslateVisibleThoughts must exist in 08-dom-observer.js');
+  let parentRetranslateCalls = [];
+  const retranslateSandbox = {
+    memCache: new Map(),
+    inflightMap: new Map(),
+    CACHE_STORAGE_KEY: 'agy-ko-cache',
+    activeTranslationProvider: 'google-translate',
+    localStorage: { removeItem() {} },
+    scanThoughtBlocks() {},
+    refreshTranslatorSettingsUi() {},
+    document: {
+      querySelectorAll: () => [], // zero child iframes inside remote workbench frame!
+    },
+    window: {
+      parent: {
+        __agyRetranslateVisibleThoughts(clearCache, fromCrossFrame) {
+          parentRetranslateCalls.push([clearCache, fromCrossFrame]);
+        },
+      },
+    },
+  };
+  vm.runInNewContext(
+    `${retranslateFnMatch[0]}\n;globalThis.__retranslate = retranslateVisibleThoughts;`,
+    retranslateSandbox
+  );
+  retranslateSandbox.__retranslate(true, false);
+  assert.deepEqual(
+    parentRetranslateCalls,
+    [[true, true]],
+    'D-0017: retranslateVisibleThoughts must propagate to window.parent even when document has 0 child iframes'
+  );
+
+  // D-0018: Verify Queued Messages card exclusion refinement & new static/dynamic UI dictionary entries
+  assert.equal(rcDictSandbox.__translateStatic('Open IDE'), 'IDE 열기');
+  assert.equal(rcDictSandbox.__translateStatic('Open Antigravity IDE'), 'Antigravity IDE 열기');
+  assert.equal(rcDictSandbox.__translateStatic('Open in Antigravity IDE'), 'Antigravity IDE에서 열기');
+  assert.equal(rcDictSandbox.__translateStatic('Queued messages (2)'), '대기 중인 메시지 (2개)');
+  assert.equal(rcDictSandbox.__translateStatic('Collapse queued messages'), '대기 중인 메시지 접기');
+  assert.equal(rcDictSandbox.__translateStatic('Expand queued messages'), '대기 중인 메시지 펼치기');
+  assert.equal(rcDictSandbox.__translateStatic('Send Now'), '지금 보내기');
+  assert.equal(rcDictSandbox.__translateStatic('Cancel Sending Message'), '메시지 전송 취소');
+  assert.equal(rcDictSandbox.__translateStatic('Queued message deleted'), '대기 중인 메시지가 삭제되었습니다');
+  assert.equal(rcDictSandbox.__translateStatic('Empty message'), '빈 메시지');
+  assert.equal(rcDictSandbox.__translateStatic('3 comments'), '댓글 3개');
+  assert.equal(rcDictSandbox.__translateStatic('Timed'), '타이머 완료');
+  assert.equal(rcDictSandbox.__translateStatic('Timing'), '타이머 대기 중');
+  assert.equal(rcDictSandbox.__translateStatic('Rejected'), '거절됨');
+  assert.equal(rcDictSandbox.__translateStatic('Canceled'), '취소됨');
+  assert.equal(rcDictSandbox.__translateStatic('Interrupted'), '중단됨');
+  assert.equal(rcDictSandbox.__translateStatic('Task not found'), '작업을 찾을 수 없음');
+  assert.equal(rcDictSandbox.__translateStatic('No browser pages open'), '열려 있는 브라우저 페이지 없음');
+  assert.equal(rcDictSandbox.__translateStatic('Full Error'), '전체 오류 보기');
+  assert.equal(
+    rcDictSandbox.__translateStatic('5m timer: Timer has expired'),
+    '5분 타이머: 타이머가 만료되었습니다'
+  );
+  assert.equal(
+    rcDictSandbox.__translateStatic('Unit test execution · Exited with code 0'),
+    'Unit test execution · 종료 코드 0'
+  );
+
+  const isExcludedFnMatch = mod08.match(
+    /function isExcludedFromStaticUiLocalization\(el, forAttributes = false\)\s*\{[\s\S]*?\r?\n  \}/
+  );
+  assert.ok(isExcludedFnMatch, 'isExcludedFromStaticUiLocalization must exist in 08-dom-observer.js');
+  const exclSandbox = {};
+  vm.runInNewContext(
+    `${isExcludedFnMatch[0]}\n;globalThis.__isExcluded = isExcludedFromStaticUiLocalization;`,
+    exclSandbox
+  );
+  const makeQueuedEl = (tag, text, isLineClamp2 = false) => ({
+    tagName: tag,
+    textContent: text,
+    classList: { contains: (c) => (c === 'line-clamp-2' ? isLineClamp2 : false) },
+    getAttribute: () => null,
+    closest(sel) {
+      if (sel.includes('agent-input-box') || sel.includes('queued-messages-card')) return {};
+      return null;
+    },
+  });
+  assert.equal(
+    exclSandbox.__isExcluded(makeQueuedEl('SPAN', 'Queued messages (1)', false), false),
+    false,
+    'D-0018: static header inside [data-testid="queued-messages-card"] must NOT be excluded'
+  );
+  assert.equal(
+    exclSandbox.__isExcluded(makeQueuedEl('DIV', 'Empty message', true), false),
+    false,
+    'D-0018: "Empty message" placeholder inside .line-clamp-2 must NOT be excluded'
+  );
+  assert.equal(
+    exclSandbox.__isExcluded(makeQueuedEl('DIV', 'User custom follow-up prompt text', true), false),
+    true,
+    'D-0018: user message text inside .line-clamp-2 of queued-messages-card MUST be excluded from static UI localization'
   );
 
   // Verify syncShowThinkingDomAttribute does NOT repeatedly mutate <html> attributes when state is unchanged
@@ -1656,7 +1801,22 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let fakeNow = 1000;
   let scheduledTimers = [];
   let activeTimerCallback = null;
+  const convClasses = new Set();
+  const subagentClasses = new Set();
+  let canceledAnimationsCount = 0;
   const mockConvEl = {
+    classList: {
+      contains: (c) => convClasses.has(c),
+      add: (c) => convClasses.add(c),
+      remove: (c) => convClasses.delete(c),
+    },
+    getAnimations: () => [
+      {
+        cancel() {
+          canceledAnimationsCount++;
+        },
+      },
+    ],
     getAttribute: (k) => convAttrs[k] ?? null,
     setAttribute: (k, v) => {
       convAttrs[k] = String(v);
@@ -1667,6 +1827,12 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     querySelector: () => (convHasTurns ? {} : null),
   };
   const mockSubagentEl = {
+    classList: {
+      contains: (c) => subagentClasses.has(c),
+      add: (c) => subagentClasses.add(c),
+      remove: (c) => subagentClasses.delete(c),
+    },
+    getAnimations: () => [],
     getAttribute: (k) => subagentAttrs[k] ?? null,
     setAttribute: (k, v) => {
       subagentAttrs[k] = String(v);
@@ -1702,6 +1868,9 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   switchSandbox.__guardSwitch();
   assert.equal(convAttrs['data-agy-session-switching'], '1');
   assert.equal(subagentAttrs['data-agy-session-switching'], '1');
+  assert.equal(convClasses.has('no-animations'), true, 'D-0015: must add .no-animations class during session switch freeze');
+  assert.equal(subagentClasses.has('no-animations'), true, 'D-0015: must add .no-animations class to subagent view during session switch freeze');
+  assert.equal(canceledAnimationsCount, 1, 'D-0015: must cancel active Web Animations (element.animate) inside targetViews on session switch');
   assert.deepEqual(scheduledTimers, [650], 'initial switch must arm 650ms freeze timer');
   fakeNow = 1001;
   switchSandbox.__guardSwitch();
@@ -1715,6 +1884,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   fakeNow = 1700;
   if (activeTimerCallback) activeTimerCallback();
   assert.equal(convAttrs['data-agy-session-switching'], undefined);
+  assert.equal(convClasses.has('no-animations'), false, 'D-0015: must remove .no-animations class when session switch freeze timer expires');
+  assert.equal(subagentClasses.has('no-animations'), false, 'D-0015: must remove .no-animations class from subagent view when freeze timer expires');
 
   // Case B: Switch to session-gamma with empty view (spinner) at t=2000ms; async trajectorySlice mounts at t=2700ms (>650ms after timer expired)
   fakeNow = 2000;

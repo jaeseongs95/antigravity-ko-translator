@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.30
+// @version      1.2.31
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.25';
+  const KO_LOCALIZER_VERSION = 'v13.26';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -416,6 +416,9 @@
       window.__agyKoThoughtCleanup &&
       typeof window.__agyRetranslateVisibleThoughts === 'function' &&
       typeof window.__agySetShowThinking === 'function' &&
+      typeof window.__agyTranslateStaticUiSync === 'function' &&
+      window.__agyTranslateStaticUiSync('Open IDE') === 'IDE 열기' &&
+      window.__agyTranslateStaticUiSync('Exited with code 0') === '종료 코드 0' &&
       !document.getElementById('agy-ko-settings-card')
     ) {
       if (typeof window.__agySyncPersistentSettings === 'function') {
@@ -555,6 +558,9 @@
     'yesterday': '어제',
     // Common buttons & actions
     'Open': '열기',
+    'Open IDE': 'IDE 열기',
+    'Open Antigravity IDE': 'Antigravity IDE 열기',
+    'Open in Antigravity IDE': 'Antigravity IDE에서 열기',
     'Open Folder': '폴더 열기',
     'Learn more': '자세히 알아보기',
     'Show Less': '접기',
@@ -654,6 +660,14 @@
     'Removed bookmark': '북마크 제거함',
     'Removing bookmark': '북마크 제거 중',
     'Canceled removal of bookmark': '북마크 제거 취소됨',
+    'Timed': '타이머 완료',
+    'Timing': '타이머 대기 중',
+    'Rejected': '거절됨',
+    'Canceled': '취소됨',
+    'Interrupted': '중단됨',
+    'Task not found': '작업을 찾을 수 없음',
+    'No browser pages open': '열려 있는 브라우저 페이지 없음',
+    'Full Error': '전체 오류 보기',
     // Navigation tooltips & context menus
     'Sidebar': '사이드바',
     'Display Options': '표시 옵션',
@@ -1353,7 +1367,14 @@
     'Edit task title': '작업 제목 편집',
     'Enter scheduled task name...': '예약 작업 이름 입력...',
     'Queued Messages': '대기 중인 메시지',
+    'Queued messages': '대기 중인 메시지',
     'Sends after agent finishes working': '에이전트 작업이 끝나면 전송됩니다',
+    'Collapse queued messages': '대기 중인 메시지 접기',
+    'Expand queued messages': '대기 중인 메시지 펼치기',
+    'Send Now': '지금 보내기',
+    'Cancel Sending Message': '메시지 전송 취소',
+    'Queued message deleted': '대기 중인 메시지가 삭제되었습니다',
+    'Empty message': '빈 메시지',
     'See all': '모두 보기',
     'Full View': '전체 보기',
     'Message from Parent Agent': '상위 에이전트의 메시지',
@@ -2219,6 +2240,28 @@
       return `모델 선택, 현재: ${inner}`;
     }
 
+    // Queued messages card & timer / command step status patterns (D-0018)
+    m = t.match(/^Queued messages\s*\((\d+)\)$/i);
+    if (m) return `대기 중인 메시지 (${m[1]}개)`;
+
+    m = t.match(/^(\d+)\s+comments?$/i);
+    if (m) return `댓글 ${m[1]}개`;
+
+    m = t.match(/^(.+?)\s+timer:\s*Timer has expired$/i);
+    if (m) return `${formatDurationKo(m[1])} 타이머: 타이머가 만료되었습니다`;
+
+    m = t.match(/^(.+?)\s+timer:\s*(.+)$/i);
+    if (m) {
+      const inner = translateStaticUiSync(m[2]) || m[2];
+      return `${formatDurationKo(m[1])} 타이머: ${inner}`;
+    }
+
+    m = t.match(/^(.+?)\s*(?:·|\u00b7|\u2022)\s*Exited with code\s+(-?\d+)$/i);
+    if (m) return `${m[1].trim()} \u00b7 종료 코드 ${m[2]}`;
+
+    m = t.match(/^Exited with code\s+(-?\d+)$/i);
+    if (m) return `종료 코드 ${m[1]}`;
+
     // Multi-clause tool group summary (e.g. "Explored files, ran commands, edited files")
     if (t.includes(',')) {
       const parts = t.split(',').map((p) => p.trim());
@@ -2254,6 +2297,9 @@
     }
     STATIC_UI_PATTERN_CACHE.set(t, matched);
     return matched;
+  }
+  if (typeof window !== 'undefined' && window) {
+    window.__agyTranslateStaticUiSync = translateStaticUiSync;
   }
 
 // Module: 03-text-tokenizer.js
@@ -4848,18 +4894,35 @@
     if (el.closest(selector)) {
       return true;
     }
-    if (!forAttributes && el.closest('[data-testid="agent-input-box"]')) {
-      const txt = (el.textContent || '').trim();
-      if (
-        el.tagName === 'P' &&
-        (txt.startsWith('Ask anything') ||
-          txt.startsWith('Message subagent') ||
-          txt.startsWith('무엇이든 물어보세요') ||
-          txt.startsWith('서브에이전트에게 메시지 보내기'))
-      ) {
+    if (el.closest('[data-testid="agent-input-box"]')) {
+      const inQueuedCard = el.closest('[data-testid="queued-messages-card"]');
+      if (inQueuedCard) {
+        if (!forAttributes && el.classList && el.classList.contains('line-clamp-2')) {
+          const txt = (el.textContent || '').trim();
+          if (
+            txt !== 'Empty message' &&
+            txt !== '빈 메시지' &&
+            !/^\d+\s+comments?$/i.test(txt) &&
+            !/^댓글\s+\d+개$/.test(txt)
+          ) {
+            return true;
+          }
+        }
         return false;
       }
-      return true;
+      if (!forAttributes) {
+        const txt = (el.textContent || '').trim();
+        if (
+          el.tagName === 'P' &&
+          (txt.startsWith('Ask anything') ||
+            txt.startsWith('Message subagent') ||
+            txt.startsWith('무엇이든 물어보세요') ||
+            txt.startsWith('서브에이전트에게 메시지 보내기'))
+        ) {
+          return false;
+        }
+        return true;
+      }
     }
     if (
       !forAttributes &&
@@ -5377,6 +5440,66 @@
     return false;
   }
 
+  function isWorkedForInActiveOrLatestTurn(btn, isLastInDomList) {
+    if (!btn) return false;
+    let sawLocalActiveFalse = false;
+    try {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 36 && cur; i++) {
+        const mp = cur.memoizedProps;
+        if (mp && typeof mp === 'object') {
+          if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
+          if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+          }
+          if (mp.container && typeof mp.container === 'object') {
+            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
+            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
+          }
+          if (i <= 6) {
+            if (mp.isActive === true) return true;
+            if (mp.isActive === false || mp.isRunning === false) {
+              sawLocalActiveFalse = true;
+            }
+          }
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
+      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
+      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
+        return Boolean(latestTurnEl.contains(btn));
+      }
+    }
+    if (
+      typeof document !== 'undefined' &&
+      document &&
+      typeof document.querySelectorAll === 'function' &&
+      typeof btn.compareDocumentPosition === 'function' &&
+      typeof Node !== 'undefined'
+    ) {
+      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
+      for (const ub of userBubbles) {
+        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+          return false;
+        }
+      }
+    }
+    if (sawLocalActiveFalse) {
+      return false;
+    }
+    return Boolean(isLastInDomList);
+  }
+
   function scanTriggerButtonsSync(forceCollapseAll = false) {
     ensureStyle();
     if (typeof syncShowThinkingDomAttribute === 'function') {
@@ -5390,7 +5513,7 @@
     const workedBtns = Array.from(document.querySelectorAll('button[data-testid="worked-for-collapsible"]'));
     for (let i = 0; i < workedBtns.length; i++) {
       const btn = workedBtns[i];
-      const isLastWorked = i === workedBtns.length - 1;
+      const isLastWorked = isWorkedForInActiveOrLatestTurn(btn, i === workedBtns.length - 1);
       processTriggerButton(btn);
       if (!nativeVerboseSteps) {
         continue;
@@ -5483,12 +5606,19 @@
           const cw = ifr.contentWindow;
           if (cw && cw !== window && typeof cw.__agyRetranslateVisibleThoughts === 'function') {
             if (!_fromCrossFrame) cw.__agyRetranslateVisibleThoughts(clearCache, true);
-            if (!_fromCrossFrame && window.parent && window.parent !== window && typeof window.parent.__agyRetranslateVisibleThoughts === 'function') {
-              window.parent.__agyRetranslateVisibleThoughts(clearCache, true);
-            }
           }
         } catch (e) {}
       });
+      if (
+        !_fromCrossFrame &&
+        window.parent &&
+        window.parent !== window &&
+        typeof window.parent.__agyRetranslateVisibleThoughts === 'function'
+      ) {
+        try {
+          window.parent.__agyRetranslateVisibleThoughts(clearCache, true);
+        } catch (e) {}
+      }
     } catch (e) {}
     return {
       clearedCache: Boolean(clearCache),
@@ -6750,8 +6880,27 @@
 
       const armFreezeTimer = (targetViews, durationMs) => {
         for (const v of targetViews) {
-          if (v && typeof v.setAttribute === 'function' && v.getAttribute('data-agy-session-switching') !== '1') {
+          if (!v) continue;
+          if (typeof v.setAttribute === 'function' && v.getAttribute('data-agy-session-switching') !== '1') {
             v.setAttribute('data-agy-session-switching', '1');
+          }
+          if (v.classList && typeof v.classList.contains === 'function' && typeof v.classList.add === 'function') {
+            if (!v.classList.contains('no-animations')) {
+              v.classList.add('no-animations');
+              if (typeof v.setAttribute === 'function') {
+                v.setAttribute('data-agy-added-no-animations', '1');
+              }
+            }
+          }
+          if (typeof v.getAnimations === 'function') {
+            try {
+              const anims = v.getAnimations({ subtree: true });
+              if (Array.isArray(anims)) {
+                for (const anim of anims) {
+                  if (anim && typeof anim.cancel === 'function') anim.cancel();
+                }
+              }
+            } catch (e) {}
           }
         }
         const now = typeof Date !== 'undefined' && typeof Date.now === 'function' ? Date.now() : 0;
@@ -6775,8 +6924,20 @@
                   )
                 : targetViews;
             for (const v of liveViews) {
-              if (v && typeof v.removeAttribute === 'function') {
+              if (!v) continue;
+              if (typeof v.removeAttribute === 'function') {
                 v.removeAttribute('data-agy-session-switching');
+              }
+              if (
+                typeof v.getAttribute === 'function' &&
+                v.getAttribute('data-agy-added-no-animations') === '1'
+              ) {
+                if (v.classList && typeof v.classList.remove === 'function') {
+                  v.classList.remove('no-animations');
+                }
+                if (typeof v.removeAttribute === 'function') {
+                  v.removeAttribute('data-agy-added-no-animations');
+                }
               }
             }
             if (typeof observer !== 'undefined' && observer && typeof observer.takeRecords === 'function') {
@@ -6830,6 +6991,16 @@
     try {
       scanTriggerButtonsSync();
       ensureThinkingDisplayMenuIntegration();
+      if (document.querySelectorAll) {
+        document
+          .querySelectorAll('[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"]')
+          .forEach((convEl) => localizeStaticUiInRoot(convEl));
+      } else if (document.querySelector) {
+        const convEl =
+          document.querySelector('[data-testid="conversation-view"]') ||
+          document.querySelector('[data-testid="subagent-tab-conversation"]');
+        if (convEl) localizeStaticUiInRoot(convEl);
+      }
       const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');
       if (mcpModal) localizeStaticUiInRoot(mcpModal);
       const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');
