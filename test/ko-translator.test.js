@@ -27,7 +27,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.22';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.23';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
   assert.ok(bundleCode.includes("'remove-conversation-history'"));
@@ -549,6 +549,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   const workedFnMatch = mod08.match(/function doesWorkedForButtonContainThinking\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const hiddenActiveFnMatch = mod08.match(/function isHiddenActiveWorkedForButton\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const toolGrpActiveFnMatch = mod08.match(/function isToolGroupInActiveOrLatestTurn\(btn, workedBtns\)\s*\{[\s\S]*?\r?\n  \}/);
+  const thinkingActiveFnMatch = mod08.match(/function isThinkingTriggerInActiveOrLatestTurn\(btn, workedBtns, thinkingBtns\)\s*\{[\s\S]*?\r?\n  \}/);
   const expandBtnFnMatch = mod08.match(/function expandTriggerButtonIfNeeded\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
   const clickCapFnMatch = mod08.match(/function onTriggerButtonClickCapture\(e\)\s*\{[\s\S]*?\r?\n  \}/);
   const collapseBtnFnMatch = mod08.match(/function collapseTriggerButtonIfNeeded\(btn\)\s*\{[\s\S]*?\r?\n  \}/);
@@ -558,6 +559,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
       workedFnMatch &&
       hiddenActiveFnMatch &&
       toolGrpActiveFnMatch &&
+      thinkingActiveFnMatch &&
       expandBtnFnMatch &&
       collapseBtnFnMatch &&
       clickCapFnMatch &&
@@ -605,13 +607,44 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'true',
     true
   );
+  // KO-BUG-01: Historical completed tool-group whose ancestor Lhc fiber (depth 8) has conversation-wide `isRunning: true`
+  // while its own turn has `isRunning: false, isActive: false` at depth 2 and `isLastContainer: false, segment: { isLatest: false }` at depth 8.
+  const historicalToolGroupInRunningConv = makeCollapsibleBtn('__reactFiber$toolGrpHist', {
+    memoizedProps: {},
+    return: {
+      memoizedProps: {},
+      return: {
+        // yhc at depth 2
+        memoizedProps: { isRunning: false, isActive: false },
+        return: {
+          memoizedProps: {},
+          return: {
+            // Lhc at depth 4
+            memoizedProps: { isRunning: true, isLastContainer: false, segment: { isLatest: false } },
+            return: null,
+          },
+        },
+      },
+    },
+  });
   const toolGroupWithThinking = makeCollapsibleBtn('__reactFiber$toolGrp1', {
     memoizedProps: { isLastTurn: true, steps: [{ step: { value: { thinking: 'Intermediate tool thought' } } }] },
   });
   const toolGroupWithoutThinking = makeCollapsibleBtn('__reactFiber$toolGrp2', {
     memoizedProps: { isLastTurn: true, steps: [{ step: { value: { thinking: '' } } }] },
   });
-  const thinkingTriggerBtn = makeCollapsibleBtn('__reactFiber$thinking1', {});
+  // KO-BUG-02: Historical completed thinking trigger (`isActive: false` on G_/A6b, `isLastContainer: false` on Lhc)
+  // vs active/latest thinking trigger (`isLastTurn: true` / `isActive: true`).
+  const historicalThinkingTriggerBtn = makeCollapsibleBtn('__reactFiber$thinkingHist', {
+    memoizedProps: { isActive: false },
+    return: {
+      memoizedProps: { isRunning: true, isLastContainer: false, segment: { isLatest: false } },
+      return: null,
+    },
+  });
+  const thinkingTriggerBtn = makeCollapsibleBtn('__reactFiber$thinking1', {
+    memoizedProps: { isActive: true, isLastTurn: true },
+  });
 
   let showThinkingFlag = true;
   let nativeVerboseStepsFlag = true;
@@ -624,23 +657,42 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     document: {
       querySelectorAll(sel) {
         if (sel.includes('worked-for-collapsible')) return [workedWithThinking, activeHiddenWorked];
-        if (sel.includes('tool-group-collapsible')) return [toolGroupWithThinking, toolGroupWithoutThinking];
-        if (sel.includes('thinking-collapsible-trigger')) return [thinkingTriggerBtn];
+        if (sel.includes('tool-group-collapsible')) return [historicalToolGroupInRunningConv, toolGroupWithThinking, toolGroupWithoutThinking];
+        if (sel.includes('thinking-collapsible-trigger')) return [historicalThinkingTriggerBtn, thinkingTriggerBtn];
         return [];
       },
     },
   };
   vm.runInNewContext(
-    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${hiddenActiveFnMatch[0]}\n${toolGrpActiveFnMatch[0]}\n${expandBtnFnMatch[0]}\n${collapseBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
+    `${workedFnMatch[0]}\n${toolGrpFnMatch[0]}\n${hiddenActiveFnMatch[0]}\n${toolGrpActiveFnMatch[0]}\n${thinkingActiveFnMatch[0]}\n${expandBtnFnMatch[0]}\n${collapseBtnFnMatch[0]}\n${clickCapFnMatch[0]}\n${scanBtnsMatch[0]}\n;globalThis.__scanTriggerButtonsSync = scanTriggerButtonsSync;globalThis.__doesToolGroupContainThinking = doesToolGroupButtonContainThinking;globalThis.__isToolGrpActive = isToolGroupInActiveOrLatestTurn;globalThis.__isThinkingActive = isThinkingTriggerInActiveOrLatestTurn;globalThis.__onTriggerClick = onTriggerButtonClickCapture;`,
     expandSandbox
   );
   assert.equal(expandSandbox.__doesToolGroupContainThinking(toolGroupWithThinking), true);
   assert.equal(expandSandbox.__doesToolGroupContainThinking(toolGroupWithoutThinking), false);
+  assert.equal(
+    expandSandbox.__isToolGrpActive(historicalToolGroupInRunningConv, [workedWithThinking, activeHiddenWorked]),
+    false,
+    'KO-BUG-01: isToolGroupInActiveOrLatestTurn must NOT return true for historical completed turns even when conversation-wide Lhc.isRunning === true'
+  );
+  assert.equal(
+    expandSandbox.__isToolGrpActive(makeCollapsibleBtn('__reactFiber$orphan', {}), []),
+    false,
+    'KO-BUG-01: isToolGroupInActiveOrLatestTurn fallback must return false when workedBtns is empty or no active/latest signal exists'
+  );
+  assert.equal(
+    expandSandbox.__isThinkingActive(
+      historicalThinkingTriggerBtn,
+      [workedWithThinking, activeHiddenWorked],
+      [historicalThinkingTriggerBtn, thinkingTriggerBtn]
+    ),
+    false,
+    'KO-BUG-02: isThinkingTriggerInActiveOrLatestTurn must return false for historical completed thinking triggers'
+  );
   expandSandbox.__scanTriggerButtonsSync();
   assert.deepEqual(
     clickedOrder,
     ['__reactFiber$toolGrp1', '__reactFiber$toolGrp2', '__reactFiber$thinking1'],
-    'D-0013: must NOT force-expand historical completed workedWithThinking on session switch, only active/latest turn tool-groups and thinking triggers'
+    'D-0013 & KO-BUG-01/02: must NOT force-expand historical completed workedWithThinking, historicalToolGroupInRunningConv, or historicalThinkingTriggerBtn on session switch'
   );
 
   // Simulate React G_ collapsing toolGroupWithThinking, toolGroupWithoutThinking & thinkingTriggerBtn when step finishes (isActive: true -> false)
@@ -770,7 +822,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.22',
+      __agyKoLocalizerActive: 'v13.23',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1119,6 +1171,11 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   );
 
   // Verify syncRemoteCompanionPlugins and probeHostCompanionPluginsForRemote never throw when iframe.contentWindow is cross-origin and throws DOMException SecurityError on property read
+  const extractBlockFnsMatch = mod08.match(
+    /function findLineStartMarkerIndex\(text, marker, fromIndex = 0\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  function injectRemoteCompanionScript/
+  );
+  assert.ok(extractBlockFnsMatch, 'findLineStartMarkerIndex and extractCompanionBlock must be extractable');
+  const extractBlockFnsCode = extractBlockFnsMatch[0].replace(/\r?\n\r?\n  function injectRemoteCompanionScript$/, '');
   const syncFnMatch = mod08.match(
     /async function probeHostCompanionPluginsForRemote\(rcEl\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  function bridgeRemoteControlIframe/
   );
@@ -1139,13 +1196,12 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     window: {},
     document: {},
     getRemoteControlComponentInstance: () => null,
-    extractCompanionBlock: () => '',
     decodeBase64Utf8: () => '',
     injectRemoteCompanionScript: () => {},
     refreshStatusbarTranslatorAdapter: () => {},
   };
   vm.runInNewContext(
-    `${syncFnsCode}\n;globalThis.__syncComp = syncRemoteCompanionPlugins; globalThis.__probeComp = probeHostCompanionPluginsForRemote;`,
+    `${extractBlockFnsCode}\n${syncFnsCode}\n;globalThis.__syncComp = syncRemoteCompanionPlugins; globalThis.__probeComp = probeHostCompanionPluginsForRemote; globalThis.__extractBlock = extractCompanionBlock;`,
     crossOriginSandbox
   );
   assert.doesNotThrow(() => {
@@ -1158,7 +1214,123 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'D-0011: probeHostCompanionPluginsForRemote must safely catch cross-origin iframe.contentWindow SecurityError and return unresolved info'
   );
 
-  // 14. D-0013 regression checks: session switch flicker prevention (historical collapsible stability, transition suppression, microtask coalescing, TreeWalker subtree pruning, conditional root attribute sync)
+  // KO-BUG-04a/b: Verify applyRawBundleInspection extracts baseSegment as statusbarCode (even without BEGIN_AGY_STATUSBAR)
+  // and line-start anchored extractCompanionBlock ignores inline string literals inside ko-thought-translator
+  const realisticCombinedBundle = [
+    '// ==UserScript==',
+    '// @name         Antigravity Custom Statusbar (Local & Remote Control)',
+    'function mountContextStatusBar() { return "agy-ctx-statusbar"; }',
+    '// === BEGIN_AGY_MCP_MANAGER_V1 ===',
+    'function mountMcpManager() { return "agyMcpManager"; }',
+    '// === END_AGY_MCP_MANAGER_V1 ===',
+    '// === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
+    '/* === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 === */',
+    'const fakeInlineLiterals = "// === BEGIN_AGY_MCP_MANAGER_V1 === fake /* === BEGIN_AGY_MCP_MANAGER_V1 === */";',
+    '/* === END_AGY_KO_THOUGHT_LOCALIZER_V2 === */',
+    '// === END_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
+  ].join('\n');
+  const bundleProbeSandbox = {
+    window: {
+      __agyCapturedLsClient: {
+        getLocalUserInfo: async () => ({ homeDir: 'C:/Users/Lenovo' }),
+        readFile: async () => ({ content: realisticCombinedBundle }),
+        getAllPlugins: async () => ({ plugins: [] }),
+        getCustomizationStates: async () => ({ states: [] }),
+      },
+    },
+    document: {},
+    getRemoteControlComponentInstance: () => null,
+    decodeBase64Utf8: (s) => s,
+    injectRemoteCompanionScript: () => {},
+    refreshStatusbarTranslatorAdapter: () => {},
+  };
+  vm.runInNewContext(
+    `${extractBlockFnsCode}\n${syncFnsCode}\n;globalThis.__probeBundle = probeHostCompanionPluginsForRemote;`,
+    bundleProbeSandbox
+  );
+  const bundleInfo = await bundleProbeSandbox.__probeBundle(null);
+  assert.equal(bundleInfo.resolved, true);
+  assert.equal(bundleInfo.statusbarInstalled, true);
+  assert.ok(
+    bundleInfo.statusbarCode.includes('mountContextStatusBar') &&
+      !bundleInfo.statusbarCode.includes('mountMcpManager'),
+    'KO-BUG-04: applyRawBundleInspection must extract statusbar baseSegment before the first companion marker without needing BEGIN_AGY_STATUSBAR'
+  );
+  assert.equal(bundleInfo.mcpManagerInstalled, true);
+  assert.equal(
+    bundleInfo.mcpManagerCode,
+    'function mountMcpManager() { return "agyMcpManager"; }',
+    'KO-BUG-04: extractCompanionBlock must use line-start anchors and ignore inline marker literals'
+  );
+
+  // KO-BUG-04c: Verify getRemoteControlComponentInstance captures rcInst when Angular 19 debug APIs return null
+  // AND window.addEventListener('message', this.handleIframeMessage.bind(this)) was ALREADY bound at construction time!
+  function MockRemoteControlComponent() {
+    this.destroyed = false;
+  }
+  MockRemoteControlComponent.prototype.proxyCommand = function () {};
+  MockRemoteControlComponent.prototype.onIframeLoad = function () {
+    throw new Error('real onIframeLoad should be suppressed during probe!');
+  };
+  MockRemoteControlComponent.prototype.handleIframeMessage = function (ev) {
+    if (!ev || !ev.data || ev.data.type !== 'IFRAME_READY') return;
+    this.onIframeLoad();
+  };
+  const preConstructedRc = new MockRemoteControlComponent();
+  const boundListeners = [];
+  const boundListener = preConstructedRc.handleIframeMessage.bind(preConstructedRc);
+  boundListeners.push(boundListener);
+  const boundRcSandbox = {
+    MessageEvent: class MockMessageEvent {
+      constructor(type, init = {}) {
+        this.type = type;
+        this.data = init.data;
+        this.origin = init.origin || '';
+        this.source = init.source || null;
+      }
+    },
+    Event: class MockEvent {
+      constructor(type) {
+        this.type = type;
+      }
+    },
+    window: {
+      location: { origin: 'https://antigravity.google.com', href: 'https://antigravity.google.com/r/123' },
+      default_GoogleAntigravity: {
+        m1: { RemoteControlComponent: MockRemoteControlComponent },
+      },
+      dispatchEvent(ev) {
+        for (const fn of boundListeners) fn(ev);
+      },
+    },
+    document: {
+      querySelector: () => null,
+      dispatchEvent() {},
+    },
+  };
+  vm.runInNewContext(`${getRcFnCode}\n;globalThis.__getBoundRc = getRemoteControlComponentInstance;`, boundRcSandbox);
+  const capturedBoundRc = boundRcSandbox.__getBoundRc({
+    querySelector: (sel) =>
+      sel === 'iframe'
+        ? {
+            src: 'https://antigravity.static.usercontent.goog/web/2.29.0/?iframe=true',
+            getAttribute: () => 'https://antigravity.static.usercontent.goog/web/2.29.0/?iframe=true',
+            contentWindow: {},
+          }
+        : null,
+  });
+  assert.equal(
+    capturedBoundRc,
+    preConstructedRc,
+    'KO-BUG-04: getRemoteControlComponentInstance must capture pre-constructed RC instance via bound handleIframeMessage -> onIframeLoad without running real teardownProxyPort'
+  );
+
+  // 14. D-0013 & KO-BUG-03/05 regression checks: session switch flicker prevention (historical collapsible stability, transition suppression on both conversation-view and subagent-tab-conversation, microtask coalescing, TreeWalker subtree pruning, conditional root attribute sync, README accuracy)
+  const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+  assert.ok(
+    readmeText.includes('v13.23') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.23 and must NOT claim verboseConversationSteps: true is force-enabled'
+  );
   assert.ok(
     mod06.includes('[data-testid="conversation-view"][data-agy-session-switching="1"]'),
     'D-0013: STYLE_CSS must suppress transitions on conversation-view during session switching'
@@ -1215,26 +1387,37 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'D-0013: syncShowThinkingDomAttribute must NOT call setAttribute repeatedly when data-agy-hide-thinking="1" is already set'
   );
 
-  // Verify guardSessionSwitchTransitions sets data-agy-session-switching="1" only on cascadeId change
+  // Verify guardSessionSwitchTransitions sets data-agy-session-switching="1" on both conversation-view and subagent-tab-conversation on cascadeId change
   const guardSwitchMatch = mod08.match(
     /let lastObservedCascadeId = null;\r?\n  let sessionSwitchFreezeTimer = null;\r?\n\r?\n  function guardSessionSwitchTransitions\(\)\s*\{[\s\S]*?\r?\n  \}/
   );
   assert.ok(guardSwitchMatch, 'guardSessionSwitchTransitions must exist in 08-dom-observer.js');
   const convAttrs = { 'data-cascade-id': 'session-alpha' };
+  const subagentAttrs = { 'data-cascade-id': 'subagent-alpha' };
+  const mockConvEl = {
+    getAttribute: (k) => convAttrs[k] ?? null,
+    setAttribute: (k, v) => {
+      convAttrs[k] = String(v);
+    },
+    removeAttribute: (k) => {
+      delete convAttrs[k];
+    },
+    querySelector: () => null,
+  };
+  const mockSubagentEl = {
+    getAttribute: (k) => subagentAttrs[k] ?? null,
+    setAttribute: (k, v) => {
+      subagentAttrs[k] = String(v);
+    },
+    removeAttribute: (k) => {
+      delete subagentAttrs[k];
+    },
+    querySelector: () => null,
+  };
   const switchSandbox = {
     document: {
-      querySelector: (sel) =>
-        sel === '[data-testid="conversation-view"]'
-          ? {
-              getAttribute: (k) => convAttrs[k] ?? null,
-              setAttribute: (k, v) => {
-                convAttrs[k] = String(v);
-              },
-              removeAttribute: (k) => {
-                delete convAttrs[k];
-              },
-            }
-          : null,
+      querySelectorAll: () => [mockConvEl, mockSubagentEl],
+      querySelector: () => mockConvEl,
     },
     setTimeout: () => 1,
     clearTimeout: () => {},
@@ -1247,6 +1430,11 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   assert.equal(
     convAttrs['data-agy-session-switching'],
     '1',
-    'D-0013: switching data-cascade-id must set data-agy-session-switching="1" to suppress layout/fade transitions'
+    'D-0013 & KO-BUG-03: switching data-cascade-id must set data-agy-session-switching="1" on conversation-view'
+  );
+  assert.equal(
+    subagentAttrs['data-agy-session-switching'],
+    '1',
+    'KO-BUG-03: switching data-cascade-id must also protect subagent-tab-conversation'
   );
 });
