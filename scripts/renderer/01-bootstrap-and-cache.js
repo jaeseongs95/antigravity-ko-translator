@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.28';
+  const KO_LOCALIZER_VERSION = 'v13.29';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -62,10 +62,15 @@
       let rn;
       while ((rn = restoreWalker.nextNode())) {
         if (rn.__agyOrigValue !== undefined) {
+          const parentEl = rn.parentElement;
           rn.nodeValue = rn.__agyOrigValue;
           delete rn.__agyOrigValue;
           delete rn.__agyKoApplied;
           delete rn.__agyPendingDynamic;
+          if (parentEl) {
+            delete parentEl.__agyDynamicSource;
+            delete parentEl.__agyTranslatingDynamic;
+          }
         }
       }
 
@@ -396,6 +401,8 @@
       window.__agyTranslateStaticUiSync('Exited with code 0') === '종료 코드 0' &&
       window.__agyTranslateStaticUiSync('2 subagents/tasks running') === '서브에이전트/작업 2개 실행 중' &&
       window.__agyTranslateStaticUiSync('CLI Project') === 'CLI 프로젝트' &&
+      window.__agyTranslateStaticUiSync('Local Checkout') === '로컬 체크아웃' &&
+      window.__agyTranslateStaticUiSync('Type') === '유형' &&
       !document.getElementById('agy-ko-settings-card')
     ) {
       if (typeof window.__agySyncPersistentSettings === 'function') {
@@ -430,7 +437,11 @@
         let hasSavedProv = false;
         try {
           const sv = localStorage.getItem(PROVIDER_STORAGE_KEY);
-          if (sv === 'google-translate' || sv === 'local-llm') hasSavedProv = true;
+          const knownProviders =
+            typeof window.__agyListTranslationProviders === 'function'
+              ? window.__agyListTranslationProviders()
+              : ['google-translate', 'local-llm'];
+          if (sv && Array.isArray(knownProviders) && knownProviders.includes(sv)) hasSavedProv = true;
         } catch (e) {}
         if (!hasSavedProv) {
           window.__agySetTranslationProvider(DEFAULT_TRANSLATION_PROVIDER);

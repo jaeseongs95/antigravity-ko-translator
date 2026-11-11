@@ -10,7 +10,52 @@
   const PROTECT_IDENTIFIERS_REGEX =
     /(`[^`]+`|"(?=[^"\n]*[가-힣])[^"\n]{1,140}"|“(?=[^”\n]*[가-힣])[^”\n]{1,140}”|(?<![A-Za-z0-9⟧])'(?=[^'\n]*[가-힣])[^'\n]{1,80}'(?![A-Za-z0-9])|\bhttps?:\/\/\S+|\b[A-Za-z0-9_.-]+\.(?:md|js|mjs|cjs|ts|tsx|json|jsonl|py|sh|ps1|yaml|yml|toml|html|css|asar|exe|lock)\b|(?:--[a-z0-9-]+)|\b(?:[A-Z0-9]+-[A-Za-z0-9-]+|[a-z]+-[0-9][a-z0-9-]*)\b|\b[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b)/g;
   const RESTORE_TOKEN_REGEX = /(?:⟦|\[|【)\s*T(\d+)\s*(?:⟧|\]|】)/gi;
-  const KOREAN_PARTICLE_REGEX = /([가-힣])(['"”’⟧\]】]*)(와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g;
+  const RESTORE_TOKEN_WITH_PARTICLE_REGEX =
+    /(?:⟦|\[|【)\s*T(\d+)\s*(?:⟧|\]|】)(?:(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)]))?/gi;
+  const QUOTED_KOREAN_PARTICLE_REGEX =
+    /([가-힣])(['"`”’⟧\]】)]+)(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g;
+
+  function selectKoreanParticleByJongseong(jong, particle) {
+    if (jong === null || jong === undefined) return particle;
+    const hasJong = jong !== 0;
+    const isRieul = jong === 8;
+    switch (particle) {
+      case '와':
+      case '과':
+      case '(과)와':
+        return hasJong ? '과' : '와';
+      case '를':
+      case '을':
+      case '(을)를':
+        return hasJong ? '을' : '를';
+      case '가':
+      case '이':
+      case '(이)가':
+        return hasJong ? '이' : '가';
+      case '는':
+      case '은':
+      case '(은)는':
+        return hasJong ? '은' : '는';
+      case '로':
+      case '으로':
+      case '(으)로':
+        return !hasJong || isRieul ? '로' : '으로';
+      default:
+        return particle;
+    }
+  }
+
+  function resolveLastHangulJongseong(tokenText) {
+    if (!tokenText) return null;
+    const stripped = String(tokenText).replace(/['"`”’⟧\]】)\s]+$/g, '');
+    if (!stripped) return null;
+    const lastCh = stripped[stripped.length - 1];
+    const code = lastCh.charCodeAt(0);
+    if (code >= 0xac00 && code <= 0xd7a3) {
+      return (code - 0xac00) % 28;
+    }
+    return null;
+  }
 
   function isAlreadyKoreanOrNonEnglish(text) {
     if (!text) return true;
@@ -47,29 +92,29 @@
     return { protectedText, savedTokens };
   }
 
-  function restoreIdentifiersInThoughtText(translatedText, savedTokens) {
-    if (!savedTokens.length) return translatedText;
-    const restored = translatedText.replace(RESTORE_TOKEN_REGEX, (full, num) => {
-      const idx = parseInt(num, 10);
-      return savedTokens[idx] !== undefined ? savedTokens[idx] : full;
+  function fixQuotedKoreanParticles(text) {
+    if (!text) return text;
+    return String(text).replace(QUOTED_KOREAN_PARTICLE_REGEX, (full, lastKo, closingQuote, particle) => {
+      const code = lastKo.charCodeAt(0);
+      if (code < 0xac00 || code > 0xd7a3) return full;
+      const jong = (code - 0xac00) % 28;
+      return lastKo + closingQuote + selectKoreanParticleByJongseong(jong, particle);
     });
-    return restored.replace(KOREAN_PARTICLE_REGEX, (full, lastKo, closingQuote, particle) => {
-        const code = lastKo.charCodeAt(0);
-        if (code < 0xac00 || code > 0xd7a3) return full;
-        const hasJong = (code - 0xac00) % 28 !== 0;
-        const map = {
-          와: hasJong ? '과' : '와',
-          과: hasJong ? '과' : '와',
-          를: hasJong ? '을' : '를',
-          을: hasJong ? '을' : '를',
-          가: hasJong ? '이' : '가',
-          이: hasJong ? '이' : '가',
-          는: hasJong ? '은' : '는',
-          은: hasJong ? '은' : '는',
-        };
-        return lastKo + closingQuote + (map[particle] || particle);
-      }
-    );
+  }
+
+  function restoreIdentifiersInThoughtText(translatedText, savedTokens) {
+    if (!translatedText) return translatedText;
+    const restored = savedTokens.length
+      ? translatedText.replace(RESTORE_TOKEN_WITH_PARTICLE_REGEX, (full, num, particle) => {
+          const idx = parseInt(num, 10);
+          if (savedTokens[idx] === undefined) return full;
+          const tokenStr = savedTokens[idx];
+          if (!particle) return tokenStr;
+          const jong = resolveLastHangulJongseong(tokenStr);
+          return tokenStr + selectKoreanParticleByJongseong(jong, particle);
+        })
+      : translatedText;
+    return fixQuotedKoreanParticles(restored);
   }
 
   function tokenizeBlockClone(origEl) {
@@ -97,21 +142,43 @@
 
     const regex = /(?:⟦|\[|【)\s*C(\d+)\s*(?:⟧|\]|】)/gi;
     let lastIndex = 0;
+    let prevRestoredCodeText = null;
+    const appendTrailingSegment = (segText) => {
+      if (!segText) return;
+      let adjusted = segText;
+      if (prevRestoredCodeText) {
+        const jong = resolveLastHangulJongseong(prevRestoredCodeText);
+        if (jong !== null) {
+          adjusted = adjusted.replace(
+            /^(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/,
+            (m) => selectKoreanParticleByJongseong(jong, m)
+          );
+        }
+      }
+      out.appendChild(document.createTextNode(adjusted));
+      prevRestoredCodeText = null;
+    };
+
     let match;
     while ((match = regex.exec(translatedText)) !== null) {
       if (match.index > lastIndex) {
-        out.appendChild(document.createTextNode(translatedText.slice(lastIndex, match.index)));
+        appendTrailingSegment(translatedText.slice(lastIndex, match.index));
+      } else {
+        prevRestoredCodeText = null;
       }
       const idx = parseInt(match[1], 10);
       if (savedCodes[idx]) {
-        out.appendChild(savedCodes[idx].cloneNode(true));
+        const codeClone = savedCodes[idx].cloneNode(true);
+        out.appendChild(codeClone);
+        prevRestoredCodeText = codeClone.textContent || '';
       } else {
         out.appendChild(document.createTextNode(match[0]));
+        prevRestoredCodeText = null;
       }
       lastIndex = regex.lastIndex;
     }
     if (lastIndex < translatedText.length) {
-      out.appendChild(document.createTextNode(translatedText.slice(lastIndex)));
+      appendTrailingSegment(translatedText.slice(lastIndex));
     }
     return out;
   }

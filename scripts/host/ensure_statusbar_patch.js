@@ -92,7 +92,8 @@ function sha256Hex(bufferOrString) {
 }
 
 function writeFileAtomicSync(targetPath, content) {
-  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
   try {
     fs.writeFileSync(tmpPath, content, 'utf8');
     try {
@@ -261,30 +262,44 @@ function isAsarPatchedFast(asarPath = ASAR_PATH) {
   }
 }
 
-function acquireLock() {
+let heldLockToken = null;
+let heldLockPath = null;
+
+function acquireLock(lockPath = LOCK_PATH, staleMs = LOCK_STALE_MS) {
   try {
-    fs.mkdirSync(AGY_DIR, { recursive: true });
-    if (fs.existsSync(LOCK_PATH)) {
-      const stat = fs.statSync(LOCK_PATH);
-      if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
-        try { fs.unlinkSync(LOCK_PATH); } catch {}
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    if (fs.existsSync(lockPath)) {
+      const stat = fs.statSync(lockPath);
+      if (Date.now() - stat.mtimeMs > staleMs) {
+        try { fs.unlinkSync(lockPath); } catch {}
       }
     }
-    const fd = fs.openSync(LOCK_PATH, 'wx');
-    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), 'utf8');
+    const token = `${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    const fd = fs.openSync(lockPath, 'wx');
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token, startedAt: new Date().toISOString() }), 'utf8');
     fs.closeSync(fd);
+    heldLockToken = token;
+    heldLockPath = lockPath;
     return true;
   } catch {
     return false;
   }
 }
 
-function releaseLock() {
+function releaseLock(lockPath = heldLockPath || LOCK_PATH) {
   try {
-    if (fs.existsSync(LOCK_PATH)) {
-      fs.unlinkSync(LOCK_PATH);
+    if (heldLockToken && fs.existsSync(lockPath)) {
+      const raw = fs.readFileSync(lockPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.token === heldLockToken) {
+        fs.unlinkSync(lockPath);
+      }
     }
   } catch {}
+  if (lockPath === heldLockPath || lockPath === LOCK_PATH) {
+    heldLockToken = null;
+    heldLockPath = null;
+  }
 }
 
 function writeStatus(statusObj) {
@@ -294,15 +309,22 @@ function writeStatus(statusObj) {
   } catch {}
 }
 
-function readDevToolsPort() {
+function readDevToolsEndpoint() {
   try {
     if (!fs.existsSync(DEVTOOLS_PORT_FILE)) return null;
     const lines = fs.readFileSync(DEVTOOLS_PORT_FILE, 'utf8').trim().split(/\r?\n/);
     const port = parseInt(lines[0], 10);
-    return port && !Number.isNaN(port) ? port : null;
+    if (!port || Number.isNaN(port)) return null;
+    const browserPath = lines[1] ? lines[1].trim() : '';
+    return { port, browserPath };
   } catch {
     return null;
   }
+}
+
+function readDevToolsPort() {
+  const ep = readDevToolsEndpoint();
+  return ep ? ep.port : null;
 }
 
 function httpGetJson(port, reqPath, timeoutMs = 1500) {
@@ -402,18 +424,104 @@ function configureTargetViaCdp(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) 
   });
 }
 
+async function injectViaBrowserCdpWs(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) {
+  if (typeof WebSocket !== 'function') {
+    return { pageTargetCount: 0, injectedCount: 0, skippedAlreadyActive: 0 };
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let idSeq = 1;
+    const pending = new Map();
+    const ws = new WebSocket(wsUrl);
+    const finish = (val) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { ws.close(); } catch {}
+      resolve(val);
+    };
+    const timer = setTimeout(() => {
+      finish({ pageTargetCount: 0, injectedCount: 0, skippedAlreadyActive: 0 });
+    }, timeoutMs);
+
+    const call = (method, params = {}, sessionId = undefined) =>
+      new Promise((res, rej) => {
+        const id = idSeq++;
+        pending.set(id, { res, rej });
+        const payload = { id, method, params };
+        if (sessionId) payload.sessionId = sessionId;
+        ws.send(JSON.stringify(payload));
+      });
+
+    ws.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data));
+        if (msg.id && pending.has(msg.id)) {
+          const { res, rej } = pending.get(msg.id);
+          pending.delete(msg.id);
+          if (msg.error) rej(new Error(JSON.stringify(msg.error)));
+          else res(msg.result);
+        }
+      } catch {}
+    };
+    ws.onerror = () => finish({ pageTargetCount: 0, injectedCount: 0, skippedAlreadyActive: 0 });
+    ws.onopen = async () => {
+      try {
+        const { targetInfos } = await call('Target.getTargets');
+        const pages = (Array.isArray(targetInfos) ? targetInfos : []).filter(
+          (t) => t && t.type === 'page' && !String(t.url || '').startsWith('devtools://')
+        );
+        let injectedCount = 0;
+        let skippedAlreadyActive = 0;
+        const immediateExpr = `(() => {
+          const hasActivePlugin =
+            Boolean(document.querySelector('.agy-ctx-statusbar') && window.__agyStatusBarCleanup) ||
+            Boolean(window.agyMcpManager) ||
+            Boolean(window.__agyKoThoughtCleanup);
+          if (hasActivePlugin && window.__agyStatusBarHash === ${JSON.stringify(scriptHash)}) {
+            return 'ALREADY_ACTIVE';
+          }
+          ${scriptCode}
+          window.__agyStatusBarHash = ${JSON.stringify(scriptHash)};
+          return 'INJECTED_OK';
+        })()`;
+        for (const p of pages) {
+          try {
+            const { sessionId } = await call('Target.attachToTarget', { targetId: p.targetId, flatten: true });
+            const evalRes = await call(
+              'Runtime.evaluate',
+              { expression: immediateExpr, returnByValue: true },
+              sessionId
+            );
+            const val = evalRes?.result?.value;
+            if (val === 'INJECTED_OK') injectedCount++;
+            else if (val === 'ALREADY_ACTIVE') skippedAlreadyActive++;
+          } catch {}
+        }
+        finish({ pageTargetCount: pages.length, injectedCount, skippedAlreadyActive });
+      } catch {
+        finish({ pageTargetCount: 0, injectedCount: 0, skippedAlreadyActive: 0 });
+      }
+    };
+  });
+}
+
 async function injectViaCdpLive() {
   if (!fs.existsSync(AUTOINJECT_PATH)) {
     return { attempted: false, reason: 'autoinject_script_missing', injectedCount: 0 };
   }
-  const port = readDevToolsPort();
-  if (!port) {
+  const endpoint = readDevToolsEndpoint();
+  if (!endpoint) {
     return { attempted: false, reason: 'devtools_port_missing', injectedCount: 0 };
   }
+  const { port, browserPath } = endpoint;
 
   const scriptCode = fs.readFileSync(AUTOINJECT_PATH, 'utf8');
   const scriptHash = sha256Hex(scriptCode).slice(0, 16);
-  const targets = await httpGetJson(port, '/json/list', 1500);
+  let targets = [];
+  try {
+    targets = await httpGetJson(port, '/json/list', 1500);
+  } catch {}
   const pageTargets = (Array.isArray(targets) ? targets : []).filter(
     (t) => t && t.type === 'page' && t.webSocketDebuggerUrl && !String(t.url || '').startsWith('devtools://')
   );
@@ -421,20 +529,40 @@ async function injectViaCdpLive() {
   let injectedCount = 0;
   let skippedAlreadyActive = 0;
 
-  for (const target of pageTargets) {
-    try {
-      const val = await configureTargetViaCdp(target.webSocketDebuggerUrl, scriptCode, scriptHash, 1500);
-      if (val === 'INJECTED_OK') injectedCount++;
-      else if (val === 'ALREADY_ACTIVE') skippedAlreadyActive++;
-    } catch {}
+  if (pageTargets.length > 0) {
+    for (const target of pageTargets) {
+      try {
+        const val = await configureTargetViaCdp(target.webSocketDebuggerUrl, scriptCode, scriptHash, 1500);
+        if (val === 'INJECTED_OK') injectedCount++;
+        else if (val === 'ALREADY_ACTIVE') skippedAlreadyActive++;
+      } catch {}
+    }
+    return {
+      attempted: true,
+      port,
+      pageTargetCount: pageTargets.length,
+      injectedCount,
+      skippedAlreadyActive,
+    };
+  }
+
+  if (browserPath && browserPath.startsWith('/devtools/browser/')) {
+    const wsRes = await injectViaBrowserCdpWs(`ws://127.0.0.1:${port}${browserPath}`, scriptCode, scriptHash, 1500);
+    return {
+      attempted: true,
+      port,
+      pageTargetCount: wsRes.pageTargetCount,
+      injectedCount: wsRes.injectedCount,
+      skippedAlreadyActive: wsRes.skippedAlreadyActive,
+    };
   }
 
   return {
     attempted: true,
     port,
-    pageTargetCount: pageTargets.length,
-    injectedCount,
-    skippedAlreadyActive,
+    pageTargetCount: 0,
+    injectedCount: 0,
+    skippedAlreadyActive: 0,
   };
 }
 
@@ -713,10 +841,13 @@ module.exports = {
   PRELOAD_ANCHOR_TARGET,
   PRELOAD_ANCHOR_REPLACEMENT,
   sha256Hex,
+  writeFileAtomicSync,
   computeIntegrity,
   transformExactSize,
   isAsarPatchedFast,
   syncAppStorageCode,
+  acquireLock,
+  releaseLock,
 };
 
 if (require.main === module) {

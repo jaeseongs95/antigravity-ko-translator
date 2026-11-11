@@ -258,6 +258,12 @@
       maxConcurrency: Number(adapter.maxConcurrency) > 0 ? Number(adapter.maxConcurrency) : 2,
       translate: adapter.translate,
     };
+    try {
+      const savedProv = localStorage.getItem(PROVIDER_STORAGE_KEY);
+      if (savedProv === id && activeTranslationProvider !== id) {
+        activeTranslationProvider = id;
+      }
+    } catch (e) {}
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }

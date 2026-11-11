@@ -20,11 +20,17 @@
         let changed = false;
         const savedProv = items[PROVIDER_STORAGE_KEY];
         if (savedProv && TRANSLATION_ADAPTERS[savedProv]) {
+          const effectiveProv =
+            isRemoteControlEnv && savedProv === 'local-llm' && !window.__agyLocalLlmConfig
+              ? 'google-translate'
+              : savedProv;
           try {
-            localStorage.setItem(PROVIDER_STORAGE_KEY, savedProv);
+            if (!isRemoteControlEnv || effectiveProv === savedProv) {
+              localStorage.setItem(PROVIDER_STORAGE_KEY, effectiveProv);
+            }
           } catch (e) {}
-          if (savedProv !== activeTranslationProvider) {
-            activeTranslationProvider = savedProv;
+          if (effectiveProv !== activeTranslationProvider) {
+            activeTranslationProvider = effectiveProv;
             if (activeTranslationProvider === 'local-llm') {
               resolveLocalLlmEndpoint().then(() => {
                 if (typeof refreshTranslatorSettingsUi === 'function') refreshTranslatorSettingsUi();

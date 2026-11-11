@@ -26,13 +26,70 @@ function readWindowsUserEnv(varName) {
   return null;
 }
 
+function parseCommandArgs(rawArgs) {
+  if (!rawArgs || typeof rawArgs !== 'string') return [];
+  const args = [];
+  let current = '';
+  let quoteChar = null;
+  for (let i = 0; i < rawArgs.length; i++) {
+    const ch = rawArgs[i];
+    if (quoteChar) {
+      if (ch === quoteChar) {
+        quoteChar = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quoteChar = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (current.length > 0) {
+        args.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += ch;
+  }
+  if (current.length > 0) {
+    args.push(current);
+  }
+  return args;
+}
+
+function extractListeningPidsFromNetstat(stdout, port, selfPid = process.pid) {
+  const pids = new Set();
+  const targetPort = Number(port);
+  if (!stdout || !Number.isInteger(targetPort) || targetPort <= 0) return pids;
+  const lines = String(stdout).split(/\r?\n/);
+  for (const line of lines) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 5) continue;
+    if (!/^TCP$/i.test(parts[0])) continue;
+    if (!/^LISTENING$/i.test(parts[3])) continue;
+    const localAddr = parts[1];
+    const colonIdx = localAddr.lastIndexOf(':');
+    if (colonIdx < 0) continue;
+    const portPart = localAddr.slice(colonIdx + 1);
+    if (!/^\d+$/.test(portPart) || Number(portPart) !== targetPort) continue;
+    const pid = Number(parts[4]);
+    if (Number.isInteger(pid) && pid > 0 && pid !== selfPid) {
+      pids.add(pid);
+    }
+  }
+  return pids;
+}
+
 function resolveLocalLlmCommand() {
   const bin = process.env.AGY_LOCAL_LLM_SERVER_BIN || readWindowsUserEnv('AGY_LOCAL_LLM_SERVER_BIN');
   if (!bin) return null;
   const rawArgs = process.env.AGY_LOCAL_LLM_SERVER_ARGS || readWindowsUserEnv('AGY_LOCAL_LLM_SERVER_ARGS') || 'serve';
   return {
     bin,
-    args: rawArgs.split(/\s+/).filter(Boolean),
+    args: parseCommandArgs(rawArgs),
   };
 }
 
@@ -128,19 +185,7 @@ async function stopLocalLlmServer(forceProcessScan = false) {
         encoding: 'utf8',
         windowsHide: true,
       });
-      const pids = new Set();
-      if (res.stdout) {
-        const lines = res.stdout.split(/\r?\n/);
-        for (const line of lines) {
-          if (line.includes(`:${port}`) && /LISTENING/i.test(line)) {
-            const parts = line.trim().split(/\s+/);
-            const pid = Number(parts[parts.length - 1]);
-            if (pid > 0 && pid !== process.pid) {
-              pids.add(pid);
-            }
-          }
-        }
-      }
+      const pids = extractListeningPidsFromNetstat(res.stdout, port, process.pid);
       for (const pid of pids) {
         spawnSync('taskkill', ['/F', '/T', '/PID', String(pid)], {
           stdio: 'ignore',
@@ -182,6 +227,8 @@ async function stopLocalLlmServer(forceProcessScan = false) {
 }
 
 module.exports = {
+  parseCommandArgs,
+  extractListeningPidsFromNetstat,
   readWindowsUserEnv,
   resolveLocalLlmCommand,
   probeLocalLlmServer,

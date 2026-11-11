@@ -27,10 +27,10 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.28';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.29';"));
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugin.json'), 'utf8'));
-  assert.equal(pkgJson.version, '1.2.33');
+  assert.equal(pkgJson.version, '1.2.34');
   assert.equal(pluginJson.version, pkgJson.version, 'D-0019: plugin.json version must stay synchronized with package.json');
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
@@ -993,7 +993,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.28',
+      __agyKoLocalizerActive: 'v13.29',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1002,6 +1002,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
         if (s === 'Exited with code 0') return '종료 코드 0';
         if (s === '2 subagents/tasks running') return '서브에이전트/작업 2개 실행 중';
         if (s === 'CLI Project') return 'CLI 프로젝트';
+        if (s === 'Local Checkout') return '로컬 체크아웃';
+        if (s === 'Type') return '유형';
         return null;
       },
       __agyLastDefaultPretranslate: false,
@@ -1588,8 +1590,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 14. D-0013~D-0019 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, .no-animations Web Animations suppression, 16ms FOUC elimination, worked-for latest turn guard, retranslateVisibleThoughts parent propagation, queued messages card & new strings, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.28') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.28 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v13.29') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.29 and must NOT claim verboseConversationSteps: true is force-enabled'
   );
   const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
   assert.ok(
@@ -2041,8 +2043,8 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
   const readmeKo = fs.readFileSync(readmeKoPath, 'utf8');
   assert.ok(readmeEn.includes('[한국어 문서 (README.ko.md)](./README.ko.md)'), 'D-0022: English README.md must link to README.ko.md at the top');
   assert.ok(readmeKo.includes('[English Documentation (README.md)](./README.md)'), 'D-0022: Korean README.ko.md must link to README.md at the top');
-  assert.ok(readmeEn.includes('v1.2.33') && readmeEn.includes('v13.28'), 'D-0022: README.md must reflect v1.2.33 / v13.28');
-  assert.ok(readmeKo.includes('v1.2.33') && readmeKo.includes('v13.28'), 'D-0022: README.ko.md must reflect v1.2.33 / v13.28');
+  assert.ok(readmeEn.includes('v1.2.34') && readmeEn.includes('v13.29'), 'D-0022: README.md must reflect v1.2.34 / v13.29');
+  assert.ok(readmeKo.includes('v1.2.34') && readmeKo.includes('v13.29'), 'D-0022: README.ko.md must reflect v1.2.34 / v13.29');
 
   // D-0023: Verify segment.isLatest:false overrides isLastContainer:true on Lhc fiber so historical execution segments inside the latest turn container are NEVER force-expanded on session switch
   const activeHelperMatch = mod08.match(
@@ -2118,5 +2120,369 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
     d0023Sandbox.__isThinking(latestSegmentInLatestTurnBtn, [latestSegmentInLatestTurnBtn], [latestSegmentInLatestTurnBtn]),
     true,
     'D-0023: isThinkingTriggerInActiveOrLatestTurn must return true when segment.isLatest is true and isLastContainer is true'
+  );
+});
+
+test('D-0024..D-0031 comprehensive audit regressions (v1.2.34 / v13.29 & Antigravity v2.31.0)', async () => {
+  const os = require('node:os');
+  const mod01 = fs.readFileSync(path.join(RENDERER_DIR, '01-bootstrap-and-cache.js'), 'utf8');
+  const mod02 = fs.readFileSync(path.join(RENDERER_DIR, '02-static-ui-dict.js'), 'utf8');
+  const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
+  const mod04 = fs.readFileSync(path.join(RENDERER_DIR, '04-translation-adapters.js'), 'utf8');
+  const mod05 = fs.readFileSync(path.join(RENDERER_DIR, '05-fiber-pretranslator.js'), 'utf8');
+  const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
+  const mod07 = fs.readFileSync(path.join(RENDERER_DIR, '07-statusbar-adapter.js'), 'utf8');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+
+  // D-0024: README.md and README.ko.md must document '한글 번역' tab options accurately without claiming Show Thinking is inside '한글 번역' tab
+  const readmeEn = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+  const readmeKo = fs.readFileSync(path.join(ROOT, 'README.ko.md'), 'utf8');
+  const koTabSectionEn = readmeEn.split('2. **Bottom-Left `Settings`')[1]?.split('3. **Model Selector Dropdown')[0] || '';
+  const koTabSectionKo = readmeKo.split('2. **좌측 하단 `설정`')[1]?.split('3. **채팅 입력창 하단')[0] || '';
+  assert.ok(koTabSectionEn.length > 0 && !koTabSectionEn.includes('Show Thinking'), 'D-0024: README.md KoTranslator tab section must not claim Show Thinking toggle lives inside KoTranslator tab');
+  assert.ok(koTabSectionKo.length > 0 && !koTabSectionKo.includes('Thinking (추론 과정) 표시'), 'D-0024: README.ko.md KoTranslator tab section must not claim Thinking 표시 toggle lives inside 한글 번역 tab');
+  assert.ok(readmeEn.includes('Settings > Appearance > Chat'), 'D-0024: README.md must document dedicated Show Thinking placement');
+  assert.ok(readmeKo.includes('설정 > 모양 및 테마(Appearance) > 채팅(Chat)'), 'D-0024: README.ko.md must document dedicated Show Thinking placement');
+
+  // D-0025: Korean particle fixer must handle (으)로 (including ㄹ batchim exception) and NEVER corrupt unquoted plain Korean words
+  const tokSandbox = {
+    document: {
+      createTextNode: (txt) => ({ nodeType: 3, nodeValue: txt, textContent: txt, cloneNode: function () { return { ...this }; } }),
+    },
+  };
+  vm.runInNewContext(
+    `${mod03}\n;globalThis.__protect = protectIdentifiersInThoughtText; globalThis.__restore = restoreIdentifiersInThoughtText; globalThis.__buildEl = buildTranslatedElement;`,
+    tokSandbox
+  );
+
+  const p1 = tokSandbox.__protect("Switch to '설정' and `파일` and '모드'");
+  const r1 = tokSandbox.__restore('⟦T0⟧로 이동하고 ⟦T1⟧으로 저장하며 ⟦T2⟧(으)로 전환합니다.', p1.savedTokens);
+  assert.equal(
+    r1,
+    "'설정'으로 이동하고 `파일`로 저장하며 '모드'로 전환합니다.",
+    'D-0025: restoreIdentifiersInThoughtText must apply 으로 for non-ㄹ batchim and 로 for ㄹ batchim or vowel endings'
+  );
+
+  // Plain unquoted Korean vocabulary (있는, 없는, 효과, 차이, 경로) must NEVER be corrupted even when savedTokens is non-empty
+  const p2 = tokSandbox.__protect('Check `config.json` path');
+  const r2 = tokSandbox.__restore('⟦T0⟧에서 효과가 있는 방법과 없는 경로의 차이를 확인합니다.', p2.savedTokens);
+  assert.equal(
+    r2,
+    '`config.json`에서 효과가 있는 방법과 없는 경로의 차이를 확인합니다.',
+    'D-0025: unquoted plain Korean words (있는, 없는, 효과, 경로, 차이) must never be mutated by particle fixer'
+  );
+
+  // buildTranslatedElement <code> restoration particle check
+  const makeElem = (tag, text = '') => ({
+    tagName: tag,
+    textContent: text,
+    children: [],
+    appendChild(ch) {
+      this.children.push(ch);
+      this.textContent += ch.textContent || ch.nodeValue || '';
+    },
+    cloneNode(deep) {
+      return makeElem(this.tagName, deep ? this.textContent : '');
+    },
+  });
+  const builtP = tokSandbox.__buildEl(
+    makeElem('P'),
+    [makeElem('CODE', '파일'), makeElem('CODE', '설정')],
+    '⟦C0⟧으로 열고 ⟦C1⟧로 저장'
+  );
+  assert.equal(
+    builtP.textContent,
+    '파일로 열고 설정으로 저장',
+    'D-0025: buildTranslatedElement must adjust particles immediately following restored <code> elements including ㄹ batchim'
+  );
+
+  // D-0026: Remote Control web environment guard in loadPersistentTranslatorSettings & custom adapter persistence
+  const rcSandbox = {
+    DEFAULT_TRANSLATION_PROVIDER: 'google-translate',
+    PROVIDER_STORAGE_KEY: 'agy-ko-thought-provider',
+    SHOW_THINKING_STORAGE_KEY: 'agy-ko-thought-show-thinking',
+    TRANSLATE_THINKING_STORAGE_KEY: 'agy-ko-thought-translate-thinking',
+    PRETRANSLATE_STORAGE_KEY: 'agy-ko-thought-pretranslate',
+    DEFAULT_PRETRANSLATE_ENABLED: false,
+    showThinkingEnabled: true,
+    translateThinkingEnabled: true,
+    resolvedLlmEndpoint: null,
+    resolveLocalLlmEndpoint: async () => null,
+    refreshTranslatorSettingsUi: () => {},
+    protectIdentifiersInThoughtText: (t) => ({ protectedText: t, savedTokens: [] }),
+    restoreIdentifiersInThoughtText: (t) => t,
+    isInvalidCachedOrTranslatedText: () => false,
+    memCache: new Map(),
+    inflightMap: new Map(),
+    flushCleanCacheToStorage: () => {},
+    setTimeout,
+    clearTimeout,
+    AbortController,
+    URL,
+    fetch: async () => ({ ok: true, json: async () => [] }),
+    localStorage: {
+      _map: new Map([['agy-ko-thought-provider', 'custom-deepl']]),
+      getItem(k) { return this._map.has(k) ? this._map.get(k) : null; },
+      setItem(k, v) { this._map.set(k, String(v)); },
+    },
+    window: {
+      location: { origin: 'https://antigravity.google.com' },
+      nativeStorage: {
+        getItems: async () => ({ 'agy-ko-thought-provider': 'local-llm' }),
+        updateItems: () => {},
+      },
+    },
+  };
+  rcSandbox.window.localStorage = rcSandbox.localStorage;
+  vm.runInNewContext(`${mod04}\n${mod05}`, rcSandbox);
+  assert.equal(
+    rcSandbox.window.__agyGetTranslationProvider(),
+    'google-translate',
+    'D-0026: Remote web must start with google-translate when custom-deepl is not registered yet'
+  );
+  await rcSandbox.window.__agySyncPersistentSettings();
+  assert.equal(
+    rcSandbox.window.__agyGetTranslationProvider(),
+    'google-translate',
+    'D-0026: loadPersistentTranslatorSettings in Remote Control web without __agyLocalLlmConfig must NOT switch to host local-llm'
+  );
+  // Registering saved custom adapter must restore it automatically
+  rcSandbox.localStorage.setItem('agy-ko-thought-provider', 'custom-deepl');
+  rcSandbox.window.__agyRegisterTranslationAdapter('custom-deepl', {
+    label: 'DeepL Custom',
+    translate: async ({ cleanText }) => cleanText,
+  });
+  assert.equal(
+    rcSandbox.window.__agyGetTranslationProvider(),
+    'custom-deepl',
+    'D-0026: registering a custom adapter matching saved localStorage provider must restore activeTranslationProvider'
+  );
+
+  // D-0027: restoreAllMutatedNodes must clear parentElement.__agyDynamicSource & __agyTranslatingDynamic; unregisterStatusbarTranslatorAdapter must delete pending Map entry
+  const dynParent = { __agyDynamicSource: 'Allow command execution?', __agyTranslatingDynamic: true };
+  const dynTextNode = {
+    nodeType: 3,
+    nodeValue: '명령 실행을 허용할까요?',
+    __agyOrigValue: 'Allow command execution?',
+    __agyKoApplied: '명령 실행을 허용할까요?',
+    parentElement: dynParent,
+  };
+  const restoreSandbox = {
+    NodeFilter: { SHOW_TEXT: 4 },
+    window: { location: { origin: 'https://127.0.0.1:58069' } },
+    localStorage: { getItem: () => null, setItem: () => {} },
+    document: {
+      body: {},
+      createTreeWalker: () => {
+        let done = false;
+        return {
+          nextNode() {
+            if (done) return null;
+            done = true;
+            return dynTextNode;
+          },
+        };
+      },
+      querySelectorAll: () => [],
+    },
+  };
+  vm.runInNewContext(`${mod01}\n;globalThis.__restoreAll = restoreAllMutatedNodes;`, restoreSandbox);
+  restoreSandbox.__restoreAll();
+  assert.equal(dynTextNode.nodeValue, 'Allow command execution?');
+  assert.equal(dynParent.__agyDynamicSource, undefined, 'D-0027: restoreAllMutatedNodes must delete parentElement.__agyDynamicSource');
+  assert.equal(dynParent.__agyTranslatingDynamic, undefined, 'D-0027: restoreAllMutatedNodes must delete parentElement.__agyTranslatingDynamic');
+
+  const pendingAdapters = new Map();
+  const sbSandbox = {
+    disposed: false,
+    activeTranslationProvider: 'google-translate',
+    KO_LOCALIZER_VERSION: 'v13.29',
+    getProviderDisplayMeta: () => ({ shortLabel: 'Google 번역', title: 'Google 번역' }),
+    openOrToggleTranslatorSettingsModal: () => {},
+    closeTranslatorSettingsModal: () => {},
+    window: { __agyCustomStatusBarAdapters: pendingAdapters },
+  };
+  vm.runInNewContext(
+    `${mod07}\n;globalThis.__regSb = registerStatusbarTranslatorAdapter; globalThis.__unregSb = unregisterStatusbarTranslatorAdapter;`,
+    sbSandbox
+  );
+  sbSandbox.__regSb();
+  assert.equal(pendingAdapters.has('ko-translator'), true);
+  sbSandbox.__unregSb();
+  assert.equal(
+    pendingAdapters.has('ko-translator'),
+    false,
+    'D-0027: unregisterStatusbarTranslatorAdapter must delete stale ko-translator entry from __agyCustomStatusBarAdapters Map'
+  );
+
+  // D-0028: local-llm-service.js exact port matching & quoted argument preservation
+  const { parseCommandArgs, extractListeningPidsFromNetstat } = require(path.join(HOST_DIR, 'local-llm-service.js'));
+  assert.deepEqual(
+    parseCommandArgs('serve --model "C:\\Program Files\\Models\\qwen ko.gguf" --port 11434'),
+    ['serve', '--model', 'C:\\Program Files\\Models\\qwen ko.gguf', '--port', '11434'],
+    'D-0028: parseCommandArgs must preserve quoted paths containing spaces'
+  );
+  const sampleNetstat = [
+    '  Proto  Local Address          Foreign Address        State           PID',
+    '  TCP    127.0.0.1:11434        0.0.0.0:0              LISTENING       4242',
+    '  TCP    127.0.0.1:52000        127.0.0.1:1143         ESTABLISHED     5151',
+    '  TCP    127.0.0.1:1143         0.0.0.0:0              TIME_WAIT       0',
+    '  TCP    [::1]:1143             [::]:0                 LISTENING       7777',
+    '  TCP    127.0.0.1:1143         0.0.0.0:0              LISTENING       9999',
+  ].join('\r\n');
+  const matchedPids = extractListeningPidsFromNetstat(sampleNetstat, 1143, 9999);
+  assert.deepEqual(
+    Array.from(matchedPids),
+    [7777],
+    'D-0028: extractListeningPidsFromNetstat must match only exact local port in LISTENING state, excluding substring ports (:11434), foreign ports, PID 0, and selfPid'
+  );
+
+  // D-0029: ensure_statusbar_patch.js owner-verified lock & writeFileAtomicSync parent mkdir
+  const statusbarPatcher = require(path.join(HOST_DIR, 'ensure_statusbar_patch.js'));
+  const tmpTestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-d0029-'));
+  try {
+    const nestedFile = path.join(tmpTestDir, 'nested', 'sub', 'atomic.json');
+    statusbarPatcher.writeFileAtomicSync(nestedFile, '{"ok":true}');
+    assert.equal(fs.readFileSync(nestedFile, 'utf8'), '{"ok":true}', 'D-0029: writeFileAtomicSync must create missing parent directories');
+
+    const lockFile = path.join(tmpTestDir, 'locks', 'patch.lock');
+    assert.equal(statusbarPatcher.acquireLock(lockFile, 60000), true, 'D-0029: initial acquireLock must succeed');
+    // Simulate another worker taking over after lock expiry
+    fs.writeFileSync(lockFile, JSON.stringify({ pid: 88888, token: 'other-worker-token' }), 'utf8');
+    statusbarPatcher.releaseLock(lockFile);
+    assert.equal(
+      fs.existsSync(lockFile),
+      true,
+      'D-0029: releaseLock must NOT unlink lock file when owned by a different worker token'
+    );
+  } finally {
+    fs.rmSync(tmpTestDir, { recursive: true, force: true });
+  }
+
+  // D-0030: Zero duplicate keys in STATIC_UI_MAP + contextual 'Type ' + <kbd>/</kbd> localization
+  const mapStart = mod02.indexOf('const STATIC_UI_MAP = {');
+  const mapEnd = mod02.indexOf('\n  };', mapStart);
+  assert.ok(mapStart >= 0 && mapEnd > mapStart, 'STATIC_UI_MAP block must exist');
+  const mapBody = mod02.slice(mapStart + 'const STATIC_UI_MAP = {'.length, mapEnd);
+  const keyRegex = /^\s*(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)")\s*:/gm;
+  const seenKeys = new Set();
+  const duplicateKeys = [];
+  let km;
+  while ((km = keyRegex.exec(mapBody)) !== null) {
+    const rawKey = km[1] !== undefined ? km[1] : km[2];
+    if (seenKeys.has(rawKey)) duplicateKeys.push(rawKey);
+    seenKeys.add(rawKey);
+  }
+  assert.deepEqual(duplicateKeys, [], 'D-0030: STATIC_UI_MAP must contain zero duplicate keys');
+
+  const dictSandbox = {};
+  vm.runInNewContext(`${mod02}\n;globalThis.__tr = translateStaticUiSync;`, dictSandbox);
+  assert.equal(dictSandbox.__tr('Type'), '유형', 'D-0030: standalone "Type" must translate to "유형"');
+  assert.equal(dictSandbox.__tr('Workspaces'), '작업공간', 'D-0030: "Workspaces" must translate to "작업공간"');
+
+  // Verify contextual 'Type ' followed by <kbd>/</kbd> translates to '채팅창에 '
+  const kbdSibling = { nodeType: 1, tagName: 'KBD', textContent: '/' };
+  const slashTextNode = {
+    nodeType: 3,
+    nodeValue: 'Type ',
+    nextSibling: kbdSibling,
+    parentElement: {
+      tagName: 'SPAN',
+      classList: { contains: () => false },
+      getAttribute: () => null,
+      closest: () => null,
+    },
+  };
+  const slashRoot = {
+    nodeType: 1,
+    getAttribute: () => null,
+    querySelectorAll: () => [],
+  };
+  const domObsSandbox = {
+    NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3 },
+    Node: { TEXT_NODE: 3 },
+    translateStaticUiSync: dictSandbox.__tr,
+    isAlreadyKoreanOrNonEnglish: () => true,
+    translateThoughtTextEnToKo: async (s) => s,
+    observer: { takeRecords: () => [] },
+    document: {
+      createTreeWalker: () => {
+        let step = 0;
+        return {
+          nextNode() {
+            step++;
+            return step === 1 ? slashTextNode : null;
+          },
+        };
+      },
+    },
+  };
+  const locStaticMatch = mod08.match(/const CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR[\s\S]*?function doesWorkedForButtonContainThinking/);
+  assert.ok(locStaticMatch, 'localizeStaticUiInRoot section must exist in 08-dom-observer.js');
+  const locStaticSource = locStaticMatch[0].replace(/\r?\n\r?\n  function doesWorkedForButtonContainThinking$/, '');
+  vm.runInNewContext(
+    `${locStaticSource}\n;globalThis.__locRoot = localizeStaticUiInRoot; globalThis.__isExcl = isExcludedFromStaticUiLocalization;`,
+    domObsSandbox
+  );
+  domObsSandbox.__locRoot(slashRoot);
+  assert.equal(
+    slashTextNode.nodeValue,
+    '채팅창에 ',
+    'D-0030: "Type " immediately preceding <kbd>/</kbd> must translate contextually to "채팅창에 "'
+  );
+
+  // D-0031: Antigravity v2.31.0 static/dynamic strings, conversation-row-history & permissions-selector-trigger exclusions, and keepMounted settings modal deactivation
+  assert.equal(dictSandbox.__tr('Local Checkout'), '로컬 체크아웃');
+  assert.equal(dictSandbox.__tr('Select Environment'), '환경 선택');
+  assert.equal(dictSandbox.__tr('Side Question'), '사이드 질문');
+  assert.equal(dictSandbox.__tr('Browse the Marketplace'), '마켓플레이스 둘러보기');
+  assert.equal(dictSandbox.__tr('Manage Hooks'), '훅(Hooks) 관리');
+  assert.equal(
+    dictSandbox.__tr('Agent permissions preset selector, current: Auto'),
+    '에이전트 권한 프리셋 선택기, 현재: 자동'
+  );
+  assert.equal(
+    dictSandbox.__tr('This workspace overrides your global permission settings.'),
+    '이 작업공간은 전역 권한 설정보다 우선 적용됩니다.'
+  );
+  assert.equal(dictSandbox.__tr('Reply to Code Reviewer...'), 'Code Reviewer에게 답장...');
+
+  // conversation-row-history title excluded while volatile timestamp remains translatable; permissions-selector-trigger excluded
+  const historyRowEl = { getAttribute: (k) => (k === 'data-testid' ? 'conversation-row-history' : null) };
+  const historyTitleSpan = {
+    tagName: 'SPAN',
+    textContent: 'My User Chat Title',
+    classList: { contains: () => false },
+    getAttribute: () => null,
+    closest: (sel) => (sel === '[data-testid]' ? historyRowEl : null),
+  };
+  const historyTimeSpan = {
+    tagName: 'SPAN',
+    textContent: '2m ago',
+    classList: { contains: () => false },
+    getAttribute: () => null,
+    closest: (sel) => {
+      if (sel === '[data-testid]') return historyRowEl;
+      if (sel === '[data-screenshot-volatile="true"]') return {};
+      return null;
+    },
+  };
+  const permTriggerChild = {
+    tagName: 'SPAN',
+    textContent: 'Auto',
+    classList: { contains: () => false },
+    getAttribute: () => null,
+    closest: (sel) => (sel.includes('[data-testid="permissions-selector-trigger"]') ? {} : null),
+  };
+  assert.equal(domObsSandbox.__isExcl(historyTitleSpan, false), true, 'D-0031: user chat title inside conversation-row-history must be excluded');
+  assert.equal(domObsSandbox.__isExcl(historyTimeSpan, false), false, 'D-0031: volatile timestamp inside conversation-row-history must be translated');
+  assert.equal(domObsSandbox.__isExcl(permTriggerChild, false), true, 'D-0031: permissions-selector-trigger in v2.31.0 must be excluded');
+
+  // keepMounted settings modal deactivation & dynamic nav button binding check
+  assert.ok(
+    mod06.includes('.settings-modal-container[data-agy-ko-pane-active="1"]') &&
+      mod06.includes("backdropEl.getAttribute('aria-hidden') === 'true'") &&
+      mod06.includes('otherBtn.__agyKoNavBound'),
+    'D-0031: 06-settings-modal-ui.js must suppress dual nav highlight, bind dynamically rendered nav buttons, and auto-deactivate KoPane when keepMounted backdrop becomes aria-hidden="true"'
   );
 });

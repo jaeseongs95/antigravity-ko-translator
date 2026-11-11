@@ -407,7 +407,7 @@
       'style, script, code, pre, [contenteditable="true"], .monaco-editor, .xterm, ' +
       '[data-agy-no-translate="true"], .agy-ctx-statusbar, .agy-ctx-menu, #agy-ctx-debug-modal, .agy-ctx-modal-backdrop, ' +
       '.agy-ko-settings-root, #agy-ko-translator-modal, ' +
-      '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
+      '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
       'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
       '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
       '[data-uri], [data-quotable-inline="true"], .cursor-edit';
@@ -465,7 +465,7 @@
       }
     }
     const testId = el.getAttribute('data-testid') || el.closest('[data-testid]')?.getAttribute('data-testid');
-    if (testId === 'conversation-row-sidebar') {
+    if (testId === 'conversation-row-sidebar' || testId === 'conversation-row-history') {
       if (forAttributes && el.tagName === 'BUTTON') return false;
       if (!forAttributes && el.closest('[data-screenshot-volatile="true"]')) return false;
       return true;
@@ -572,7 +572,7 @@
     '[data-agy-no-translate="true"], .agy-ctx-statusbar, .agy-ctx-menu, #agy-ctx-debug-modal, .agy-ctx-modal-backdrop, ' +
     '#agy-mcp-manager-modal-backdrop, #agy-mcp-edit-popup-backdrop, #agy-mcp-oauth-connect-backdrop, #agy-mcp-settings-pane, ' +
     '.agy-ko-settings-root, #agy-ko-translator-modal, ' +
-    '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
+    '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
     'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
     '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
     '[data-uri], [data-quotable-inline="true"], .cursor-edit';
@@ -648,6 +648,13 @@
           !btn.closest('[role="menu"], [role="listbox"], [role="menuitem"]') &&
           ((btn.textContent || '').trim() === 'New' || (btn.textContent || '').trim() === '새로 만들기');
         syncKo = isStandaloneNewBtn ? '새로 만들기' : null;
+      } else if (
+        trimmed === 'Type' &&
+        textNode.nextSibling &&
+        textNode.nextSibling.nodeType === 1 &&
+        (textNode.nextSibling.tagName === 'KBD' || textNode.nextSibling.tagName === 'CODE')
+      ) {
+        syncKo = '채팅창에';
       } else {
         syncKo = translateStaticUiSync(trimmed);
       }

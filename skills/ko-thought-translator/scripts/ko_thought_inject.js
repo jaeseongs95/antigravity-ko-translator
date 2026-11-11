@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.33
+// @version      1.2.34
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.28';
+  const KO_LOCALIZER_VERSION = 'v13.29';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -87,10 +87,15 @@
       let rn;
       while ((rn = restoreWalker.nextNode())) {
         if (rn.__agyOrigValue !== undefined) {
+          const parentEl = rn.parentElement;
           rn.nodeValue = rn.__agyOrigValue;
           delete rn.__agyOrigValue;
           delete rn.__agyKoApplied;
           delete rn.__agyPendingDynamic;
+          if (parentEl) {
+            delete parentEl.__agyDynamicSource;
+            delete parentEl.__agyTranslatingDynamic;
+          }
         }
       }
 
@@ -421,6 +426,8 @@
       window.__agyTranslateStaticUiSync('Exited with code 0') === '종료 코드 0' &&
       window.__agyTranslateStaticUiSync('2 subagents/tasks running') === '서브에이전트/작업 2개 실행 중' &&
       window.__agyTranslateStaticUiSync('CLI Project') === 'CLI 프로젝트' &&
+      window.__agyTranslateStaticUiSync('Local Checkout') === '로컬 체크아웃' &&
+      window.__agyTranslateStaticUiSync('Type') === '유형' &&
       !document.getElementById('agy-ko-settings-card')
     ) {
       if (typeof window.__agySyncPersistentSettings === 'function') {
@@ -455,7 +462,11 @@
         let hasSavedProv = false;
         try {
           const sv = localStorage.getItem(PROVIDER_STORAGE_KEY);
-          if (sv === 'google-translate' || sv === 'local-llm') hasSavedProv = true;
+          const knownProviders =
+            typeof window.__agyListTranslationProviders === 'function'
+              ? window.__agyListTranslationProviders()
+              : ['google-translate', 'local-llm'];
+          if (sv && Array.isArray(knownProviders) && knownProviders.includes(sv)) hasSavedProv = true;
         } catch (e) {}
         if (!hasSavedProv) {
           window.__agySetTranslationProvider(DEFAULT_TRANSLATION_PROVIDER);
@@ -580,7 +591,7 @@
     'Other': '기타 (직접 입력)',
     '(Recommended)': '(권장)',
     'Skip': '건너뛰기',
-    'Submit': '확인',
+    'Submit': '제출',
     'Enter': '확인',
     'Continue': '계속',
     'Retry': '다시 시도',
@@ -624,7 +635,7 @@
     'Paste auth code': '인증 코드 붙여넣기',
     'Unknown Server': '알 수 없는 서버',
     'Refresh': '새로고침',
-    'Reconnect': '재연결',
+    'Reconnect': '다시 연결',
     'Configure': '설정',
     // Tool step action verbs
     'Explored': '탐색함',
@@ -677,7 +688,6 @@
     'Add Project': '프로젝트 추가',
     'Project options': '프로젝트 옵션',
     'New Conversation in Project': '프로젝트에서 새 대화',
-    'More options': '더보기',
     'More actions': '추가 작업',
     'Pin conversation': '대화 고정',
     'Unpin conversation': '대화 고정 해제',
@@ -849,12 +859,12 @@
       '에이전트가 검토를 요청하지 않고 즉시 진행합니다. 자율성이 극대화되지만 신뢰할 수 없는 콘텐츠 처리 시 위험도가 높아집니다.',
     'The agent always asks for review.': '에이전트가 항상 사용자에게 검토를 요청합니다.',
     'Agent always asks for review.': '에이전트가 항상 사용자에게 검토를 요청합니다.',
-    'Type': '채팅창에',
+    'Type': '유형',
     'and select': '입력 후',
     'to have the agent generate a plan.': '을(를) 선택하면 에이전트가 계획을 생성합니다.',
 
     // Settings -> Execution & Queued Messages & Sandbox
-    'Queued Messages': '대기열 메시지',
+    'Queued Messages': '대기 중인 메시지',
     'Configure what the agent can do in local and remote conversations.':
       '로컬 및 원격 대화에서 에이전트가 수행할 수 있는 작업 권한을 설정합니다.',
     'Configure when follow-up messages are sent.': '후속 메시지를 전송하는 시점을 설정합니다.',
@@ -920,7 +930,6 @@
     'Which workspace the New Conversation button and keyboard shortcut start you in.':
       '새 대화 버튼 및 단축키 실행 시 시작할 기본 작업공간을 설정합니다.',
     'New Workspace': '새 작업공간',
-    'No Project': '프로젝트 없음',
     'Last Workspace': '마지막 작업공간',
     'Create a new workspace from your first message.': '첫 메시지에서 새 작업공간을 생성합니다.',
     'Start without a workspace, for general questions.': '일반적인 질문을 위해 작업공간 없이 시작합니다.',
@@ -1125,7 +1134,6 @@
     'Scheduled': '예약됨',
     'Generic': '일반',
     'Status': '상태',
-    'Type': '유형',
     'Command': '명령어',
     'Uptime': '가동 시간',
     'Events': '이벤트',
@@ -1155,14 +1163,13 @@
     'Resolving...': '확인 중...',
     'Resolving permissions...': '권한 확인 중...',
     'Folders these agents can access.': '이 에이전트가 접근할 수 있는 폴더입니다.',
-    'Access grants': '접근 권한 부여',
-    'Commands and files these agents can use.': '이 에이전트가 사용할 수 있는 명령어 및 파일입니다.',
+    'Access grants': '접근 권한',
+    'Commands and files these agents can use.': '이 에이전트가 사용할 수 있는 명령어와 파일입니다.',
     'Confirm & Save': '확인 및 저장',
     'Saving...': '저장 중...',
     'Unsandboxed commands': '비샌드박스 명령어',
     'Read files': '파일 읽기',
     'Write files': '파일 쓰기',
-    'Read URLs': 'URL 읽기',
     'Browser actions': '브라우저 작업',
     'MCP tools': 'MCP 도구',
     'Admin escalation': '관리자 권한 상승',
@@ -1173,15 +1180,11 @@
     'Credentials expired. This automation will not run until credentials are refreshed': '자격 증명이 만료되었습니다. 자격 증명을 새로고침하기 전까지 자동화가 실행되지 않습니다',
     // Ask Question & Permission Approval Widgets
     'Other (write your answer)': '기타 (직접 입력)',
-    '(tell the agent what to do instead)': '(대신 수행할 작업을 입력하세요)',
     'Yes, execute a test run now to configure permissions': '예, 지금 테스트 실행을 진행하여 권한을 설정합니다',
     '(Recommended) Yes, execute a test run now to configure permissions': '(권장) 예, 지금 테스트 실행을 진행하여 권한을 설정합니다',
     'What should be the cadence of the automation?': '자동화 실행 주기를 어떻게 설정할까요?',
     'Pushing commits to the remote repository lands work on a shared release branch and modifies remote state visible to others.':
       '원격 저장소에 커밋을 push하면 공유 브랜치에 변경 사항이 반영되며 다른 사용자에게 보이는 원격 상태가 수정됩니다.',
-    'Skip': '건너뛰기',
-    'Submit': '제출',
-    'Continue': '확인',
     'Multi-select': '다중 선택',
     'Previous question': '이전 질문',
     'Next question': '다음 질문',
@@ -1239,13 +1242,11 @@
     'Enable AI Credit Overages': 'AI 크레딧 초과 사용 활성화',
     'See Activity': '활동 내역 보기',
     'Get More AI Credits': 'AI 크레딧 추가 구매',
-    'Notifications': '알림',
     'Manage your notification preferences.': '알림 환경설정을 관리합니다.',
     'Sound': '소리',
     'Volume': '음량',
     'Set the volume of agent sounds.': '에이전트 알림음 음량을 설정합니다.',
     'Chime volume': '알림음 음량',
-    'Developer': '개발자',
     'Developer-only tools. These settings are stored locally in this browser and do not affect other users.':
       '개발자 전용 도구입니다. 이 설정은 현재 브라우저에 로컬로 저장되며 다른 사용자에게 영향을 주지 않습니다.',
     'Manage your plan, credentials, and general preferences.':
@@ -1288,7 +1289,6 @@
     'Task Logs': '작업 로그',
     'Close Logs Modal': '로그 모달 닫기',
     'Sent Message': '보낸 메시지',
-    'New Conversation': '새 대화',
     'Payload:': '페이로드:',
     'ID:': 'ID:',
     'Error:': '오류:',
@@ -1299,7 +1299,6 @@
     'Stopped': '중지됨',
     'Backoff': '재시도 대기',
     'Unknown': '알 수 없음',
-    'See less': '접기',
     'Triggered': '트리거됨',
     'around': '경 —',
     'on': '요일:',
@@ -1310,10 +1309,6 @@
     'Please fill out all required argument values before continuing.': '계속하기 전에 모든 필수 인자 값을 입력해 주세요.',
     'Failed to resolve permissions. Please try again.': '권한을 확인하지 못했습니다. 다시 시도해 주세요.',
     'Failed to update permissions. Please try again.': '권한을 업데이트하지 못했습니다. 다시 시도해 주세요.',
-    'Workspaces': '작업 공간',
-    'Folders these agents can access.': '이 에이전트가 접근할 수 있는 폴더입니다.',
-    'Access grants': '접근 권한',
-    'Commands and files these agents can use.': '이 에이전트가 사용할 수 있는 명령어와 파일입니다.',
     'needs a few details from you before it can run.': '실행하기 전에 몇 가지 추가 정보가 필요합니다.',
     'Are you sure you want to delete': '다음 항목을 삭제하시겠습니까:',
     '? This action cannot be undone.': '? 이 작업은 되돌릴 수 없습니다.',
@@ -1325,12 +1320,9 @@
 
     // Permission Widget 추가분
     'Always allow': '항상 허용',
-    'Allow Once': '이번만 허용',
     'Allow This Conversation': '이 대화에서 허용',
     'Allow Conversation': '대화에서 허용',
-    'Deny': '거부',
     'Requires manual confirmation.': '수동 확인이 필요합니다.',
-    'Edit permission target': '권한 대상 편집',
     'Add folder': '폴더 추가',
     'Add value': '값 추가',
     'All paths (*)': '모든 경로 (*)',
@@ -1368,7 +1360,6 @@
     'Open project settings': '프로젝트 설정 열기',
     'Edit task title': '작업 제목 편집',
     'Enter scheduled task name...': '예약 작업 이름 입력...',
-    'Queued Messages': '대기 중인 메시지',
     'Queued messages': '대기 중인 메시지',
     'Sends after agent finishes working': '에이전트 작업이 끝나면 전송됩니다',
     'Collapse queued messages': '대기 중인 메시지 접기',
@@ -1572,8 +1563,6 @@
       '사용자 지정 OAuth MCP 포털(https://.../mcp) 또는 로컬 Stdio(npx / uvx / node / python) 서버:',
     '⚡ Quick Auto-Add (Enter Remote OAuth MCP URL, GitHub/npm Address, Command, or JSON):':
       '⚡ 빠른 자동 추가 (원격 OAuth MCP URL, GitHub/npm 주소, 명령어 또는 JSON 입력):',
-    'https://mcp.example.com/mcp, https://github.com/owner/repo, @playwright/mcp, or npx -y ...':
-      'https://mcp.example.com/mcp, https://github.com/owner/repo, @playwright/mcp 또는 npx -y ...',
     'No custom MCP servers configured yet. Click "+ Add Custom MCP Server" to register a remote OAuth MCP portal or local Stdio server.':
       '아직 설정된 사용자 지정 MCP 서버가 없습니다. "+ 사용자 지정 MCP 서버 추가"를 클릭해 원격 OAuth MCP 포털 또는 로컬 Stdio 서버를 등록하세요.',
     '☁️ Remote OAuth MCP': '☁️ 원격 OAuth MCP',
@@ -1632,15 +1621,12 @@
     'The agentic development platform': '에이전트 기반 개발 플랫폼',
     'Google Account': 'Google 계정',
     'Signed in with': '로그인 계정:',
-    'Continue': '계속',
     'Switch account': '계정 전환',
     'Use business account': '비즈니스 계정 사용',
     'Sign in with business account': '비즈니스 계정으로 로그인',
-    'Terms of Service': '서비스 약관',
     'Privacy Policy': '개인정보처리방침',
     'Remote Control': '원격 제어',
     'Remote Control Instances': '원격 제어 인스턴스',
-    'Remote Conversations': '원격 대화',
     'Remote agent': '원격 에이전트',
     'New environment for each conversation': '대화마다 새 환경 생성',
     'Connect your first instance': '첫 번째 인스턴스 연결',
@@ -1651,7 +1637,6 @@
     'CLI guide': 'CLI 가이드',
     'Loading instances...': '인스턴스 불러오는 중...',
     'Failed to load instances': '인스턴스를 불러오지 못했습니다',
-    'Dismiss': '닫기',
     'Dismiss notification': '알림 닫기',
     'Instance disconnected': '인스턴스 연결 끊김',
     'Waiting for connection or Wi-Fi to resume...': '연결 또는 Wi-Fi 복구를 기다리는 중...',
@@ -1665,13 +1650,11 @@
     'Send feedback': '의견 보내기',
     'Dev Debug Panel': '개발 디버그 패널',
     'Continue on': '다른 기기에서 계속',
-    'Reconnect': '다시 연결',
     'Offline': '오프라인',
     'Online': '온라인',
     'Last active': '마지막 활동',
     'Updated just now': '방금 업데이트됨',
     'Remove instance': '인스턴스 제거',
-    'More options': '더보기 옵션',
     'Create Project': '프로젝트 생성',
     'New Remote Project': '새 원격 프로젝트',
     'Project Name': '프로젝트 이름',
@@ -1682,7 +1665,6 @@
     'and acknowledge the': '및 확인:',
 
     // Antigravity v2.29.0 idle-status-text, conversation-navigator, subagents/cron, compacting, checkpoint, fork & tool/browser steps (D-0020, D-0021)
-    'CLI Project': 'CLI 프로젝트',
     'Using browser': '브라우저 사용 중',
     'Using browser · Thinking…': '브라우저 사용 중 · 생각하는 중…',
     'Using browser · Thinking...': '브라우저 사용 중 · 생각하는 중...',
@@ -1690,7 +1672,6 @@
     'Scroll turns up': '이전 턴으로 스크롤',
     'Scroll turns down': '다음 턴으로 스크롤',
     'Found': '조회됨',
-    'Starting': '시작 중',
     'Started': '시작됨',
     'Collapse subagents': '서브에이전트 접기',
     'Expand subagents': '서브에이전트 펼치기',
@@ -1819,6 +1800,313 @@
     'Clone into an isolated workspace directory': '독립된 작업공간 디렉터리로 복제합니다',
     'Shared Workspace requires a Git or Mercurial repository': '공유 작업공간은 Git 또는 Mercurial 저장소가 필요합니다',
     'New Workspace requires a version-controlled repository': '새 작업공간은 버전 관리되는 저장소가 필요합니다',
+
+    // Antigravity v2.31.0 new UI surfaces, settings, environments, hooks, marketplace, side questions & git controls (D-0031)
+    'Environments': '환경',
+    'Select Environment': '환경 선택',
+    'Select Worktree': '워크트리 선택',
+    'Local Checkout': '로컬 체크아웃',
+    'Local Windows environment': '로컬 Windows 환경',
+    'Local': '로컬',
+    'Worktree': '워크트리',
+    'New Worktree': '새 워크트리',
+    'Run in your current workspace': '현재 작업공간에서 실행',
+    'Run in a new worktree': '새 워크트리에서 실행',
+    'Keeps working in this folder. Nothing is copied.': '이 폴더에서 그대로 작업합니다. 파일은 복사되지 않습니다.',
+    'Clone current workspace into a new independent workspace': '현재 작업공간을 새로운 독립 작업공간으로 복제합니다',
+    'Fork conversation in this folder': '이 폴더에서 대화 포크',
+    'Close split view and go to forked conversation': '분할 보기를 닫고 포크된 대화로 이동',
+    'Fork warning': '포크 경고',
+    'More cloud environments': '클라우드 환경 더 보기',
+    'Runs remotely': '원격에서 실행됨',
+    'Host Environment': '호스트 환경',
+    'Current workspace': '현재 작업공간',
+    'No branches': '브랜치 없음',
+    'Search branches': '브랜치 검색',
+    'Failed to create worktree': '워크트리 생성 실패',
+    'Workspace setup warning': '작업공간 설정 경고',
+    'Turbo': '터보',
+    'Every command requires approval.': '모든 명령어 실행 시 승인이 필요합니다.',
+    'Ask before sensitive operations.': '민감한 작업 수행 전에 확인을 요청합니다.',
+    'Automatically decide if commands run.': '명령어 자동 실행 여부를 판단합니다.',
+    'Run all commands without restrictions.': '모든 명령어를 제한 없이 실행합니다.',
+    'Only this conversation uses this preset.': '이 대화에서만 해당 프리셋을 사용합니다.',
+    'Enable Notifications': '알림 활성화',
+    'Notification Preferences': '알림 환경설정',
+    'Screen Reader Mode': '스크린 리더 모드',
+    'Optimize the interface and terminal output for screen readers.': '인터페이스와 터미널 출력을 스크린 리더에 최적화합니다.',
+    'Enter to Send': 'Enter 키로 전송',
+    'Send messages with the keyboard\'s Enter key instead of starting a new line.': '줄바꿈 대신 키보드의 Enter 키로 메시지를 전송합니다.',
+    'Context and Quota Indicator': '컨텍스트 및 쿼터 표시기',
+    'Show how full the context window is next to the send button. Click it for a breakdown and to see your model quota.': '전송 버튼 옆에 컨텍스트 창 사용량을 표시합니다. 클릭하면 세부 내역과 모델 쿼터를 확인할 수 있습니다.',
+    'Terminal Placement': '터미널 표시 위치',
+    'Choose where terminal sessions appear.': '터미널 세션이 표시될 위치를 선택합니다.',
+    'Link Settings': '링크 설정',
+    'Open Links In': '링크 열기 방식',
+    'Choose where links open by default when clicked.': '링크 클릭 시 기본으로 열릴 위치를 선택합니다.',
+    'Agent Non-Workspace File Access': '작업공간 외부 파일 접근 허용',
+    'Default Workspace VCS': '기본 작업공간 버전 관리(VCS)',
+    'VCS used when creating a new workspace, including workspaces generated based off your initial prompt.': '초기 프롬프트로 생성되는 작업공간을 포함해 새 작업공간 생성 시 사용할 VCS입니다.',
+    'Device Name': '기기 이름',
+    'A label for this computer when you connect from another device. Changing it reconnects.': '다른 기기에서 연결할 때 표시되는 이 컴퓨터의 이름입니다. 변경하면 다시 연결됩니다.',
+    'Work with local agents from another device.': '다른 기기에서 로컬 에이전트와 함께 작업합니다.',
+    'Continue your work from another device with Remote Control. Scan the QR code or open the link below.': '원격 제어로 다른 기기에서 작업을 이어가세요. 아래 QR 코드를 스캔하거나 링크를 여세요.',
+    'Get started with Remote Control': '원격 제어 시작하기',
+    'Delete All Remote Agents Data': '모든 원격 에이전트 데이터 삭제',
+    'Delete All Remote Agents Data?': '모든 원격 에이전트 데이터를 삭제하시겠습니까?',
+    'Remote Agents Data': '원격 에이전트 데이터',
+    'Browser downloads': '브라우저 다운로드',
+    'Download files': '파일 다운로드',
+    'Allow/deny agent browser file downloads from specific sites.': '특정 사이트에서의 에이전트 브라우저 파일 다운로드를 허용하거나 차단합니다.',
+    'Configure built-in browser, link opening, and browser subagent preferences.': '내장 브라우저, 링크 열기 방식 및 브라우저 서브에이전트 환경설정을 구성합니다.',
+    'Configure the agent\'s visual theme and display preferences.': '에이전트의 시각 테마 및 화면 표시 환경을 설정합니다.',
+    'Configure workspace-specific permissions, resources, and customizations.': '작업공간별 권한, 리소스 및 맞춤 설정을 구성합니다.',
+    'Keyboard shortcuts for quick navigation and control.': '빠른 이동 및 제어를 위한 키보드 단축키입니다.',
+    'Reset all shortcuts to defaults': '모든 단축키 기본값으로 초기화',
+    'Reset All to Defaults': '모두 기본값으로 초기화',
+    'Reset to Default': '기본값으로 초기화',
+    'Reset to preset': '프리셋으로 초기화',
+    'Add Shortcut': '단축키 추가',
+    'Edit Shortcut': '단축키 편집',
+    'Remove Shortcut': '단축키 제거',
+    'Open Preferences': '환경설정 열기',
+    'Project Settings': '프로젝트 설정',
+    'Advanced Settings': '고급 설정',
+    'Settings Unavailable': '설정을 사용할 수 없음',
+    'App version': '앱 버전',
+    'Check for Updates': '업데이트 확인',
+    'Update Available': '업데이트 가능',
+    'App update required': '앱 업데이트 필요',
+    'Accounts': '계정',
+    'Signed-in accounts': '로그인된 계정',
+    'Go to Accounts': '계정 설정으로 이동',
+    'Account connection was not completed.': '계정 연결이 완료되지 않았습니다.',
+    'Authentication expired': '인증 만료됨',
+    'Sign-in required': '로그인 필요',
+    'Sign in again': '다시 로그인',
+    'Sign in to finish setting up this plugin.': '이 플러그인 설정을 완료하려면 로그인하세요.',
+    'Not Signed In': '로그인되지 않음',
+    'Unauthenticated': '미인증',
+    'Log back in': '다시 로그인',
+    'Connectors': '커넥터',
+    'Connections': '연결',
+    'Search connectors': '커넥터 검색',
+    'Connected Google Drive and GitHub resources': '연결된 Google Drive 및 GitHub 리소스',
+    'Browse the Marketplace': '마켓플레이스 둘러보기',
+    'Explore the plugin marketplace': '플러그인 마켓플레이스 탐색',
+    'Explore other marketplace customizations': '다른 마켓플레이스 맞춤 설정 탐색',
+    'Build With Google Plugins': 'Build With Google 플러그인',
+    'Browse and enable plugins from the Build With Google catalog.': 'Build With Google 카탈로그의 플러그인을 둘러보고 활성화합니다.',
+    'More Plugins': '플러그인 더 보기',
+    'Bundles': '번들',
+    'Create plugin': '플러그인 만들기',
+    'Create a Plugin with the Agent': '에이전트와 함께 플러그인 만들기',
+    'Currently installed': '현재 설치됨',
+    'Loading installed plugins...': '설치된 플러그인 불러오는 중...',
+    'Disabled. Open Details to finish setup or enable.': '비활성화됨. 설정을 완료하거나 활성화하려면 세부정보를 여세요.',
+    'Disabled. Open the plugin page to finish setup.': '비활성화됨. 설정을 완료하려면 플러그인 페이지를 여세요.',
+    'Plugin details': '플러그인 세부정보',
+    'Plugin metadata': '플러그인 메타데이터',
+    'Plugin update required': '플러그인 업데이트 필요',
+    'Customizations views': '맞춤 설정 보기',
+    'Skills & Rules': '스킬 및 규칙',
+    'Delete Skill': '스킬 삭제',
+    'Add MCP Server': 'MCP 서버 추가',
+    'Add MCP Servers': 'MCP 서버 추가',
+    'Installed MCP Servers': '설치된 MCP 서버',
+    'MCP servers': 'MCP 서버',
+    'Refresh MCP servers': 'MCP 서버 새로고침',
+    'Delete MCP Server': 'MCP 서버 삭제',
+    'Ask the agent to diagnose and fix this server': '에이전트에게 이 서버 진단 및 수정 요청',
+    'Enter the configuration values this MCP server needs. Saving restarts the server with them.': '이 MCP 서버에 필요한 설정값을 입력하세요. 저장하면 해당 설정으로 서버가 재시작됩니다.',
+    'Manage Hooks': '훅(Hooks) 관리',
+    'Configure hooks that run on agent lifecycle events.': '에이전트 수명주기 이벤트에 실행되는 훅을 설정합니다.',
+    'Add Hook Card': '훅 카드 추가',
+    'Delete Hook': '훅 삭제',
+    'Delete Handler': '핸들러 삭제',
+    'New hook name': '새 훅 이름',
+    'Hook will trigger if any tool is executed.': '어떤 도구든 실행될 때 훅이 트리거됩니다.',
+    'Hook will only trigger if the tool name matches run_command.': '도구 이름이 run_command와 일치할 때만 훅이 트리거됩니다.',
+    'Hook will only trigger if the tool name matches run_command or view_file.': '도구 이름이 run_command 또는 view_file과 일치할 때만 훅이 트리거됩니다.',
+    'Hook will only trigger if the tool name starts with browser_.': '도구 이름이 browser_로 시작할 때만 훅이 트리거됩니다.',
+    'Side Question': '사이드 질문',
+    'Side Questions': '사이드 질문',
+    'New Side Question': '새 사이드 질문',
+    'Delete Side Question': '사이드 질문 삭제',
+    'Delete side question': '사이드 질문 삭제',
+    'Minimize side question': '사이드 질문 최소화',
+    'Stop side question': '사이드 질문 중지',
+    'Previous side question': '이전 사이드 질문',
+    'Next side question': '다음 사이드 질문',
+    'Resize side question panel': '사이드 질문 패널 크기 조절',
+    'Promote to conversation': '전체 대화로 전환',
+    'Open in full conversation': '전체 대화에서 열기',
+    'Ask a quick question without interrupting the main conversation.': '진행 중인 대화를 중단하지 않고 빠르게 질문하세요.',
+    'Send reply': '답장 보내기',
+    'Coordinators': '코디네이터',
+    'Coordinator settings': '코디네이터 설정',
+    'New Coordinator': '새 코디네이터',
+    'New coordinator': '새 코디네이터',
+    'No coordinators': '코디네이터 없음',
+    'Coordinator name': '코디네이터 이름',
+    'Coordinator goal': '코디네이터 목표',
+    'What should this coordinator accomplish?': '이 코디네이터가 달성할 목표는 무엇인가요?',
+    'Best of N': 'Best of N 비교',
+    'Best-of-N Started': 'Best-of-N 시작됨',
+    'Best-of-N Ended': 'Best-of-N 종료됨',
+    'Use full Git clones for Best of N': 'Best of N에 전체 Git 클론 사용',
+    'Custom agents are not available in Best of N mode.': 'Best of N 모드에서는 커스텀 에이전트를 사용할 수 없습니다.',
+    'Message this chat': '이 채팅에 메시지 보내기',
+    'Archive': '보관',
+    'Archive Workspace': '작업공간 보관',
+    'Archive project': '프로젝트 보관',
+    'Conversation Archived': '대화가 보관되었습니다',
+    'Conversation Unarchived': '대화 보관이 해제되었습니다',
+    'Restore Conversation': '대화 복원',
+    'Delete Permanently': '영구 삭제',
+    'Pinned Conversations': '고정된 대화',
+    'Rename Conversation': '대화 이름 변경',
+    'Rename This Conversation': '이 대화 이름 변경',
+    'Fork Conversation': '대화 포크',
+    'Mark All as Read': '모두 읽음으로 표시',
+    'Mark This Conversation as Read': '이 대화를 읽음으로 표시',
+    'Mark This Conversation as Unread': '이 대화를 읽지 않음으로 표시',
+    'Move to Group': '그룹으로 이동',
+    'Move to New Group': '새 그룹으로 이동',
+    'Remove from Group': '그룹에서 제거',
+    'New Group': '새 그룹',
+    'Sort Conversations': '대화 정렬',
+    'Sort By': '정렬 기준',
+    'Group By': '그룹화 기준',
+    'Custom Order': '사용자 지정 순서',
+    'Copy Conversation ID': '대화 ID 복사',
+    'Copy Trajectory ID': '트래젝토리 ID 복사',
+    'Copy Message': '메시지 복사',
+    'Copy Content': '내용 복사',
+    'Copy File Name': '파일 이름 복사',
+    'Copy File Path': '파일 경로 복사',
+    'Copy Config File Path': '설정 파일 경로 복사',
+    'Copy Link': '링크 복사',
+    'Copy Link Address': '링크 주소 복사',
+    'Copy Image': '이미지 복사',
+    'Copy Image Address': '이미지 주소 복사',
+    'Copy command': '명령어 복사',
+    'Copy Command': '명령어 복사',
+    'Copy debug info': '디버그 정보 복사',
+    'Copy full URL to clipboard': '전체 URL 클립보드에 복사',
+    'Conversation copied as Markdown to clipboard': '대화가 마크다운 형식으로 클립보드에 복사되었습니다',
+    'Stop Execution': '실행 중지',
+    'Stop Subagent': '서브에이전트 중지',
+    'Stop All Subagents': '모든 서브에이전트 중지',
+    'Cancel All Tasks': '모든 작업 취소',
+    'Background tasks and terminals agents left running, across all conversations.': '모든 대화에서 에이전트가 실행 중인 백그라운드 작업 및 터미널입니다.',
+    'Close Other Tabs': '다른 탭 닫기',
+    'Close Tabs to the Left': '왼쪽 탭 모두 닫기',
+    'Close Tabs to the Right': '오른쪽 탭 모두 닫기',
+    'Reopen Closed Tab': '닫은 탭 다시 열기',
+    'Close Sidebar': '사이드바 닫기',
+    'Toggle sidebar': '사이드바 전환',
+    'Close Panel': '패널 닫기',
+    'Toggle Terminal Panel': '터미널 패널 전환',
+    'Open Terminal': '터미널 열기',
+    'New Terminal': '새 터미널',
+    'Delete Terminal': '터미널 삭제',
+    'Kill Terminal': '터미널 강제 종료',
+    'Standalone Terminals': '독립 실행 터미널',
+    'Split': '분할',
+    'Split Right': '오른쪽으로 분할',
+    'Split Down': '아래로 분할',
+    'Remove from Split': '분할에서 제거',
+    'Remove From Split': '분할에서 제거',
+    'Open in Tab': '탭에서 열기',
+    'Open in tab': '탭에서 열기',
+    'Open in New Tab': '새 탭에서 열기',
+    'Open in new tab': '새 탭에서 열기',
+    'Open in New Window': '새 창에서 열기',
+    'Open in Side Panel': '사이드 패널에서 열기',
+    'Open in External Browser': '외부 브라우저에서 열기',
+    'Open in external browser': '외부 브라우저에서 열기',
+    'Open in Remote Control': '원격 제어에서 열기',
+    'Open side-by-side view': '나란히 보기 열기',
+    'Branch': '브랜치',
+    'Branch Changes': '브랜치 변경사항',
+    'Changes': '변경사항',
+    'Staged Changes': '스테이징된 변경사항',
+    'Modified Files': '수정된 파일',
+    'Modified': '수정됨',
+    'Added': '추가됨',
+    'Added (Staged)': '추가됨 (스테이징됨)',
+    'Untracked': '추적되지 않음',
+    'Untracked (Unstaged)': '추적되지 않음 (스테이징 안 됨)',
+    'Uncommitted': '커밋되지 않음',
+    'Stage change': '변경사항 스테이징',
+    'Unstage change': '스테이징 해제',
+    'Discard': '변경 취소',
+    'Discard unstaged changes': '스테이징되지 않은 변경사항 취소',
+    'Include unstaged changes': '스테이징되지 않은 변경사항 포함',
+    'Revert file changes': '파일 변경사항 되돌리기',
+    'Commit': '커밋',
+    'Commit succeeded': '커밋 완료',
+    'Failed to Commit': '커밋 실패',
+    'Amend': '커밋 수정(Amend)',
+    'Amend succeeded': '커밋 수정 완료',
+    'Failed to Amend': '커밋 수정 실패',
+    'Push': '푸시',
+    'Push succeeded': '푸시 완료',
+    'Failed to Push': '푸시 실패',
+    'Voice': '음성',
+    'Voices': '음성 목록',
+    'Voice engine': '음성 엔진',
+    'Voice volume': '음성 볼륨',
+    'Voice speed': '음성 속도',
+    'Microphone': '마이크',
+    'Input device for voice mode and dictation.': '음성 모드 및 받아쓰기에 사용할 입력 장치입니다.',
+    'Mute Voice Mic': '마이크 음소거',
+    'Mute Voice Speaker': '스피커 음소거',
+    'Save audio recordings': '오디오 녹음 저장',
+    'Recordings': '녹음 목록',
+    'Delete all recordings?': '모든 녹음을 삭제하시겠습니까?',
+    'Export as PDF': 'PDF로 내보내기',
+    'Download PDF': 'PDF 다운로드',
+    'Download File': '파일 다운로드',
+    'Downloads': '다운로드',
+    'Previous Page': '이전 페이지',
+    'Current Page': '현재 페이지',
+    'Next Page': '다음 페이지',
+    'Zoom Level': '확대/축소 배율',
+    'Zoom in (+)': '확대 (+)',
+    'Zoom out (-)': '축소 (-)',
+    'Reset zoom (0)': '배율 초기화 (0)',
+    'References': '참조',
+    'Close references': '참조 닫기',
+    'Find References': '참조 찾기',
+    'Comments': '댓글',
+    'Comment': '댓글',
+    'Add inline comment': '인라인 댓글 추가',
+    'Edit comment': '댓글 수정',
+    'Delete comment': '댓글 삭제',
+    'View comments': '댓글 보기',
+    'Write a comment...': '댓글 작성...',
+    'Target text in PDF...': 'PDF 내 대상 텍스트...',
+    'Filter files...': '파일 필터링...',
+    'Filter rows...': '행 필터링...',
+    'Clear Search': '검색 지우기',
+    'Open Search': '검색 열기',
+    'Previous match': '이전 일치 항목',
+    'Next match': '다음 일치 항목',
+    'Match case': '대소문자 구분',
+    'Match whole word': '단어 단위로 일치',
+    'Use regular expression': '정규식 사용',
+    'Details': '세부정보',
+    'Proceed with Plan': '계획대로 진행',
+    'Context usage': '컨텍스트 사용량',
+    'Token Usage': '토큰 사용량',
+    'Model quota reached': '모델 쿼터 도달',
+    'Insufficient AI Credits': 'AI 크레딧 부족',
+    'Purchase Credits': '크레딧 구매',
+    'Action required': '조치 필요',
+    'Got it': '확인',
+    'Try again': '다시 시도',
   };
 
   // Pre-compiled dynamic single-target tool group patterns (e.g. "Reading http-engine-client.ts", "Editing App.tsx", "Listing src/")
@@ -2551,6 +2839,20 @@
       return `에이전트 권한 프리셋: ${p1}, ${p2}`;
     }
 
+    m = t.match(/^This\s+(project|workspace|conversation)\s+overrides your global permission settings\.$/i);
+    if (m) {
+      const scopeKo =
+        m[1].toLowerCase() === 'project'
+          ? '프로젝트는'
+          : m[1].toLowerCase() === 'workspace'
+          ? '작업공간은'
+          : '대화는';
+      return `이 ${scopeKo} 전역 권한 설정보다 우선 적용됩니다.`;
+    }
+
+    m = t.match(/^Reply to\s+(.+?)\.\.\.$/i);
+    if (m) return `${m[1]}에게 답장...`;
+
     m = t.match(/^Open conversation\s+(.+)$/i);
     if (m) return `대화 ${m[1]} 열기`;
 
@@ -2612,7 +2914,52 @@
   const PROTECT_IDENTIFIERS_REGEX =
     /(`[^`]+`|"(?=[^"\n]*[가-힣])[^"\n]{1,140}"|“(?=[^”\n]*[가-힣])[^”\n]{1,140}”|(?<![A-Za-z0-9⟧])'(?=[^'\n]*[가-힣])[^'\n]{1,80}'(?![A-Za-z0-9])|\bhttps?:\/\/\S+|\b[A-Za-z0-9_.-]+\.(?:md|js|mjs|cjs|ts|tsx|json|jsonl|py|sh|ps1|yaml|yml|toml|html|css|asar|exe|lock)\b|(?:--[a-z0-9-]+)|\b(?:[A-Z0-9]+-[A-Za-z0-9-]+|[a-z]+-[0-9][a-z0-9-]*)\b|\b[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)+\b|\b[a-z]+[A-Z][A-Za-z0-9]*\b)/g;
   const RESTORE_TOKEN_REGEX = /(?:⟦|\[|【)\s*T(\d+)\s*(?:⟧|\]|】)/gi;
-  const KOREAN_PARTICLE_REGEX = /([가-힣])(['"”’⟧\]】]*)(와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g;
+  const RESTORE_TOKEN_WITH_PARTICLE_REGEX =
+    /(?:⟦|\[|【)\s*T(\d+)\s*(?:⟧|\]|】)(?:(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)]))?/gi;
+  const QUOTED_KOREAN_PARTICLE_REGEX =
+    /([가-힣])(['"`”’⟧\]】)]+)(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g;
+
+  function selectKoreanParticleByJongseong(jong, particle) {
+    if (jong === null || jong === undefined) return particle;
+    const hasJong = jong !== 0;
+    const isRieul = jong === 8;
+    switch (particle) {
+      case '와':
+      case '과':
+      case '(과)와':
+        return hasJong ? '과' : '와';
+      case '를':
+      case '을':
+      case '(을)를':
+        return hasJong ? '을' : '를';
+      case '가':
+      case '이':
+      case '(이)가':
+        return hasJong ? '이' : '가';
+      case '는':
+      case '은':
+      case '(은)는':
+        return hasJong ? '은' : '는';
+      case '로':
+      case '으로':
+      case '(으)로':
+        return !hasJong || isRieul ? '로' : '으로';
+      default:
+        return particle;
+    }
+  }
+
+  function resolveLastHangulJongseong(tokenText) {
+    if (!tokenText) return null;
+    const stripped = String(tokenText).replace(/['"`”’⟧\]】)\s]+$/g, '');
+    if (!stripped) return null;
+    const lastCh = stripped[stripped.length - 1];
+    const code = lastCh.charCodeAt(0);
+    if (code >= 0xac00 && code <= 0xd7a3) {
+      return (code - 0xac00) % 28;
+    }
+    return null;
+  }
 
   function isAlreadyKoreanOrNonEnglish(text) {
     if (!text) return true;
@@ -2649,29 +2996,29 @@
     return { protectedText, savedTokens };
   }
 
-  function restoreIdentifiersInThoughtText(translatedText, savedTokens) {
-    if (!savedTokens.length) return translatedText;
-    const restored = translatedText.replace(RESTORE_TOKEN_REGEX, (full, num) => {
-      const idx = parseInt(num, 10);
-      return savedTokens[idx] !== undefined ? savedTokens[idx] : full;
+  function fixQuotedKoreanParticles(text) {
+    if (!text) return text;
+    return String(text).replace(QUOTED_KOREAN_PARTICLE_REGEX, (full, lastKo, closingQuote, particle) => {
+      const code = lastKo.charCodeAt(0);
+      if (code < 0xac00 || code > 0xd7a3) return full;
+      const jong = (code - 0xac00) % 28;
+      return lastKo + closingQuote + selectKoreanParticleByJongseong(jong, particle);
     });
-    return restored.replace(KOREAN_PARTICLE_REGEX, (full, lastKo, closingQuote, particle) => {
-        const code = lastKo.charCodeAt(0);
-        if (code < 0xac00 || code > 0xd7a3) return full;
-        const hasJong = (code - 0xac00) % 28 !== 0;
-        const map = {
-          와: hasJong ? '과' : '와',
-          과: hasJong ? '과' : '와',
-          를: hasJong ? '을' : '를',
-          을: hasJong ? '을' : '를',
-          가: hasJong ? '이' : '가',
-          이: hasJong ? '이' : '가',
-          는: hasJong ? '은' : '는',
-          은: hasJong ? '은' : '는',
-        };
-        return lastKo + closingQuote + (map[particle] || particle);
-      }
-    );
+  }
+
+  function restoreIdentifiersInThoughtText(translatedText, savedTokens) {
+    if (!translatedText) return translatedText;
+    const restored = savedTokens.length
+      ? translatedText.replace(RESTORE_TOKEN_WITH_PARTICLE_REGEX, (full, num, particle) => {
+          const idx = parseInt(num, 10);
+          if (savedTokens[idx] === undefined) return full;
+          const tokenStr = savedTokens[idx];
+          if (!particle) return tokenStr;
+          const jong = resolveLastHangulJongseong(tokenStr);
+          return tokenStr + selectKoreanParticleByJongseong(jong, particle);
+        })
+      : translatedText;
+    return fixQuotedKoreanParticles(restored);
   }
 
   function tokenizeBlockClone(origEl) {
@@ -2699,21 +3046,43 @@
 
     const regex = /(?:⟦|\[|【)\s*C(\d+)\s*(?:⟧|\]|】)/gi;
     let lastIndex = 0;
+    let prevRestoredCodeText = null;
+    const appendTrailingSegment = (segText) => {
+      if (!segText) return;
+      let adjusted = segText;
+      if (prevRestoredCodeText) {
+        const jong = resolveLastHangulJongseong(prevRestoredCodeText);
+        if (jong !== null) {
+          adjusted = adjusted.replace(
+            /^(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/,
+            (m) => selectKoreanParticleByJongseong(jong, m)
+          );
+        }
+      }
+      out.appendChild(document.createTextNode(adjusted));
+      prevRestoredCodeText = null;
+    };
+
     let match;
     while ((match = regex.exec(translatedText)) !== null) {
       if (match.index > lastIndex) {
-        out.appendChild(document.createTextNode(translatedText.slice(lastIndex, match.index)));
+        appendTrailingSegment(translatedText.slice(lastIndex, match.index));
+      } else {
+        prevRestoredCodeText = null;
       }
       const idx = parseInt(match[1], 10);
       if (savedCodes[idx]) {
-        out.appendChild(savedCodes[idx].cloneNode(true));
+        const codeClone = savedCodes[idx].cloneNode(true);
+        out.appendChild(codeClone);
+        prevRestoredCodeText = codeClone.textContent || '';
       } else {
         out.appendChild(document.createTextNode(match[0]));
+        prevRestoredCodeText = null;
       }
       lastIndex = regex.lastIndex;
     }
     if (lastIndex < translatedText.length) {
-      out.appendChild(document.createTextNode(translatedText.slice(lastIndex)));
+      appendTrailingSegment(translatedText.slice(lastIndex));
     }
     return out;
   }
@@ -3013,6 +3382,12 @@
       maxConcurrency: Number(adapter.maxConcurrency) > 0 ? Number(adapter.maxConcurrency) : 2,
       translate: adapter.translate,
     };
+    try {
+      const savedProv = localStorage.getItem(PROVIDER_STORAGE_KEY);
+      if (savedProv === id && activeTranslationProvider !== id) {
+        activeTranslationProvider = id;
+      }
+    } catch (e) {}
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
@@ -3226,11 +3601,17 @@
         let changed = false;
         const savedProv = items[PROVIDER_STORAGE_KEY];
         if (savedProv && TRANSLATION_ADAPTERS[savedProv]) {
+          const effectiveProv =
+            isRemoteControlEnv && savedProv === 'local-llm' && !window.__agyLocalLlmConfig
+              ? 'google-translate'
+              : savedProv;
           try {
-            localStorage.setItem(PROVIDER_STORAGE_KEY, savedProv);
+            if (!isRemoteControlEnv || effectiveProv === savedProv) {
+              localStorage.setItem(PROVIDER_STORAGE_KEY, effectiveProv);
+            }
           } catch (e) {}
-          if (savedProv !== activeTranslationProvider) {
-            activeTranslationProvider = savedProv;
+          if (effectiveProv !== activeTranslationProvider) {
+            activeTranslationProvider = effectiveProv;
             if (activeTranslationProvider === 'local-llm') {
               resolveLocalLlmEndpoint().then(() => {
                 if (typeof refreshTranslatorSettingsUi === 'function') refreshTranslatorSettingsUi();
@@ -4029,6 +4410,12 @@
         font-size: 12px;
       }
     }
+    .settings-modal-container[data-agy-ko-pane-active="1"] button[data-testid^="settings-nav-item-"]:not([data-testid="settings-nav-item-KoTranslator"]) {
+      background-color: transparent !important;
+    }
+    .settings-modal-container[data-agy-ko-pane-active="1"] button[data-testid^="settings-nav-item-"]:not([data-testid="settings-nav-item-KoTranslator"]) span {
+      color: var(--text-secondary-foreground, inherit) !important;
+    }
   `;
 
   function ensureStyle() {
@@ -4359,6 +4746,77 @@
     if (legacyCard) legacyCard.remove();
 
     // 2. Inject dedicated '한글 번역' nav tab in left sidebar of Settings modal
+    const activateKoPane = () => {
+      const rightGrow = modal.querySelector('.grow.w-full');
+      if (!rightGrow) return;
+      Array.from(rightGrow.children).forEach((ch) => {
+        if (ch.id !== 'agy-ko-settings-pane') {
+          if (ch.getAttribute('data-agy-prev-display') === null) {
+            ch.setAttribute('data-agy-prev-display', ch.style.display || '');
+          }
+          ch.style.display = 'none';
+        }
+      });
+      let pane = rightGrow.querySelector('#agy-ko-settings-pane');
+      if (!pane) {
+        pane = document.createElement('div');
+        pane.id = 'agy-ko-settings-pane';
+        pane.className = 'w-full bg-transparent h-full overflow-y-auto agy-ko-settings-root';
+        rightGrow.appendChild(pane);
+      }
+      pane.style.display = 'block';
+      modal.setAttribute('data-agy-ko-pane-active', '1');
+      renderTranslatorSettingsContent(pane, true);
+      const koBtn = modal.querySelector('button[data-testid="settings-nav-item-KoTranslator"]');
+      if (koBtn) {
+        koBtn.classList.add('bg-sidebar-secondary');
+        const koSpan = koBtn.querySelector('span');
+        if (koSpan) {
+          koSpan.classList.remove('text-secondary-foreground');
+          koSpan.classList.add('text-foreground');
+        }
+      }
+    };
+
+    const deactivateKoPane = () => {
+      modal.removeAttribute('data-agy-ko-pane-active');
+      const rightGrow = modal.querySelector('.grow.w-full');
+      if (rightGrow) {
+        const pane = rightGrow.querySelector('#agy-ko-settings-pane');
+        if (pane && pane.style.display !== 'none') {
+          pane.style.display = 'none';
+          Array.from(rightGrow.children).forEach((ch) => {
+            if (ch.id !== 'agy-ko-settings-pane' && ch.getAttribute('data-agy-prev-display') !== null) {
+              ch.style.display = ch.getAttribute('data-agy-prev-display');
+              ch.removeAttribute('data-agy-prev-display');
+            }
+          });
+        }
+      }
+      const koBtn = modal.querySelector('button[data-testid="settings-nav-item-KoTranslator"]');
+      if (koBtn) {
+        koBtn.classList.remove('bg-sidebar-secondary');
+        const koSpan = koBtn.querySelector('span');
+        if (koSpan) {
+          koSpan.classList.remove('text-foreground');
+          koSpan.classList.add('text-secondary-foreground');
+        }
+      }
+    };
+
+    // D-0031: In Antigravity v2.31.0+, Settings modal uses keepMounted:true and sets aria-hidden="true" on backdrop when closed.
+    // Auto-deactivate #agy-ko-settings-pane when closed so reopening Settings via external links shows the requested native screen.
+    const backdropEl = modal.closest ? modal.closest('.settings-modal-backdrop, [aria-hidden]') : modal.parentElement;
+    if (
+      (backdropEl && backdropEl.getAttribute && backdropEl.getAttribute('aria-hidden') === 'true') ||
+      (modal.getAttribute && modal.getAttribute('aria-hidden') === 'true')
+    ) {
+      if (modal.getAttribute('data-agy-ko-pane-active') === '1') {
+        deactivateKoPane();
+      }
+      return;
+    }
+
     const modelsNavBtn =
       modal.querySelector('button[data-testid="settings-nav-item-Models"]') ||
       modal.querySelector('button[data-testid^="settings-nav-item-"]');
@@ -4383,63 +4841,22 @@
       navWrap.appendChild(navBtn);
       navGroup.appendChild(navWrap);
 
-      const activateKoPane = () => {
-        const rightGrow = modal.querySelector('.grow.w-full');
-        if (!rightGrow) return;
-        Array.from(rightGrow.children).forEach((ch) => {
-          if (ch.id !== 'agy-ko-settings-pane') {
-            if (ch.getAttribute('data-agy-prev-display') === null) {
-              ch.setAttribute('data-agy-prev-display', ch.style.display || '');
-            }
-            ch.style.display = 'none';
-          }
-        });
-        let pane = rightGrow.querySelector('#agy-ko-settings-pane');
-        if (!pane) {
-          pane = document.createElement('div');
-          pane.id = 'agy-ko-settings-pane';
-          pane.className = 'w-full bg-transparent h-full overflow-y-auto agy-ko-settings-root';
-          rightGrow.appendChild(pane);
-        }
-        pane.style.display = 'block';
-        renderTranslatorSettingsContent(pane, true);
-        navBtn.classList.add('bg-sidebar-secondary');
-        navSpan.classList.remove('text-secondary-foreground');
-        navSpan.classList.add('text-foreground');
-      };
-
-      const deactivateKoPane = () => {
-        const rightGrow = modal.querySelector('.grow.w-full');
-        if (!rightGrow) return;
-        const pane = rightGrow.querySelector('#agy-ko-settings-pane');
-        if (!pane || pane.style.display === 'none') return;
-        pane.style.display = 'none';
-        Array.from(rightGrow.children).forEach((ch) => {
-          if (ch.id !== 'agy-ko-settings-pane' && ch.getAttribute('data-agy-prev-display') !== null) {
-            ch.style.display = ch.getAttribute('data-agy-prev-display');
-            ch.removeAttribute('data-agy-prev-display');
-          }
-        });
-        navBtn.classList.remove('bg-sidebar-secondary');
-        navSpan.classList.remove('text-foreground');
-        navSpan.classList.add('text-secondary-foreground');
-      };
-
       navBtn.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
         activateKoPane();
       };
-
-      modal
-        .querySelectorAll('button[data-testid^="settings-nav-item-"]:not([data-testid="settings-nav-item-KoTranslator"])')
-        .forEach((otherBtn) => {
-          if (!otherBtn.__agyKoNavBound) {
-            otherBtn.__agyKoNavBound = true;
-            otherBtn.addEventListener('click', () => deactivateKoPane(), true);
-          }
-        });
     }
+
+    // D-0031: Bind deactivateKoPane on every pass so dynamically rendered Project/Plugin/Drawer nav items are also covered.
+    modal
+      .querySelectorAll('button[data-testid^="settings-nav-item-"]:not([data-testid="settings-nav-item-KoTranslator"])')
+      .forEach((otherBtn) => {
+        if (!otherBtn.__agyKoNavBound) {
+          otherBtn.__agyKoNavBound = true;
+          otherBtn.addEventListener('click', () => deactivateKoPane(), true);
+        }
+      });
 
     // 3. Inject 'Thinking (추론 과정) 표시' row into Native Settings -> Appearance (모양 및 테마) -> Chat section
     ensureAppearanceChatThinkingIntegration(modal);
@@ -4747,7 +5164,12 @@
       return true;
     }
 
-    if (window.__agyCustomStatusBarAdapters instanceof Map && !window.__agyCustomStatusBarAdapters.has(STATUSBAR_ADAPTER_ID)) {
+    if (
+      window.__agyCustomStatusBarAdapters &&
+      typeof window.__agyCustomStatusBarAdapters.has === 'function' &&
+      typeof window.__agyCustomStatusBarAdapters.set === 'function' &&
+      !window.__agyCustomStatusBarAdapters.has(STATUSBAR_ADAPTER_ID)
+    ) {
       window.__agyCustomStatusBarAdapters.set(STATUSBAR_ADAPTER_ID, createKoTranslatorStatusbarAdapter());
     }
     return false;
@@ -4767,6 +5189,14 @@
         disposeStatusbarAdapter();
       } else if (window.agyStatusBar && typeof window.agyStatusBar.unregisterAdapter === 'function') {
         window.agyStatusBar.unregisterAdapter(STATUSBAR_ADAPTER_ID);
+      }
+    } catch (e) {}
+    try {
+      if (
+        window.__agyCustomStatusBarAdapters &&
+        typeof window.__agyCustomStatusBarAdapters.delete === 'function'
+      ) {
+        window.__agyCustomStatusBarAdapters.delete(STATUSBAR_ADAPTER_ID);
       }
     } catch (e) {}
     disposeStatusbarAdapter = null;
@@ -5184,7 +5614,7 @@
       'style, script, code, pre, [contenteditable="true"], .monaco-editor, .xterm, ' +
       '[data-agy-no-translate="true"], .agy-ctx-statusbar, .agy-ctx-menu, #agy-ctx-debug-modal, .agy-ctx-modal-backdrop, ' +
       '.agy-ko-settings-root, #agy-ko-translator-modal, ' +
-      '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
+      '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
       'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
       '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
       '[data-uri], [data-quotable-inline="true"], .cursor-edit';
@@ -5242,7 +5672,7 @@
       }
     }
     const testId = el.getAttribute('data-testid') || el.closest('[data-testid]')?.getAttribute('data-testid');
-    if (testId === 'conversation-row-sidebar') {
+    if (testId === 'conversation-row-sidebar' || testId === 'conversation-row-history') {
       if (forAttributes && el.tagName === 'BUTTON') return false;
       if (!forAttributes && el.closest('[data-screenshot-volatile="true"]')) return false;
       return true;
@@ -5349,7 +5779,7 @@
     '[data-agy-no-translate="true"], .agy-ctx-statusbar, .agy-ctx-menu, #agy-ctx-debug-modal, .agy-ctx-modal-backdrop, ' +
     '#agy-mcp-manager-modal-backdrop, #agy-mcp-edit-popup-backdrop, #agy-mcp-oauth-connect-backdrop, #agy-mcp-settings-pane, ' +
     '.agy-ko-settings-root, #agy-ko-translator-modal, ' +
-    '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], ' +
+    '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
     'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
     '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
     '[data-uri], [data-quotable-inline="true"], .cursor-edit';
@@ -5425,6 +5855,13 @@
           !btn.closest('[role="menu"], [role="listbox"], [role="menuitem"]') &&
           ((btn.textContent || '').trim() === 'New' || (btn.textContent || '').trim() === '새로 만들기');
         syncKo = isStandaloneNewBtn ? '새로 만들기' : null;
+      } else if (
+        trimmed === 'Type' &&
+        textNode.nextSibling &&
+        textNode.nextSibling.nodeType === 1 &&
+        (textNode.nextSibling.tagName === 'KBD' || textNode.nextSibling.tagName === 'CODE')
+      ) {
+        syncKo = '채팅창에';
       } else {
         syncKo = translateStaticUiSync(trimmed);
       }

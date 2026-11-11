@@ -2,7 +2,7 @@
 
 > 🌐 **Language**: [English Documentation (README.md)](./README.md) | **한국어**
 
-Antigravity 2.0 데스크톱 앱과 **원격 제어(Remote Control) 웹·모바일 브라우저(`https://antigravity.google.com/r/...`)**에서 영어로 스트리밍되는 **Thinking(추론 과정) 본문**, **작업 단계 요약(`Worked for ...`)**, **앱 전체 정적 UI 메뉴·설정·위젯**을 실시간 한국어로 자동 전환하는 플러그인입니다 (`v1.2.33` / `v13.28`).
+Antigravity 2.0 데스크톱 앱과 **원격 제어(Remote Control) 웹·모바일 브라우저(`https://antigravity.google.com/r/...`)**에서 영어로 스트리밍되는 **Thinking(추론 과정) 본문**, **작업 단계 요약(`Worked for ...`)**, **앱 전체 정적 UI 메뉴·설정·위젯**을 실시간 한국어로 자동 전환하는 플러그인입니다 (`v1.2.34` / `v13.29`).
 
 ---
 
@@ -85,14 +85,13 @@ node "$HOME\.gemini\config\plugins\ko-thought-translator\scripts\ensure_ko_thoug
 1. **하단 상태바 `[ 번역:구글 ]` / `[ 번역:LLM ]` 버튼** (`antigravity-statusbar` 연동 시):
    - **일반 클릭**: 빠른 설정 모달(`#agy-ko-translator-modal`) 열기/닫기
    - **`Shift + 클릭`**: `Google 번역` ↔ `로컬 LLM` 즉시 전환
-2. **좌측 하단 `설정` (`Settings`) → `한글 번역` 전용 탭**:
-   - **번역 어댑터 선택**: `Google 번역 (무료 API, 자원 소모 없음)` / `로컬 LLM (127.0.0.1:11434, 외부 전송 없음)`
-   - **Thinking (추론 과정) 번역 (`ON/OFF`)**: 추론 본문의 한국어 번역 활성화/비활성화 (비활성화 시 원문 즉시 복원)
-   - **Thinking (추론 과정) 표시 (`ON/OFF`)**: 대화 화면에서 추론 블록 및 단계 표시/숨김
-   - **Thinking 사전 번역 (`ON/OFF`)**: 접혀 있는 이전 추론 블록 백그라운드 미리 번역
-   - **현재 화면 다시 번역 / 번역 캐시 초기화**
+2. **좌측 하단 `설정` (`Settings`) → `한글 번역` 전용 탭 및 빠른 설정 모달(`#agy-ko-translator-modal`)**:
+   - **번역 엔진 어댑터 선택**: `Google 번역 (google-translate)` (자원 소모 없음, 기본값) / `로컬 LLM (local-llm)` (`127.0.0.1:11434`, 외부 전송 없음)
+   - **Thinking 한국어 번역 (`ON/OFF`)**: 추론 본문의 한국어 번역 활성화/비활성화 (비활성화 시 원문 영문 즉시 복원)
+   - **Thinking 백그라운드 사전 번역 (`ON/OFF`)**: 접혀 있는 이전 추론 블록 백그라운드 미리 번역
+   - **번역 캐시 및 현재 화면 즉시 재번역**: 현재 화면 추론 다시 번역 및 영구 캐시(`localStorage` + `memCache`) 초기화 후 재번역
 3. **채팅 입력창 하단 모델 선택 드롭다운 & `설정 > 모양 및 테마(Appearance) > 채팅(Chat)`**:
-   - **Thinking (추론 과정) 표시 (`ON/OFF`)** 전용 토글 스위치가 기본 통합되어 있습니다.
+   - **`Thinking (추론 과정) 표시` (`ON/OFF`)** 전용 토글 스위치가 분리 통합되어 있으며, 네이티브 `대화 단계 표시`(`verboseConversationSteps: 기본값 / 상세히`) 설정은 그대로 보존합니다.
 
 ---
 
@@ -135,7 +134,7 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 ## 6. 모듈 구조 (SOLID Architecture)
 
 - **렌더러 계층 (`scripts/renderer/`)**:
-  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.28`), `remove-conversation-history: false`(`대화 기록` 메뉴) 자동 활성화, 네이티브 `verboseConversationSteps`(`대화 단계 표시: 기본값/상세히`) 설정 읽기 전용 조회, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
+  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.29`), `remove-conversation-history: false`(`대화 기록` 메뉴) 자동 활성화, 네이티브 `verboseConversationSteps`(`대화 단계 표시: 기본값/상세히`) 설정 읽기 전용 조회, 비활성화 시 DOM 원본 복원, 번역 캐시(`memCache`/`localStorage`) 관리
   - `02-static-ui-dict.js`: 0ms 정적 UI 한국어 사전(`STATIC_UI_MAP`) 및 동기 패턴 매처
   - `03-text-tokenizer.js`: 코드(`⟦C0⟧`)·식별자/인용구(`⟦T0⟧`) 보호 토크나이저, 조사 교정, 마크다운 세그먼트 추출
   - `04-translation-adapters.js`: Port & Adapter 번역 엔진(`local-llm`, `google-translate`, 커스텀 어댑터) 및 동시성/취소 큐

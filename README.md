@@ -2,7 +2,7 @@
 
 > 🌐 **Language**: **English** | [한국어 문서 (README.ko.md)](./README.ko.md)
 
-Real-time Korean localization plugin for the Antigravity 2.0 desktop app and **Remote Control web/mobile browser (`https://antigravity.google.com/r/...`)** (`v1.2.33` / `v13.28`). Automatically translates streaming **Thinking blocks**, **step progress summaries (`Worked for ...`)**, **conversation navigator & subagent/cron statuses**, and **static UI menus, settings, and widgets** into natural Korean with zero-latency static dictionary lookup and Port & Adapter translation engines.
+Real-time Korean localization plugin for the Antigravity 2.0 desktop app and **Remote Control web/mobile browser (`https://antigravity.google.com/r/...`)** (`v1.2.34` / `v13.29`). Automatically translates streaming **Thinking blocks**, **step progress summaries (`Worked for ...`)**, **conversation navigator & subagent/cron statuses**, and **static UI menus, settings, and widgets** into natural Korean with zero-latency static dictionary lookup and Port & Adapter translation engines.
 
 ---
 
@@ -85,14 +85,13 @@ While Korean localization is active (both Desktop and Remote Browser), you can c
 1. **Bottom Status Bar `[ 번역:구글 ]` / `[ 번역:LLM ]` Pill** (when integrated with `antigravity-statusbar`):
    - **Click**: Toggle the quick settings modal (`#agy-ko-translator-modal`).
    - **`Shift + Click`**: Instantly switch between `Google Translate` and `Local LLM`.
-2. **Bottom-Left `Settings` (`설정`) → `한글 번역` (`KoTranslator`) Tab**:
-   - **Translation Adapter**: `Google 번역 (무료 API, 자원 소모 없음)` / `로컬 LLM (127.0.0.1:11434, 외부 전송 없음)`
-   - **Thinking Translation (`ON/OFF`)**: Enable or disable Korean translation of reasoning bodies (restores original English text immediately when turned off).
-   - **Show Thinking (`ON/OFF`)**: Show or hide Thinking blocks in the conversation view.
-   - **Pre-translate Thinking (`ON/OFF`)**: Pre-translate collapsed historical Thinking blocks in the background.
-   - **Retranslate Current View / Clear Translation Cache**
+2. **Bottom-Left `Settings` (`설정`) → `한글 번역` (`KoTranslator`) Tab & Quick Modal (`#agy-ko-translator-modal`)**:
+   - **Translation Engine Adapter**: `Google 번역 (google-translate)` (zero local resource usage) / `로컬 LLM (local-llm)` (`127.0.0.1:11434`, offline GPU inference)
+   - **Thinking Korean Translation (`ON/OFF`)**: Enable or disable Korean translation of reasoning bodies (restores original English text immediately when turned off).
+   - **Thinking Background Pre-translation (`ON/OFF`)**: Pre-translate collapsed historical Thinking blocks in the background.
+   - **Translation Cache & Immediate Retranslation**: Retranslate current visible Thinking blocks or clear cached translations (`localStorage` + `memCache`) and retranslate.
 3. **Model Selector Dropdown & `Settings > Appearance > Chat`**:
-   - Includes a dedicated **Show Thinking (`ON/OFF`)** toggle switch while preserving the native `Conversation Steps` (`verboseConversationSteps: Default / Verbose`) preference.
+   - Dedicated **Show Thinking (`Thinking (추론 과정) 표시 ON/OFF`)** toggle switch (separated from the `한글 번역` tab so display visibility lives directly alongside model & chat step controls) while preserving the native `Conversation Steps` (`verboseConversationSteps: Default / Verbose`) preference.
 
 ---
 
@@ -135,7 +134,7 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 ## 6. Module Architecture (SOLID)
 
 - **Renderer Layer (`scripts/renderer/`)**:
-  - `01-bootstrap-and-cache.js`: Version guard (`v13.28`), automatic activation of `remove-conversation-history: false` (`대화 기록` menu), read-only inspection of native `verboseConversationSteps`, full DOM restoration on disable, and translation cache (`memCache` / `localStorage`) persistence.
+  - `01-bootstrap-and-cache.js`: Version guard (`v13.29`), automatic activation of `remove-conversation-history: false` (`대화 기록` menu), read-only inspection of native `verboseConversationSteps`, full DOM restoration on disable, and translation cache (`memCache` / `localStorage`) persistence.
   - `02-static-ui-dict.js`: 0ms static UI Korean dictionary (`STATIC_UI_MAP`) and synchronous pattern matcher (`matchStaticUiPatternUncached`).
   - `03-text-tokenizer.js`: Code (`⟦C0⟧`) and identifier/quote (`⟦T0⟧`) protective tokenizer, Korean postposition fixer, and Markdown segment extractor.
   - `04-translation-adapters.js`: Port & Adapter translation engine (`local-llm`, `google-translate`, custom adapters) with concurrency & cancellation queues.

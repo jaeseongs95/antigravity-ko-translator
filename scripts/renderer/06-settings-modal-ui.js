@@ -451,6 +451,12 @@
         font-size: 12px;
       }
     }
+    .settings-modal-container[data-agy-ko-pane-active="1"] button[data-testid^="settings-nav-item-"]:not([data-testid="settings-nav-item-KoTranslator"]) {
+      background-color: transparent !important;
+    }
+    .settings-modal-container[data-agy-ko-pane-active="1"] button[data-testid^="settings-nav-item-"]:not([data-testid="settings-nav-item-KoTranslator"]) span {
+      color: var(--text-secondary-foreground, inherit) !important;
+    }
   `;
 
   function ensureStyle() {
@@ -781,6 +787,77 @@
     if (legacyCard) legacyCard.remove();
 
     // 2. Inject dedicated '한글 번역' nav tab in left sidebar of Settings modal
+    const activateKoPane = () => {
+      const rightGrow = modal.querySelector('.grow.w-full');
+      if (!rightGrow) return;
+      Array.from(rightGrow.children).forEach((ch) => {
+        if (ch.id !== 'agy-ko-settings-pane') {
+          if (ch.getAttribute('data-agy-prev-display') === null) {
+            ch.setAttribute('data-agy-prev-display', ch.style.display || '');
+          }
+          ch.style.display = 'none';
+        }
+      });
+      let pane = rightGrow.querySelector('#agy-ko-settings-pane');
+      if (!pane) {
+        pane = document.createElement('div');
+        pane.id = 'agy-ko-settings-pane';
+        pane.className = 'w-full bg-transparent h-full overflow-y-auto agy-ko-settings-root';
+        rightGrow.appendChild(pane);
+      }
+      pane.style.display = 'block';
+      modal.setAttribute('data-agy-ko-pane-active', '1');
+      renderTranslatorSettingsContent(pane, true);
+      const koBtn = modal.querySelector('button[data-testid="settings-nav-item-KoTranslator"]');
+      if (koBtn) {
+        koBtn.classList.add('bg-sidebar-secondary');
+        const koSpan = koBtn.querySelector('span');
+        if (koSpan) {
+          koSpan.classList.remove('text-secondary-foreground');
+          koSpan.classList.add('text-foreground');
+        }
+      }
+    };
+
+    const deactivateKoPane = () => {
+      modal.removeAttribute('data-agy-ko-pane-active');
+      const rightGrow = modal.querySelector('.grow.w-full');
+      if (rightGrow) {
+        const pane = rightGrow.querySelector('#agy-ko-settings-pane');
+        if (pane && pane.style.display !== 'none') {
+          pane.style.display = 'none';
+          Array.from(rightGrow.children).forEach((ch) => {
+            if (ch.id !== 'agy-ko-settings-pane' && ch.getAttribute('data-agy-prev-display') !== null) {
+              ch.style.display = ch.getAttribute('data-agy-prev-display');
+              ch.removeAttribute('data-agy-prev-display');
+            }
+          });
+        }
+      }
+      const koBtn = modal.querySelector('button[data-testid="settings-nav-item-KoTranslator"]');
+      if (koBtn) {
+        koBtn.classList.remove('bg-sidebar-secondary');
+        const koSpan = koBtn.querySelector('span');
+        if (koSpan) {
+          koSpan.classList.remove('text-foreground');
+          koSpan.classList.add('text-secondary-foreground');
+        }
+      }
+    };
+
+    // D-0031: In Antigravity v2.31.0+, Settings modal uses keepMounted:true and sets aria-hidden="true" on backdrop when closed.
+    // Auto-deactivate #agy-ko-settings-pane when closed so reopening Settings via external links shows the requested native screen.
+    const backdropEl = modal.closest ? modal.closest('.settings-modal-backdrop, [aria-hidden]') : modal.parentElement;
+    if (
+      (backdropEl && backdropEl.getAttribute && backdropEl.getAttribute('aria-hidden') === 'true') ||
+      (modal.getAttribute && modal.getAttribute('aria-hidden') === 'true')
+    ) {
+      if (modal.getAttribute('data-agy-ko-pane-active') === '1') {
+        deactivateKoPane();
+      }
+      return;
+    }
+
     const modelsNavBtn =
       modal.querySelector('button[data-testid="settings-nav-item-Models"]') ||
       modal.querySelector('button[data-testid^="settings-nav-item-"]');
@@ -805,63 +882,22 @@
       navWrap.appendChild(navBtn);
       navGroup.appendChild(navWrap);
 
-      const activateKoPane = () => {
-        const rightGrow = modal.querySelector('.grow.w-full');
-        if (!rightGrow) return;
-        Array.from(rightGrow.children).forEach((ch) => {
-          if (ch.id !== 'agy-ko-settings-pane') {
-            if (ch.getAttribute('data-agy-prev-display') === null) {
-              ch.setAttribute('data-agy-prev-display', ch.style.display || '');
-            }
-            ch.style.display = 'none';
-          }
-        });
-        let pane = rightGrow.querySelector('#agy-ko-settings-pane');
-        if (!pane) {
-          pane = document.createElement('div');
-          pane.id = 'agy-ko-settings-pane';
-          pane.className = 'w-full bg-transparent h-full overflow-y-auto agy-ko-settings-root';
-          rightGrow.appendChild(pane);
-        }
-        pane.style.display = 'block';
-        renderTranslatorSettingsContent(pane, true);
-        navBtn.classList.add('bg-sidebar-secondary');
-        navSpan.classList.remove('text-secondary-foreground');
-        navSpan.classList.add('text-foreground');
-      };
-
-      const deactivateKoPane = () => {
-        const rightGrow = modal.querySelector('.grow.w-full');
-        if (!rightGrow) return;
-        const pane = rightGrow.querySelector('#agy-ko-settings-pane');
-        if (!pane || pane.style.display === 'none') return;
-        pane.style.display = 'none';
-        Array.from(rightGrow.children).forEach((ch) => {
-          if (ch.id !== 'agy-ko-settings-pane' && ch.getAttribute('data-agy-prev-display') !== null) {
-            ch.style.display = ch.getAttribute('data-agy-prev-display');
-            ch.removeAttribute('data-agy-prev-display');
-          }
-        });
-        navBtn.classList.remove('bg-sidebar-secondary');
-        navSpan.classList.remove('text-foreground');
-        navSpan.classList.add('text-secondary-foreground');
-      };
-
       navBtn.onclick = (e) => {
         e.preventDefault();
         e.stopPropagation();
         activateKoPane();
       };
-
-      modal
-        .querySelectorAll('button[data-testid^="settings-nav-item-"]:not([data-testid="settings-nav-item-KoTranslator"])')
-        .forEach((otherBtn) => {
-          if (!otherBtn.__agyKoNavBound) {
-            otherBtn.__agyKoNavBound = true;
-            otherBtn.addEventListener('click', () => deactivateKoPane(), true);
-          }
-        });
     }
+
+    // D-0031: Bind deactivateKoPane on every pass so dynamically rendered Project/Plugin/Drawer nav items are also covered.
+    modal
+      .querySelectorAll('button[data-testid^="settings-nav-item-"]:not([data-testid="settings-nav-item-KoTranslator"])')
+      .forEach((otherBtn) => {
+        if (!otherBtn.__agyKoNavBound) {
+          otherBtn.__agyKoNavBound = true;
+          otherBtn.addEventListener('click', () => deactivateKoPane(), true);
+        }
+      });
 
     // 3. Inject 'Thinking (추론 과정) 표시' row into Native Settings -> Appearance (모양 및 테마) -> Chat section
     ensureAppearanceChatThinkingIntegration(modal);
