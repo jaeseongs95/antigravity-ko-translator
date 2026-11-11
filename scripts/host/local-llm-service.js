@@ -5,7 +5,6 @@
  */
 
 const http = require('http');
-const path = require('path');
 const { spawnSync, spawn } = require('child_process');
 const { LLM_BASE_URL } = require('./paths');
 
@@ -31,30 +30,66 @@ function parseCommandArgs(rawArgs) {
   const args = [];
   let current = '';
   let quoteChar = null;
+  let hasToken = false;
   for (let i = 0; i < rawArgs.length; i++) {
     const ch = rawArgs[i];
+    if (ch === '\\') {
+      let slashCount = 1;
+      while (i + slashCount < rawArgs.length && rawArgs[i + slashCount] === '\\') {
+        slashCount++;
+      }
+      const nextCh = rawArgs[i + slashCount];
+      if (nextCh === '"' && quoteChar !== "'") {
+        current += '\\'.repeat(Math.floor(slashCount / 2));
+        hasToken = true;
+        if (slashCount % 2 === 1) {
+          current += '"';
+        } else {
+          quoteChar = quoteChar === '"' ? null : '"';
+        }
+        i += slashCount;
+        continue;
+      }
+      if (nextCh === "'" && quoteChar === "'") {
+        current += '\\'.repeat(Math.floor(slashCount / 2));
+        hasToken = true;
+        if (slashCount % 2 === 1) {
+          current += "'";
+          i += slashCount;
+          continue;
+        }
+      }
+      current += '\\'.repeat(slashCount);
+      hasToken = true;
+      i += slashCount - 1;
+      continue;
+    }
     if (quoteChar) {
       if (ch === quoteChar) {
         quoteChar = null;
       } else {
         current += ch;
       }
+      hasToken = true;
       continue;
     }
     if (ch === '"' || ch === "'") {
       quoteChar = ch;
+      hasToken = true;
       continue;
     }
     if (/\s/.test(ch)) {
-      if (current.length > 0) {
+      if (hasToken) {
         args.push(current);
         current = '';
+        hasToken = false;
       }
       continue;
     }
     current += ch;
+    hasToken = true;
   }
-  if (current.length > 0) {
+  if (hasToken) {
     args.push(current);
   }
   return args;
@@ -192,16 +227,6 @@ async function stopLocalLlmServer(forceProcessScan = false) {
           windowsHide: true,
         });
         stoppedCount++;
-      }
-      const cmd = resolveLocalLlmCommand();
-      if (cmd && cmd.bin) {
-        const exeName = path.basename(cmd.bin);
-        if (exeName && /\.exe$/i.test(exeName)) {
-          spawnSync('taskkill', ['/F', '/T', '/IM', exeName], {
-            stdio: 'ignore',
-            windowsHide: true,
-          });
-        }
       }
     } else {
       const res = spawnSync('lsof', ['-ti', `:${port}`], {

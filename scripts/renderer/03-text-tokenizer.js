@@ -13,10 +13,25 @@
   const RESTORE_TOKEN_WITH_PARTICLE_REGEX =
     /(?:⟦|\[|【)\s*T(\d+)\s*(?:⟧|\]|】)(?:(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)]))?/gi;
   const QUOTED_KOREAN_PARTICLE_REGEX =
-    /([가-힣])(['"`”’⟧\]】)]+)(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g;
+    /([가-힣A-Za-z0-9_.-]+)(['"`”’⟧\]】]+)(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g;
 
   function selectKoreanParticleByJongseong(jong, particle) {
-    if (jong === null || jong === undefined) return particle;
+    if (jong === null || jong === undefined) {
+      switch (particle) {
+        case '(과)와':
+          return '와';
+        case '(을)를':
+          return '를';
+        case '(이)가':
+          return '가';
+        case '(은)는':
+          return '는';
+        case '(으)로':
+          return '로';
+        default:
+          return particle;
+      }
+    }
     const hasJong = jong !== 0;
     const isRieul = jong === 8;
     switch (particle) {
@@ -45,14 +60,55 @@
     }
   }
 
+  function resolveEnglishWordJongseong(word) {
+    if (!word) return null;
+    const isShortUpperInitialism =
+      /^[A-Z]{1,3}$/.test(word) &&
+      !/^(?:APP|MAP|TOP|POP|TIP|ZIP|PIP|GET|SET|LET|NET|GIT|DOT|BOT|CUT|PUT|CAT|BAT|HAT|RAT|SAT|FAT|MAT|PAT|TAB|JOB|WEB|SUB|DOC|MAC)$/.test(
+        word
+      );
+    if (word.length === 1 || !/[AEIOUYaeiouy]/.test(word) || isShortUpperInitialism) {
+      const lastUpper = word[word.length - 1].toUpperCase();
+      if (lastUpper === 'L' || lastUpper === 'R') return 8;
+      if (lastUpper === 'M' || lastUpper === 'N') return 1;
+      return 0;
+    }
+
+    const lower = word.toLowerCase();
+    if (/[aeiouwy]$/.test(lower)) return 0;
+    if (lower.endsWith('e')) {
+      if (lower.endsWith('le')) return 8;
+      if (/[mn]e$/.test(lower) || lower === 'type') return 1;
+      return 0;
+    }
+    if (lower.endsWith('l')) return 8;
+    if (lower.endsWith('m') || lower.endsWith('n')) return 1;
+    if (lower.endsWith('ng')) return 1;
+    if (/(?:ck|[aiou]k)$/.test(lower) && !/(?:eak|oak)$/.test(lower)) return 1;
+    if (/[aeiou]c$/.test(lower)) return 1;
+    if (/(?:pp|[aeiou]p)$/.test(lower)) return 1;
+    if (/(?:^|[^aeiou])[aeiou]t$/.test(lower) || /(?:out|cut|put)$/.test(lower)) return 1;
+    if (/(?:bb|[aeiou]b)$/.test(lower)) return 1;
+    return 0;
+  }
+
   function resolveLastHangulJongseong(tokenText) {
     if (!tokenText) return null;
-    const stripped = String(tokenText).replace(/['"`”’⟧\]】)\s]+$/g, '');
+    const stripped = String(tokenText).replace(/['"`”’⟧\]】)}\/\s]+$/g, '');
     if (!stripped) return null;
     const lastCh = stripped[stripped.length - 1];
     const code = lastCh.charCodeAt(0);
     if (code >= 0xac00 && code <= 0xd7a3) {
       return (code - 0xac00) % 28;
+    }
+    if (lastCh >= '0' && lastCh <= '9') {
+      if (lastCh === '1' || lastCh === '7' || lastCh === '8') return 8;
+      if (lastCh === '0' || lastCh === '3' || lastCh === '6') return 1;
+      return 0;
+    }
+    const alphaMatch = stripped.match(/([A-Za-z]+)$/);
+    if (alphaMatch) {
+      return resolveEnglishWordJongseong(alphaMatch[1]);
     }
     return null;
   }
@@ -94,11 +150,10 @@
 
   function fixQuotedKoreanParticles(text) {
     if (!text) return text;
-    return String(text).replace(QUOTED_KOREAN_PARTICLE_REGEX, (full, lastKo, closingQuote, particle) => {
-      const code = lastKo.charCodeAt(0);
-      if (code < 0xac00 || code > 0xd7a3) return full;
-      const jong = (code - 0xac00) % 28;
-      return lastKo + closingQuote + selectKoreanParticleByJongseong(jong, particle);
+    return String(text).replace(QUOTED_KOREAN_PARTICLE_REGEX, (full, innerToken, closingQuote, particle) => {
+      const jong = resolveLastHangulJongseong(innerToken);
+      if (jong === null) return full;
+      return innerToken + closingQuote + selectKoreanParticleByJongseong(jong, particle);
     });
   }
 
@@ -148,12 +203,10 @@
       let adjusted = segText;
       if (prevRestoredCodeText) {
         const jong = resolveLastHangulJongseong(prevRestoredCodeText);
-        if (jong !== null) {
-          adjusted = adjusted.replace(
-            /^(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/,
-            (m) => selectKoreanParticleByJongseong(jong, m)
-          );
-        }
+        adjusted = adjusted.replace(
+          /^(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/,
+          (m) => selectKoreanParticleByJongseong(jong, m)
+        );
       }
       out.appendChild(document.createTextNode(adjusted));
       prevRestoredCodeText = null;

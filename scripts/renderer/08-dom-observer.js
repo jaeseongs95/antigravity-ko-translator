@@ -551,18 +551,40 @@
         }
         continue;
       }
-      if (!isAlreadyKoreanOrNonEnglish(raw) && el.__agyDynamicSource !== raw) {
+      if (
+        !isAlreadyKoreanOrNonEnglish(raw) &&
+        el.childNodes.length === 1 &&
+        el.firstChild.nodeType === Node.TEXT_NODE &&
+        el.__agyDynamicSource !== raw &&
+        !el.__agyTranslatingDynamic
+      ) {
         el.__agyDynamicSource = raw;
-        translateThoughtTextEnToKo(raw).then((ko) => {
-          if (!ko || ko === raw || !el.isConnected) return;
-          if ((el.textContent || '').trim() !== raw) return;
-          if (el.childNodes.length === 1 && el.firstChild.nodeType === Node.TEXT_NODE) {
+        el.__agyTranslatingDynamic = true;
+        translateThoughtTextEnToKo(raw)
+          .then((ko) => {
+            const wasTranslating = Boolean(el.__agyTranslatingDynamic);
+            delete el.__agyTranslatingDynamic;
+            if (disposed || !wasTranslating || !ko || ko === raw || !el.isConnected) {
+              if (el.__agyDynamicSource === raw) delete el.__agyDynamicSource;
+              return;
+            }
+            if (
+              (el.textContent || '').trim() !== raw ||
+              el.childNodes.length !== 1 ||
+              el.firstChild.nodeType !== Node.TEXT_NODE
+            ) {
+              if (el.__agyDynamicSource === raw) delete el.__agyDynamicSource;
+              return;
+            }
             const tn = el.firstChild;
             if (!tn.__agyOrigValue) tn.__agyOrigValue = tn.nodeValue;
             tn.__agyKoApplied = ko;
             tn.nodeValue = ko;
-          }
-        });
+          })
+          .catch(() => {
+            delete el.__agyTranslatingDynamic;
+            if (el.__agyDynamicSource === raw) delete el.__agyDynamicSource;
+          });
       }
     }
   }

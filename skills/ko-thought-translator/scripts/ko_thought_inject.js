@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.34
+// @version      1.2.35
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -25,7 +25,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.29';
+  const KO_LOCALIZER_VERSION = 'v13.30';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -83,9 +83,20 @@
   function restoreAllMutatedNodes() {
     try {
       if (!document.body) return;
-      const restoreWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      delete document.body.__agyDynamicSource;
+      delete document.body.__agyTranslatingDynamic;
+      const showFilter =
+        typeof NodeFilter !== 'undefined' && NodeFilter
+          ? (NodeFilter.SHOW_ELEMENT || 1) | (NodeFilter.SHOW_TEXT || 4)
+          : 5;
+      const restoreWalker = document.createTreeWalker(document.body, showFilter);
       let rn;
       while ((rn = restoreWalker.nextNode())) {
+        if (rn.nodeType === 1) {
+          delete rn.__agyDynamicSource;
+          delete rn.__agyTranslatingDynamic;
+          continue;
+        }
         if (rn.__agyOrigValue !== undefined) {
           const parentEl = rn.parentElement;
           rn.nodeValue = rn.__agyOrigValue;
@@ -97,6 +108,12 @@
             delete parentEl.__agyTranslatingDynamic;
           }
         }
+      }
+      if (typeof document.body.querySelectorAll === 'function') {
+        document.body.querySelectorAll('*').forEach((el) => {
+          delete el.__agyDynamicSource;
+          delete el.__agyTranslatingDynamic;
+        });
       }
 
       document.querySelectorAll('[data-agy-orig-attr]').forEach((el) => {
@@ -462,11 +479,7 @@
         let hasSavedProv = false;
         try {
           const sv = localStorage.getItem(PROVIDER_STORAGE_KEY);
-          const knownProviders =
-            typeof window.__agyListTranslationProviders === 'function'
-              ? window.__agyListTranslationProviders()
-              : ['google-translate', 'local-llm'];
-          if (sv && Array.isArray(knownProviders) && knownProviders.includes(sv)) hasSavedProv = true;
+          if (sv && String(sv).trim()) hasSavedProv = true;
         } catch (e) {}
         if (!hasSavedProv) {
           window.__agySetTranslationProvider(DEFAULT_TRANSLATION_PROVIDER);
@@ -2917,10 +2930,25 @@
   const RESTORE_TOKEN_WITH_PARTICLE_REGEX =
     /(?:⟦|\[|【)\s*T(\d+)\s*(?:⟧|\]|】)(?:(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)]))?/gi;
   const QUOTED_KOREAN_PARTICLE_REGEX =
-    /([가-힣])(['"`”’⟧\]】)]+)(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g;
+    /([가-힣A-Za-z0-9_.-]+)(['"`”’⟧\]】]+)(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/g;
 
   function selectKoreanParticleByJongseong(jong, particle) {
-    if (jong === null || jong === undefined) return particle;
+    if (jong === null || jong === undefined) {
+      switch (particle) {
+        case '(과)와':
+          return '와';
+        case '(을)를':
+          return '를';
+        case '(이)가':
+          return '가';
+        case '(은)는':
+          return '는';
+        case '(으)로':
+          return '로';
+        default:
+          return particle;
+      }
+    }
     const hasJong = jong !== 0;
     const isRieul = jong === 8;
     switch (particle) {
@@ -2949,14 +2977,55 @@
     }
   }
 
+  function resolveEnglishWordJongseong(word) {
+    if (!word) return null;
+    const isShortUpperInitialism =
+      /^[A-Z]{1,3}$/.test(word) &&
+      !/^(?:APP|MAP|TOP|POP|TIP|ZIP|PIP|GET|SET|LET|NET|GIT|DOT|BOT|CUT|PUT|CAT|BAT|HAT|RAT|SAT|FAT|MAT|PAT|TAB|JOB|WEB|SUB|DOC|MAC)$/.test(
+        word
+      );
+    if (word.length === 1 || !/[AEIOUYaeiouy]/.test(word) || isShortUpperInitialism) {
+      const lastUpper = word[word.length - 1].toUpperCase();
+      if (lastUpper === 'L' || lastUpper === 'R') return 8;
+      if (lastUpper === 'M' || lastUpper === 'N') return 1;
+      return 0;
+    }
+
+    const lower = word.toLowerCase();
+    if (/[aeiouwy]$/.test(lower)) return 0;
+    if (lower.endsWith('e')) {
+      if (lower.endsWith('le')) return 8;
+      if (/[mn]e$/.test(lower) || lower === 'type') return 1;
+      return 0;
+    }
+    if (lower.endsWith('l')) return 8;
+    if (lower.endsWith('m') || lower.endsWith('n')) return 1;
+    if (lower.endsWith('ng')) return 1;
+    if (/(?:ck|[aiou]k)$/.test(lower) && !/(?:eak|oak)$/.test(lower)) return 1;
+    if (/[aeiou]c$/.test(lower)) return 1;
+    if (/(?:pp|[aeiou]p)$/.test(lower)) return 1;
+    if (/(?:^|[^aeiou])[aeiou]t$/.test(lower) || /(?:out|cut|put)$/.test(lower)) return 1;
+    if (/(?:bb|[aeiou]b)$/.test(lower)) return 1;
+    return 0;
+  }
+
   function resolveLastHangulJongseong(tokenText) {
     if (!tokenText) return null;
-    const stripped = String(tokenText).replace(/['"`”’⟧\]】)\s]+$/g, '');
+    const stripped = String(tokenText).replace(/['"`”’⟧\]】)}\/\s]+$/g, '');
     if (!stripped) return null;
     const lastCh = stripped[stripped.length - 1];
     const code = lastCh.charCodeAt(0);
     if (code >= 0xac00 && code <= 0xd7a3) {
       return (code - 0xac00) % 28;
+    }
+    if (lastCh >= '0' && lastCh <= '9') {
+      if (lastCh === '1' || lastCh === '7' || lastCh === '8') return 8;
+      if (lastCh === '0' || lastCh === '3' || lastCh === '6') return 1;
+      return 0;
+    }
+    const alphaMatch = stripped.match(/([A-Za-z]+)$/);
+    if (alphaMatch) {
+      return resolveEnglishWordJongseong(alphaMatch[1]);
     }
     return null;
   }
@@ -2998,11 +3067,10 @@
 
   function fixQuotedKoreanParticles(text) {
     if (!text) return text;
-    return String(text).replace(QUOTED_KOREAN_PARTICLE_REGEX, (full, lastKo, closingQuote, particle) => {
-      const code = lastKo.charCodeAt(0);
-      if (code < 0xac00 || code > 0xd7a3) return full;
-      const jong = (code - 0xac00) % 28;
-      return lastKo + closingQuote + selectKoreanParticleByJongseong(jong, particle);
+    return String(text).replace(QUOTED_KOREAN_PARTICLE_REGEX, (full, innerToken, closingQuote, particle) => {
+      const jong = resolveLastHangulJongseong(innerToken);
+      if (jong === null) return full;
+      return innerToken + closingQuote + selectKoreanParticleByJongseong(jong, particle);
     });
   }
 
@@ -3052,12 +3120,10 @@
       let adjusted = segText;
       if (prevRestoredCodeText) {
         const jong = resolveLastHangulJongseong(prevRestoredCodeText);
-        if (jong !== null) {
-          adjusted = adjusted.replace(
-            /^(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/,
-            (m) => selectKoreanParticleByJongseong(jong, m)
-          );
-        }
+        adjusted = adjusted.replace(
+          /^(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/,
+          (m) => selectKoreanParticleByJongseong(jong, m)
+        );
       }
       out.appendChild(document.createTextNode(adjusted));
       prevRestoredCodeText = null;
@@ -3353,15 +3419,39 @@
       (typeof document !== 'undefined' && document.querySelector && document.querySelector('ga-remote-control')) ||
       /^https:\/\/.*(?:antigravity\.google\.com|usercontent\.goog)/i.test(window.location?.origin || '')
   );
+  function resolveRegisteredProviderId(candidateId) {
+    const raw = String(candidateId || '').trim();
+    if (!raw) return null;
+    const lower = raw.toLowerCase();
+    if (lower === 'google' || lower === 'gtx' || lower === 'google-translate') {
+      return TRANSLATION_ADAPTERS['google-translate'] ? 'google-translate' : null;
+    }
+    if (lower === 'local' || lower === 'llm' || lower === 'ollama' || lower === 'local-llm') {
+      return TRANSLATION_ADAPTERS['local-llm'] ? 'local-llm' : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(TRANSLATION_ADAPTERS, raw)) {
+      return raw;
+    }
+    const ciMatch = Object.keys(TRANSLATION_ADAPTERS).find((k) => k.toLowerCase() === lower);
+    return ciMatch || null;
+  }
+
   let activeTranslationProvider = isRemoteControlEnv ? 'google-translate' : DEFAULT_TRANSLATION_PROVIDER;
+  let pendingSavedCustomProviderId = null;
   try {
     const savedProv = localStorage.getItem(PROVIDER_STORAGE_KEY);
-    if (savedProv && TRANSLATION_ADAPTERS[savedProv]) {
-      activeTranslationProvider = isRemoteControlEnv && savedProv === 'local-llm' && !window.__agyLocalLlmConfig
-        ? 'google-translate'
-        : savedProv;
-    } else {
-      if (!window.nativeStorage || typeof window.nativeStorage.getItems !== 'function') localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+    if (savedProv && String(savedProv).trim()) {
+      const resolvedSaved = resolveRegisteredProviderId(savedProv);
+      if (resolvedSaved) {
+        activeTranslationProvider =
+          isRemoteControlEnv && resolvedSaved === 'local-llm' && !window.__agyLocalLlmConfig
+            ? 'google-translate'
+            : resolvedSaved;
+      } else {
+        pendingSavedCustomProviderId = String(savedProv).trim();
+      }
+    } else if (!window.nativeStorage || typeof window.nativeStorage.getItems !== 'function') {
+      localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     }
   } catch (e) {}
 
@@ -3372,20 +3462,23 @@
   window.__agyGetTranslationProvider = () => activeTranslationProvider;
   window.__agyListTranslationProviders = () => Object.keys(TRANSLATION_ADAPTERS);
   window.__agyRegisterTranslationAdapter = (id, adapter) => {
-    if (!id || typeof id !== 'string' || !adapter || typeof adapter.translate !== 'function') {
+    const cleanId = typeof id === 'string' ? id.trim() : '';
+    if (!cleanId || !adapter || typeof adapter.translate !== 'function') {
       throw new Error('Invalid translation adapter contract: requires id and translate({ cleanText, protectedText, savedTokens, signal })');
     }
-    TRANSLATION_ADAPTERS[id] = {
-      id,
-      label: adapter.label || id,
+    TRANSLATION_ADAPTERS[cleanId] = {
+      id: cleanId,
+      label: adapter.label || cleanId,
       description: adapter.description || '사용자 정의 번역 어댑터',
       maxConcurrency: Number(adapter.maxConcurrency) > 0 ? Number(adapter.maxConcurrency) : 2,
       translate: adapter.translate,
     };
     try {
-      const savedProv = localStorage.getItem(PROVIDER_STORAGE_KEY);
-      if (savedProv === id && activeTranslationProvider !== id) {
-        activeTranslationProvider = id;
+      const savedProv = (localStorage.getItem(PROVIDER_STORAGE_KEY) || pendingSavedCustomProviderId || '').trim();
+      if (savedProv && savedProv.toLowerCase() === cleanId.toLowerCase()) {
+        activeTranslationProvider = cleanId;
+        pendingSavedCustomProviderId = null;
+        localStorage.setItem(PROVIDER_STORAGE_KEY, cleanId);
       }
     } catch (e) {}
     if (typeof refreshTranslatorSettingsUi === 'function') {
@@ -3394,18 +3487,13 @@
     return Object.keys(TRANSLATION_ADAPTERS);
   };
   window.__agySetTranslationProvider = (providerId, options = {}, _fromCrossFrame = false) => {
-    const norm = String(providerId || '').trim().toLowerCase();
-    const mapped =
-      norm === 'google' || norm === 'gtx' || norm === 'google-translate'
-        ? 'google-translate'
-        : norm === 'local' || norm === 'llm' || norm === 'ollama' || norm === 'local-llm'
-        ? 'local-llm'
-        : norm;
-    if (!TRANSLATION_ADAPTERS[mapped]) {
+    const mapped = resolveRegisteredProviderId(providerId);
+    if (!mapped || !TRANSLATION_ADAPTERS[mapped]) {
       throw new Error(`Unknown translation provider "${providerId}". Available: ${Object.keys(TRANSLATION_ADAPTERS).join(', ')}`);
     }
     const prev = activeTranslationProvider;
     activeTranslationProvider = mapped;
+    pendingSavedCustomProviderId = null;
     try {
       localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     } catch (e) {}
@@ -3599,31 +3687,60 @@
         const items = await window.nativeStorage.getItems();
         if (!items) return;
         let changed = false;
-        const savedProv = items[PROVIDER_STORAGE_KEY];
-        if (savedProv && TRANSLATION_ADAPTERS[savedProv]) {
-          const effectiveProv =
-            isRemoteControlEnv && savedProv === 'local-llm' && !window.__agyLocalLlmConfig
-              ? 'google-translate'
-              : savedProv;
-          try {
-            if (!isRemoteControlEnv || effectiveProv === savedProv) {
-              localStorage.setItem(PROVIDER_STORAGE_KEY, effectiveProv);
-            }
-          } catch (e) {}
-          if (effectiveProv !== activeTranslationProvider) {
-            activeTranslationProvider = effectiveProv;
-            if (activeTranslationProvider === 'local-llm') {
-              resolveLocalLlmEndpoint().then(() => {
-                if (typeof refreshTranslatorSettingsUi === 'function') refreshTranslatorSettingsUi();
-              });
+        const rawSavedProv = items[PROVIDER_STORAGE_KEY];
+        const savedProv = typeof rawSavedProv === 'string' ? rawSavedProv.trim() : '';
+        if (savedProv) {
+          const resolvedSaved =
+            typeof resolveRegisteredProviderId === 'function'
+              ? resolveRegisteredProviderId(savedProv)
+              : TRANSLATION_ADAPTERS[savedProv]
+              ? savedProv
+              : null;
+          if (resolvedSaved) {
+            const isHostOnlyLlmOnRemote =
+              isRemoteControlEnv && resolvedSaved === 'local-llm' && !window.__agyLocalLlmConfig;
+            if (isHostOnlyLlmOnRemote) {
+              // Preserve any custom or non-local-llm provider already active or pending in Remote Control web
+              const hasRemoteCustomSelection =
+                (activeTranslationProvider !== 'google-translate' &&
+                  activeTranslationProvider !== 'local-llm' &&
+                  Boolean(TRANSLATION_ADAPTERS[activeTranslationProvider])) ||
+                Boolean(pendingSavedCustomProviderId);
+              if (!hasRemoteCustomSelection && activeTranslationProvider !== 'google-translate') {
+                activeTranslationProvider = 'google-translate';
+                resolvedLlmEndpoint = null;
+                changed = true;
+              }
             } else {
-              resolvedLlmEndpoint = null;
+              try {
+                localStorage.setItem(PROVIDER_STORAGE_KEY, resolvedSaved);
+              } catch (e) {}
+              pendingSavedCustomProviderId = null;
+              if (resolvedSaved !== activeTranslationProvider) {
+                activeTranslationProvider = resolvedSaved;
+                if (activeTranslationProvider === 'local-llm') {
+                  resolveLocalLlmEndpoint().then(() => {
+                    if (typeof refreshTranslatorSettingsUi === 'function') refreshTranslatorSettingsUi();
+                  });
+                } else {
+                  resolvedLlmEndpoint = null;
+                }
+                changed = true;
+              }
             }
-            changed = true;
+          } else {
+            // Custom adapter ID saved in nativeStorage before async __agyRegisterTranslationAdapter runs:
+            // preserve it instead of overwriting localStorage with the default provider.
+            pendingSavedCustomProviderId = savedProv;
+            try {
+              if (!localStorage.getItem(PROVIDER_STORAGE_KEY)) {
+                localStorage.setItem(PROVIDER_STORAGE_KEY, savedProv);
+              }
+            } catch (e) {}
           }
         } else {
           try {
-            if (!localStorage.getItem(PROVIDER_STORAGE_KEY)) {
+            if (!localStorage.getItem(PROVIDER_STORAGE_KEY) && !pendingSavedCustomProviderId) {
               localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
             }
           } catch (e) {}
@@ -5758,18 +5875,40 @@
         }
         continue;
       }
-      if (!isAlreadyKoreanOrNonEnglish(raw) && el.__agyDynamicSource !== raw) {
+      if (
+        !isAlreadyKoreanOrNonEnglish(raw) &&
+        el.childNodes.length === 1 &&
+        el.firstChild.nodeType === Node.TEXT_NODE &&
+        el.__agyDynamicSource !== raw &&
+        !el.__agyTranslatingDynamic
+      ) {
         el.__agyDynamicSource = raw;
-        translateThoughtTextEnToKo(raw).then((ko) => {
-          if (!ko || ko === raw || !el.isConnected) return;
-          if ((el.textContent || '').trim() !== raw) return;
-          if (el.childNodes.length === 1 && el.firstChild.nodeType === Node.TEXT_NODE) {
+        el.__agyTranslatingDynamic = true;
+        translateThoughtTextEnToKo(raw)
+          .then((ko) => {
+            const wasTranslating = Boolean(el.__agyTranslatingDynamic);
+            delete el.__agyTranslatingDynamic;
+            if (disposed || !wasTranslating || !ko || ko === raw || !el.isConnected) {
+              if (el.__agyDynamicSource === raw) delete el.__agyDynamicSource;
+              return;
+            }
+            if (
+              (el.textContent || '').trim() !== raw ||
+              el.childNodes.length !== 1 ||
+              el.firstChild.nodeType !== Node.TEXT_NODE
+            ) {
+              if (el.__agyDynamicSource === raw) delete el.__agyDynamicSource;
+              return;
+            }
             const tn = el.firstChild;
             if (!tn.__agyOrigValue) tn.__agyOrigValue = tn.nodeValue;
             tn.__agyKoApplied = ko;
             tn.nodeValue = ko;
-          }
-        });
+          })
+          .catch(() => {
+            delete el.__agyTranslatingDynamic;
+            if (el.__agyDynamicSource === raw) delete el.__agyDynamicSource;
+          });
       }
     }
   }

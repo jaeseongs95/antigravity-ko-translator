@@ -229,15 +229,39 @@
       (typeof document !== 'undefined' && document.querySelector && document.querySelector('ga-remote-control')) ||
       /^https:\/\/.*(?:antigravity\.google\.com|usercontent\.goog)/i.test(window.location?.origin || '')
   );
+  function resolveRegisteredProviderId(candidateId) {
+    const raw = String(candidateId || '').trim();
+    if (!raw) return null;
+    const lower = raw.toLowerCase();
+    if (lower === 'google' || lower === 'gtx' || lower === 'google-translate') {
+      return TRANSLATION_ADAPTERS['google-translate'] ? 'google-translate' : null;
+    }
+    if (lower === 'local' || lower === 'llm' || lower === 'ollama' || lower === 'local-llm') {
+      return TRANSLATION_ADAPTERS['local-llm'] ? 'local-llm' : null;
+    }
+    if (Object.prototype.hasOwnProperty.call(TRANSLATION_ADAPTERS, raw)) {
+      return raw;
+    }
+    const ciMatch = Object.keys(TRANSLATION_ADAPTERS).find((k) => k.toLowerCase() === lower);
+    return ciMatch || null;
+  }
+
   let activeTranslationProvider = isRemoteControlEnv ? 'google-translate' : DEFAULT_TRANSLATION_PROVIDER;
+  let pendingSavedCustomProviderId = null;
   try {
     const savedProv = localStorage.getItem(PROVIDER_STORAGE_KEY);
-    if (savedProv && TRANSLATION_ADAPTERS[savedProv]) {
-      activeTranslationProvider = isRemoteControlEnv && savedProv === 'local-llm' && !window.__agyLocalLlmConfig
-        ? 'google-translate'
-        : savedProv;
-    } else {
-      if (!window.nativeStorage || typeof window.nativeStorage.getItems !== 'function') localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
+    if (savedProv && String(savedProv).trim()) {
+      const resolvedSaved = resolveRegisteredProviderId(savedProv);
+      if (resolvedSaved) {
+        activeTranslationProvider =
+          isRemoteControlEnv && resolvedSaved === 'local-llm' && !window.__agyLocalLlmConfig
+            ? 'google-translate'
+            : resolvedSaved;
+      } else {
+        pendingSavedCustomProviderId = String(savedProv).trim();
+      }
+    } else if (!window.nativeStorage || typeof window.nativeStorage.getItems !== 'function') {
+      localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     }
   } catch (e) {}
 
@@ -248,20 +272,23 @@
   window.__agyGetTranslationProvider = () => activeTranslationProvider;
   window.__agyListTranslationProviders = () => Object.keys(TRANSLATION_ADAPTERS);
   window.__agyRegisterTranslationAdapter = (id, adapter) => {
-    if (!id || typeof id !== 'string' || !adapter || typeof adapter.translate !== 'function') {
+    const cleanId = typeof id === 'string' ? id.trim() : '';
+    if (!cleanId || !adapter || typeof adapter.translate !== 'function') {
       throw new Error('Invalid translation adapter contract: requires id and translate({ cleanText, protectedText, savedTokens, signal })');
     }
-    TRANSLATION_ADAPTERS[id] = {
-      id,
-      label: adapter.label || id,
+    TRANSLATION_ADAPTERS[cleanId] = {
+      id: cleanId,
+      label: adapter.label || cleanId,
       description: adapter.description || '사용자 정의 번역 어댑터',
       maxConcurrency: Number(adapter.maxConcurrency) > 0 ? Number(adapter.maxConcurrency) : 2,
       translate: adapter.translate,
     };
     try {
-      const savedProv = localStorage.getItem(PROVIDER_STORAGE_KEY);
-      if (savedProv === id && activeTranslationProvider !== id) {
-        activeTranslationProvider = id;
+      const savedProv = (localStorage.getItem(PROVIDER_STORAGE_KEY) || pendingSavedCustomProviderId || '').trim();
+      if (savedProv && savedProv.toLowerCase() === cleanId.toLowerCase()) {
+        activeTranslationProvider = cleanId;
+        pendingSavedCustomProviderId = null;
+        localStorage.setItem(PROVIDER_STORAGE_KEY, cleanId);
       }
     } catch (e) {}
     if (typeof refreshTranslatorSettingsUi === 'function') {
@@ -270,18 +297,13 @@
     return Object.keys(TRANSLATION_ADAPTERS);
   };
   window.__agySetTranslationProvider = (providerId, options = {}, _fromCrossFrame = false) => {
-    const norm = String(providerId || '').trim().toLowerCase();
-    const mapped =
-      norm === 'google' || norm === 'gtx' || norm === 'google-translate'
-        ? 'google-translate'
-        : norm === 'local' || norm === 'llm' || norm === 'ollama' || norm === 'local-llm'
-        ? 'local-llm'
-        : norm;
-    if (!TRANSLATION_ADAPTERS[mapped]) {
+    const mapped = resolveRegisteredProviderId(providerId);
+    if (!mapped || !TRANSLATION_ADAPTERS[mapped]) {
       throw new Error(`Unknown translation provider "${providerId}". Available: ${Object.keys(TRANSLATION_ADAPTERS).join(', ')}`);
     }
     const prev = activeTranslationProvider;
     activeTranslationProvider = mapped;
+    pendingSavedCustomProviderId = null;
     try {
       localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
     } catch (e) {}

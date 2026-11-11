@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.29';
+  const KO_LOCALIZER_VERSION = 'v13.30';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -58,9 +58,20 @@
   function restoreAllMutatedNodes() {
     try {
       if (!document.body) return;
-      const restoreWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      delete document.body.__agyDynamicSource;
+      delete document.body.__agyTranslatingDynamic;
+      const showFilter =
+        typeof NodeFilter !== 'undefined' && NodeFilter
+          ? (NodeFilter.SHOW_ELEMENT || 1) | (NodeFilter.SHOW_TEXT || 4)
+          : 5;
+      const restoreWalker = document.createTreeWalker(document.body, showFilter);
       let rn;
       while ((rn = restoreWalker.nextNode())) {
+        if (rn.nodeType === 1) {
+          delete rn.__agyDynamicSource;
+          delete rn.__agyTranslatingDynamic;
+          continue;
+        }
         if (rn.__agyOrigValue !== undefined) {
           const parentEl = rn.parentElement;
           rn.nodeValue = rn.__agyOrigValue;
@@ -72,6 +83,12 @@
             delete parentEl.__agyTranslatingDynamic;
           }
         }
+      }
+      if (typeof document.body.querySelectorAll === 'function') {
+        document.body.querySelectorAll('*').forEach((el) => {
+          delete el.__agyDynamicSource;
+          delete el.__agyTranslatingDynamic;
+        });
       }
 
       document.querySelectorAll('[data-agy-orig-attr]').forEach((el) => {
@@ -437,11 +454,7 @@
         let hasSavedProv = false;
         try {
           const sv = localStorage.getItem(PROVIDER_STORAGE_KEY);
-          const knownProviders =
-            typeof window.__agyListTranslationProviders === 'function'
-              ? window.__agyListTranslationProviders()
-              : ['google-translate', 'local-llm'];
-          if (sv && Array.isArray(knownProviders) && knownProviders.includes(sv)) hasSavedProv = true;
+          if (sv && String(sv).trim()) hasSavedProv = true;
         } catch (e) {}
         if (!hasSavedProv) {
           window.__agySetTranslationProvider(DEFAULT_TRANSLATION_PROVIDER);

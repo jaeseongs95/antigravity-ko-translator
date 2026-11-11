@@ -18,31 +18,60 @@
         const items = await window.nativeStorage.getItems();
         if (!items) return;
         let changed = false;
-        const savedProv = items[PROVIDER_STORAGE_KEY];
-        if (savedProv && TRANSLATION_ADAPTERS[savedProv]) {
-          const effectiveProv =
-            isRemoteControlEnv && savedProv === 'local-llm' && !window.__agyLocalLlmConfig
-              ? 'google-translate'
-              : savedProv;
-          try {
-            if (!isRemoteControlEnv || effectiveProv === savedProv) {
-              localStorage.setItem(PROVIDER_STORAGE_KEY, effectiveProv);
-            }
-          } catch (e) {}
-          if (effectiveProv !== activeTranslationProvider) {
-            activeTranslationProvider = effectiveProv;
-            if (activeTranslationProvider === 'local-llm') {
-              resolveLocalLlmEndpoint().then(() => {
-                if (typeof refreshTranslatorSettingsUi === 'function') refreshTranslatorSettingsUi();
-              });
+        const rawSavedProv = items[PROVIDER_STORAGE_KEY];
+        const savedProv = typeof rawSavedProv === 'string' ? rawSavedProv.trim() : '';
+        if (savedProv) {
+          const resolvedSaved =
+            typeof resolveRegisteredProviderId === 'function'
+              ? resolveRegisteredProviderId(savedProv)
+              : TRANSLATION_ADAPTERS[savedProv]
+              ? savedProv
+              : null;
+          if (resolvedSaved) {
+            const isHostOnlyLlmOnRemote =
+              isRemoteControlEnv && resolvedSaved === 'local-llm' && !window.__agyLocalLlmConfig;
+            if (isHostOnlyLlmOnRemote) {
+              // Preserve any custom or non-local-llm provider already active or pending in Remote Control web
+              const hasRemoteCustomSelection =
+                (activeTranslationProvider !== 'google-translate' &&
+                  activeTranslationProvider !== 'local-llm' &&
+                  Boolean(TRANSLATION_ADAPTERS[activeTranslationProvider])) ||
+                Boolean(pendingSavedCustomProviderId);
+              if (!hasRemoteCustomSelection && activeTranslationProvider !== 'google-translate') {
+                activeTranslationProvider = 'google-translate';
+                resolvedLlmEndpoint = null;
+                changed = true;
+              }
             } else {
-              resolvedLlmEndpoint = null;
+              try {
+                localStorage.setItem(PROVIDER_STORAGE_KEY, resolvedSaved);
+              } catch (e) {}
+              pendingSavedCustomProviderId = null;
+              if (resolvedSaved !== activeTranslationProvider) {
+                activeTranslationProvider = resolvedSaved;
+                if (activeTranslationProvider === 'local-llm') {
+                  resolveLocalLlmEndpoint().then(() => {
+                    if (typeof refreshTranslatorSettingsUi === 'function') refreshTranslatorSettingsUi();
+                  });
+                } else {
+                  resolvedLlmEndpoint = null;
+                }
+                changed = true;
+              }
             }
-            changed = true;
+          } else {
+            // Custom adapter ID saved in nativeStorage before async __agyRegisterTranslationAdapter runs:
+            // preserve it instead of overwriting localStorage with the default provider.
+            pendingSavedCustomProviderId = savedProv;
+            try {
+              if (!localStorage.getItem(PROVIDER_STORAGE_KEY)) {
+                localStorage.setItem(PROVIDER_STORAGE_KEY, savedProv);
+              }
+            } catch (e) {}
           }
         } else {
           try {
-            if (!localStorage.getItem(PROVIDER_STORAGE_KEY)) {
+            if (!localStorage.getItem(PROVIDER_STORAGE_KEY) && !pendingSavedCustomProviderId) {
               localStorage.setItem(PROVIDER_STORAGE_KEY, activeTranslationProvider);
             }
           } catch (e) {}

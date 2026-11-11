@@ -27,10 +27,10 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.29';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.30';"));
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugin.json'), 'utf8'));
-  assert.equal(pkgJson.version, '1.2.34');
+  assert.equal(pkgJson.version, '1.2.35');
   assert.equal(pluginJson.version, pkgJson.version, 'D-0019: plugin.json version must stay synchronized with package.json');
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
@@ -993,7 +993,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.29',
+      __agyKoLocalizerActive: 'v13.30',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1590,8 +1590,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 14. D-0013~D-0019 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, .no-animations Web Animations suppression, 16ms FOUC elimination, worked-for latest turn guard, retranslateVisibleThoughts parent propagation, queued messages card & new strings, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.29') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.29 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v13.30') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.30 and must NOT claim verboseConversationSteps: true is force-enabled'
   );
   const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
   assert.ok(
@@ -2043,8 +2043,8 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
   const readmeKo = fs.readFileSync(readmeKoPath, 'utf8');
   assert.ok(readmeEn.includes('[한국어 문서 (README.ko.md)](./README.ko.md)'), 'D-0022: English README.md must link to README.ko.md at the top');
   assert.ok(readmeKo.includes('[English Documentation (README.md)](./README.md)'), 'D-0022: Korean README.ko.md must link to README.md at the top');
-  assert.ok(readmeEn.includes('v1.2.34') && readmeEn.includes('v13.29'), 'D-0022: README.md must reflect v1.2.34 / v13.29');
-  assert.ok(readmeKo.includes('v1.2.34') && readmeKo.includes('v13.29'), 'D-0022: README.ko.md must reflect v1.2.34 / v13.29');
+  assert.ok(readmeEn.includes('v1.2.35') && readmeEn.includes('v13.30'), 'D-0022: README.md must reflect v1.2.35 / v13.30');
+  assert.ok(readmeKo.includes('v1.2.35') && readmeKo.includes('v13.30'), 'D-0022: README.ko.md must reflect v1.2.35 / v13.30');
 
   // D-0023: Verify segment.isLatest:false overrides isLastContainer:true on Lhc fiber so historical execution segments inside the latest turn container are NEVER force-expanded on session switch
   const activeHelperMatch = mod08.match(
@@ -2123,7 +2123,7 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
   );
 });
 
-test('D-0024..D-0031 comprehensive audit regressions (v1.2.34 / v13.29 & Antigravity v2.31.0)', async () => {
+test('D-0024..D-0031 comprehensive audit regressions (v1.2.35 / v13.30 & Antigravity v2.31.0)', async () => {
   const os = require('node:os');
   const mod01 = fs.readFileSync(path.join(RENDERER_DIR, '01-bootstrap-and-cache.js'), 'utf8');
   const mod02 = fs.readFileSync(path.join(RENDERER_DIR, '02-static-ui-dict.js'), 'utf8');
@@ -2187,16 +2187,31 @@ test('D-0024..D-0031 comprehensive audit regressions (v1.2.34 / v13.29 & Antigra
   });
   const builtP = tokSandbox.__buildEl(
     makeElem('P'),
-    [makeElem('CODE', '파일'), makeElem('CODE', '설정')],
-    '⟦C0⟧으로 열고 ⟦C1⟧로 저장'
+    [makeElem('CODE', '파일'), makeElem('CODE', '설정'), makeElem('CODE', 'main.py'), makeElem('CODE', 'LGTM'), makeElem('CODE', '11434')],
+    '⟦C0⟧으로 열고 ⟦C1⟧로 저장하며 ⟦C2⟧(으)로 실행한 뒤 ⟦C3⟧로 승인하고 ⟦C4⟧(을)를 바인딩'
   );
   assert.equal(
     builtP.textContent,
-    '파일로 열고 설정으로 저장',
-    'D-0025: buildTranslatedElement must adjust particles immediately following restored <code> elements including ㄹ batchim'
+    '파일로 열고 설정으로 저장하며 main.py로 실행한 뒤 LGTM으로 승인하고 11434를 바인딩',
+    'D-0025: buildTranslatedElement must adjust particles immediately following restored <code> elements for Hangul, English words/acronyms, and numbers'
   );
 
-  // D-0026: Remote Control web environment guard in loadPersistentTranslatorSettings & custom adapter persistence
+  // D-0025 reviewer findings (a) & (b): parenthesized Korean glosses MUST NEVER be corrupted, and English/acronym/numeric tokens must resolve particles cleanly
+  assert.equal(
+    tokSandbox.__restore('결과(성공)가 확인되었고 결과(정상)는 유지됩니다.', []),
+    '결과(성공)가 확인되었고 결과(정상)는 유지됩니다.',
+    'D-0025(a): closing parenthesis ")" must NEVER be treated as a quote boundary corrupting head-noun particles'
+  );
+  assert.equal(
+    tokSandbox.__restore(
+      '⟦T0⟧(으)로 이동하고 ⟦T1⟧(을)를 수정하며 ⟦T2⟧로 연결하고 ⟦T3⟧로 판정하고 ⟦T4⟧으로 설정합니다.',
+      ['`main.py`', '`config`', '11434', 'LGTM', '`URL`']
+    ),
+    '`main.py`로 이동하고 `config`를 수정하며 11434로 연결하고 LGTM으로 판정하고 `URL`로 설정합니다.',
+    'D-0025(b): English words/extensions (`main.py`, `config`), numbers (11434), and acronyms (LGTM, URL) must resolve parenthesized & plain particles accurately without producing `(을)을`'
+  );
+
+  // D-0026: Remote Control web environment guard in loadPersistentTranslatorSettings & custom adapter persistence (including mixed-case IDs & async pre-registration hydration)
   const rcSandbox = {
     DEFAULT_TRANSLATION_PROVIDER: 'google-translate',
     PROVIDER_STORAGE_KEY: 'agy-ko-thought-provider',
@@ -2221,45 +2236,67 @@ test('D-0024..D-0031 comprehensive audit regressions (v1.2.34 / v13.29 & Antigra
     URL,
     fetch: async () => ({ ok: true, json: async () => [] }),
     localStorage: {
-      _map: new Map([['agy-ko-thought-provider', 'custom-deepl']]),
+      _map: new Map(),
       getItem(k) { return this._map.has(k) ? this._map.get(k) : null; },
       setItem(k, v) { this._map.set(k, String(v)); },
     },
     window: {
       location: { origin: 'https://antigravity.google.com' },
       nativeStorage: {
-        getItems: async () => ({ 'agy-ko-thought-provider': 'local-llm' }),
+        _items: { 'agy-ko-thought-provider': 'DeepL' },
+        async getItems() { return this._items; },
         updateItems: () => {},
       },
     },
   };
   rcSandbox.window.localStorage = rcSandbox.localStorage;
   vm.runInNewContext(`${mod04}\n${mod05}`, rcSandbox);
-  assert.equal(
-    rcSandbox.window.__agyGetTranslationProvider(),
-    'google-translate',
-    'D-0026: Remote web must start with google-translate when custom-deepl is not registered yet'
-  );
+  // 1) loadPersistentTranslatorSettings runs BEFORE async custom adapter registration with empty localStorage and nativeStorage='DeepL'
   await rcSandbox.window.__agySyncPersistentSettings();
   assert.equal(
-    rcSandbox.window.__agyGetTranslationProvider(),
-    'google-translate',
-    'D-0026: loadPersistentTranslatorSettings in Remote Control web without __agyLocalLlmConfig must NOT switch to host local-llm'
+    rcSandbox.localStorage.getItem('agy-ko-thought-provider'),
+    'DeepL',
+    'D-0026(b): loadPersistentTranslatorSettings must NOT overwrite empty localStorage with default when nativeStorage holds an unregistered custom adapter ID'
   );
-  // Registering saved custom adapter must restore it automatically
-  rcSandbox.localStorage.setItem('agy-ko-thought-provider', 'custom-deepl');
-  rcSandbox.window.__agyRegisterTranslationAdapter('custom-deepl', {
-    label: 'DeepL Custom',
+  // 2) Mixed-case custom adapter 'DeepL' registers asynchronously -> must auto-restore activeTranslationProvider = 'DeepL'
+  rcSandbox.window.__agyRegisterTranslationAdapter('DeepL', {
+    label: 'DeepL Pro',
     translate: async ({ cleanText }) => cleanText,
   });
   assert.equal(
     rcSandbox.window.__agyGetTranslationProvider(),
-    'custom-deepl',
-    'D-0026: registering a custom adapter matching saved localStorage provider must restore activeTranslationProvider'
+    'DeepL',
+    'D-0026(b): async registration of saved mixed-case custom adapter "DeepL" must restore activeTranslationProvider'
+  );
+  // 3) Selecting mixed-case custom adapter via __agySetTranslationProvider('DeepL') and case-insensitive 'deepl' must both work without throwing
+  rcSandbox.window.__agySetTranslationProvider('google-translate');
+  assert.equal(rcSandbox.window.__agyGetTranslationProvider(), 'google-translate');
+  rcSandbox.window.__agySetTranslationProvider('DeepL');
+  assert.equal(
+    rcSandbox.window.__agyGetTranslationProvider(),
+    'DeepL',
+    'D-0026(a): __agySetTranslationProvider("DeepL") must select mixed-case custom adapter without Unknown translation provider error'
+  );
+  // 4) On Remote Control web, if host nativeStorage has 'local-llm', syncing must NOT clobber active custom adapter 'DeepL' with 'google-translate'
+  rcSandbox.window.nativeStorage._items = { 'agy-ko-thought-provider': 'local-llm' };
+  await rcSandbox.window.__agySyncPersistentSettings();
+  assert.equal(
+    rcSandbox.window.__agyGetTranslationProvider(),
+    'DeepL',
+    'D-0026(b): Remote Control web with active custom adapter must NOT be overwritten by google-translate when host nativeStorage holds local-llm'
+  );
+  // 5) When no custom adapter is active (only host local-llm on Remote Control web), fallback to google-translate still applies
+  rcSandbox.window.__agySetTranslationProvider('google-translate');
+  await rcSandbox.window.__agySyncPersistentSettings();
+  assert.equal(
+    rcSandbox.window.__agyGetTranslationProvider(),
+    'google-translate',
+    'D-0026: Remote Control web without __agyLocalLlmConfig must keep google-translate instead of switching to host local-llm'
   );
 
-  // D-0027: restoreAllMutatedNodes must clear parentElement.__agyDynamicSource & __agyTranslatingDynamic; unregisterStatusbarTranslatorAdapter must delete pending Map entry
-  const dynParent = { __agyDynamicSource: 'Allow command execution?', __agyTranslatingDynamic: true };
+  // D-0027: restoreAllMutatedNodes must clear __agyDynamicSource & __agyTranslatingDynamic across ALL elements (even when textNode was never mutated yet), and async translation failure must roll back __agyDynamicSource
+  const dynParent = { nodeType: 1, __agyDynamicSource: 'Allow command execution?', __agyTranslatingDynamic: true };
+  const inflightUnmutatedEl = { nodeType: 1, __agyDynamicSource: 'Pending widget text', __agyTranslatingDynamic: true };
   const dynTextNode = {
     nodeType: 3,
     nodeValue: '명령 실행을 허용할까요?',
@@ -2267,19 +2304,21 @@ test('D-0024..D-0031 comprehensive audit regressions (v1.2.34 / v13.29 & Antigra
     __agyKoApplied: '명령 실행을 허용할까요?',
     parentElement: dynParent,
   };
+  const restoreNodes = [dynParent, dynTextNode, inflightUnmutatedEl];
   const restoreSandbox = {
-    NodeFilter: { SHOW_TEXT: 4 },
+    NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4 },
     window: { location: { origin: 'https://127.0.0.1:58069' } },
     localStorage: { getItem: () => null, setItem: () => {} },
     document: {
-      body: {},
+      body: {
+        __agyDynamicSource: 'Body stale',
+        querySelectorAll: () => [dynParent, inflightUnmutatedEl],
+      },
       createTreeWalker: () => {
-        let done = false;
+        let idx = 0;
         return {
           nextNode() {
-            if (done) return null;
-            done = true;
-            return dynTextNode;
+            return idx < restoreNodes.length ? restoreNodes[idx++] : null;
           },
         };
       },
@@ -2291,12 +2330,62 @@ test('D-0024..D-0031 comprehensive audit regressions (v1.2.34 / v13.29 & Antigra
   assert.equal(dynTextNode.nodeValue, 'Allow command execution?');
   assert.equal(dynParent.__agyDynamicSource, undefined, 'D-0027: restoreAllMutatedNodes must delete parentElement.__agyDynamicSource');
   assert.equal(dynParent.__agyTranslatingDynamic, undefined, 'D-0027: restoreAllMutatedNodes must delete parentElement.__agyTranslatingDynamic');
+  assert.equal(
+    inflightUnmutatedEl.__agyDynamicSource,
+    undefined,
+    'D-0027: restoreAllMutatedNodes must also clear __agyDynamicSource on elements whose text node had no __agyOrigValue yet'
+  );
+  assert.equal(inflightUnmutatedEl.__agyTranslatingDynamic, undefined);
+
+  // Verify localizeQuestionAndPermissionWidgets rolls back __agyDynamicSource on null/failed translation so subsequent scan retries cleanly
+  let widgetTranslateAttempt = 0;
+  const retryTextNode = { nodeType: 3, nodeValue: 'Approve network access?' };
+  const retryWidgetEl = {
+    nodeType: 1,
+    isConnected: true,
+    children: [],
+    childNodes: [retryTextNode],
+    firstChild: retryTextNode,
+    get textContent() { return retryTextNode.nodeValue; },
+    querySelector: () => null,
+  };
+  const widgetRoot = {
+    querySelectorAll: () => [retryWidgetEl],
+  };
+  const widgetRetrySandbox = {
+    disposed: false,
+    Node: { TEXT_NODE: 3 },
+    translateStaticUiSync: () => null,
+    isAlreadyKoreanOrNonEnglish: () => false,
+    translateThoughtTextEnToKo: async () => {
+      widgetTranslateAttempt++;
+      return widgetTranslateAttempt === 1 ? null : '네트워크 접근을 승인하시겠습니까?';
+    },
+  };
+  const widgetFnMatch = mod08.match(/function localizeQuestionAndPermissionWidgets\(rootNode\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  const STATIC_UI_SUBTREE_PRUNE_SELECTOR/);
+  assert.ok(widgetFnMatch, 'localizeQuestionAndPermissionWidgets must exist in 08-dom-observer.js');
+  const widgetFnCode = widgetFnMatch[0].replace(/\r?\n\r?\n  const STATIC_UI_SUBTREE_PRUNE_SELECTOR$/, '');
+  vm.runInNewContext(`${widgetFnCode}\n;globalThis.__locWidgets = localizeQuestionAndPermissionWidgets;`, widgetRetrySandbox);
+  widgetRetrySandbox.__locWidgets(widgetRoot);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(
+    retryWidgetEl.__agyDynamicSource,
+    undefined,
+    'D-0027: failed/null async widget translation must roll back __agyDynamicSource'
+  );
+  widgetRetrySandbox.__locWidgets(widgetRoot);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(
+    retryTextNode.nodeValue,
+    '네트워크 접근을 승인하시겠습니까?',
+    'D-0027: subsequent widget scan after failed attempt must succeed instead of being permanently skipped'
+  );
 
   const pendingAdapters = new Map();
   const sbSandbox = {
     disposed: false,
     activeTranslationProvider: 'google-translate',
-    KO_LOCALIZER_VERSION: 'v13.29',
+    KO_LOCALIZER_VERSION: 'v13.30',
     getProviderDisplayMeta: () => ({ shortLabel: 'Google 번역', title: 'Google 번역' }),
     openOrToggleTranslatorSettingsModal: () => {},
     closeTranslatorSettingsModal: () => {},
@@ -2315,12 +2404,18 @@ test('D-0024..D-0031 comprehensive audit regressions (v1.2.34 / v13.29 & Antigra
     'D-0027: unregisterStatusbarTranslatorAdapter must delete stale ko-translator entry from __agyCustomStatusBarAdapters Map'
   );
 
-  // D-0028: local-llm-service.js exact port matching & quoted argument preservation
-  const { parseCommandArgs, extractListeningPidsFromNetstat } = require(path.join(HOST_DIR, 'local-llm-service.js'));
+  // D-0028: local-llm-service.js exact port matching, zero indiscriminate /IM taskkill, & escaped quote preservation in parseCommandArgs
+  const llmServicePath = path.join(HOST_DIR, 'local-llm-service.js');
+  const llmServiceSource = fs.readFileSync(llmServicePath, 'utf8');
+  assert.ok(
+    !llmServiceSource.includes("'/IM'"),
+    'D-0028: local-llm-service.js must NEVER run indiscriminate taskkill /IM <exeName> killing unrelated processes on other ports'
+  );
+  const { parseCommandArgs, extractListeningPidsFromNetstat } = require(llmServicePath);
   assert.deepEqual(
-    parseCommandArgs('serve --model "C:\\Program Files\\Models\\qwen ko.gguf" --port 11434'),
-    ['serve', '--model', 'C:\\Program Files\\Models\\qwen ko.gguf', '--port', '11434'],
-    'D-0028: parseCommandArgs must preserve quoted paths containing spaces'
+    parseCommandArgs('serve --model "C:\\Program Files\\Models\\qwen ko.gguf" --prompt "Say \\"hello\\" world" --dir "C:\\Models\\\\"'),
+    ['serve', '--model', 'C:\\Program Files\\Models\\qwen ko.gguf', '--prompt', 'Say "hello" world', '--dir', 'C:\\Models\\'],
+    'D-0028: parseCommandArgs must preserve quoted paths with spaces, escaped quotes (\\"), and trailing escaped backslashes (\\\\")'
   );
   const sampleNetstat = [
     '  Proto  Local Address          Foreign Address        State           PID',
