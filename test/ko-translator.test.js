@@ -3139,8 +3139,8 @@ test('D-0029 & D-0034: bundled ensure_statusbar_patch.js lexical transform, NUL-
 
   assert.equal(
     statusbarPatcher.PATCHER_CAPABILITY_REVISION,
-    'AGY_STATUSBAR_PATCHER_V5_R2',
-    'D-0029/D-0034: ensure_statusbar_patch.js must export PATCHER_CAPABILITY_REVISION = AGY_STATUSBAR_PATCHER_V5_R2'
+    'AGY_STATUSBAR_PATCHER_V5_R3',
+    'D-0029/D-0034: ensure_statusbar_patch.js must export PATCHER_CAPABILITY_REVISION = AGY_STATUSBAR_PATCHER_V5_R3'
   );
   assert.equal(
     typeof statusbarPatcher.isInjectablePageTarget,
@@ -3360,7 +3360,7 @@ test('D-0029 & D-0034: bundled ensure_statusbar_patch.js lexical transform, NUL-
     const upgraded = entryPatcher.ensureHostStatusbarPatcherInstalled(staleHostPatcherPath);
     assert.equal(upgraded, true, 'D-0034: ensureHostStatusbarPatcherInstalled must overwrite outdated host patcher');
     assert.ok(
-      fs.readFileSync(staleHostPatcherPath, 'utf8').includes('AGY_STATUSBAR_PATCHER_V5_R2'),
+      fs.readFileSync(staleHostPatcherPath, 'utf8').includes('AGY_STATUSBAR_PATCHER_V5_R3'),
       'D-0034: upgraded host ensure_statusbar_patch.js must contain latest PATCHER_CAPABILITY_REVISION'
     );
   } finally {
@@ -3876,7 +3876,7 @@ test('D-0039 (KOTRANS-C1) & runtime verification suite: atomic watcher PID write
     );
 
     // Wait up to 900ms (> 2 watcher ticks at 400ms) for displaced watcher #1 to fence & self-exit
-    await Promise.race([fenceExitPromise, sleep(900)]);
+    await Promise.race([fenceExitPromise, sleep(1800)]);
     const kernelReapDeadline = Date.now() + 300;
     while (fenceChildExitCode !== null && isPidAlive(fencedWatcherChild.pid) && Date.now() < kernelReapDeadline) {
       await sleep(15);
@@ -3910,29 +3910,37 @@ test('D-0039 (KOTRANS-C1) & runtime verification suite: atomic watcher PID write
       'D-0039: settings-storage.js must use writeFileAtomicSync instead of raw fs.writeFileSync for PID files'
     );
 
+    // Oracle correction (D-0039 re-audit): an unauthenticated/recycled PID written into WATCHER_PID_PATH
+    // (simulating OS reboot or PID reuse by an unrelated process) MUST NEVER receive SIGTERM/SIGKILL.
+    // Conversely, a real sentinel-authenticated old watcher MUST shut down cleanly before replacement spawn.
     staleChild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
       windowsHide: true,
       stdio: 'ignore',
     });
-    assert.equal(isPidAlive(staleChild.pid), true, 'stale watcher fixture must start alive');
+    assert.equal(isPidAlive(staleChild.pid), true, 'recycled/unrelated PID fixture must start alive');
     fs.writeFileSync(isolatedPidPath, `${staleChild.pid}:0-0-0-0`, 'utf8');
 
     assert.equal(settingsStorage.isZombieProcStatContent('4242 (node (worker)) Z 1 4242 4242 0 -1 4194560'), true);
     assert.equal(settingsStorage.isZombieProcStatContent('4242 (node) S 1 4242 4242 0 -1 4194560'), false);
 
-    let staleAliveAtSpawnMoment = null;
+    let recycledAliveAtSpawnMoment = null;
     const replacementPid = settingsStorage.ensureStorageWatcher(dummyEntryPath, {
       watcherPidPath: isolatedPidPath,
       spawnFn: (scriptPath, pidPath) => {
-        staleAliveAtSpawnMoment = isPidAlive(staleChild.pid);
+        recycledAliveAtSpawnMoment = isPidAlive(staleChild.pid);
         return settingsStorage.spawnDetachedWatcherProcess(scriptPath, pidPath);
       },
     });
     spawnedHeadlessPid = replacementPid;
     assert.equal(
-      staleAliveAtSpawnMoment,
-      false,
-      'D-0039: ensureStorageWatcher must wait for the old watcher process to exit before spawning the replacement'
+      recycledAliveAtSpawnMoment,
+      true,
+      'D-0039: ensureStorageWatcher must NEVER send SIGTERM/SIGKILL to an unauthenticated/recycled PID'
+    );
+    assert.equal(
+      isPidAlive(staleChild.pid),
+      true,
+      'D-0039: unrelated process holding recycled PID must remain alive after watcher replacement'
     );
     assert.ok(replacementPid && replacementPid !== staleChild.pid, 'TC-RT-02: headless replacement watcher must spawn');
     assert.ok(
@@ -4249,3 +4257,660 @@ test('D-0039 (KOTRANS-C1) & runtime verification suite: atomic watcher PID write
   }
 });
 
+
+test(
+  'Adversarial Re-Audit Regression Suite (D-0028, D-0029, D-0032, D-0034, D-0037, D-0038, D-0039)',
+  { timeout: 15000 },
+  async (t) => {
+  const os = require('node:os');
+  const http = require('node:http');
+  const crypto = require('node:crypto');
+  const { spawn } = require('node:child_process');
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  await t.test('1. [D-0028/D-0037] Same-image Windows PID reuse survival via cryptographic sentinel & extensionless binary normalization', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-reaudit-llm-'));
+    const llmPidPath = path.join(tmpDir, 'ko_thought_llm.pid');
+    const pathsModPath = path.join(HOST_DIR, 'paths.js');
+    const llmModPath = path.join(HOST_DIR, 'local-llm-service.js');
+    const settingsStorage = require(path.join(HOST_DIR, 'settings-storage.js'));
+    let sameImageExternalProc = null;
+
+    try {
+      delete require.cache[require.resolve(pathsModPath)];
+      delete require.cache[require.resolve(llmModPath)];
+      const llmSvc = require(llmModPath);
+
+      // (1a) Same-image (`node.exe` / `ollama.exe`) PID reuse: external `node` process gets written into ko_thought_llm.pid
+      // WITH matching `readProcessIdentityToken(pid)` (e.g. `win32-image:node.exe`)!
+      sameImageExternalProc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+      assert.equal(settingsStorage.isProcessAlive(sameImageExternalProc.pid), true);
+      const matchingOsToken = llmSvc.readProcessIdentityToken(sameImageExternalProc.pid);
+      fs.writeFileSync(
+        llmPidPath,
+        JSON.stringify({
+          pid: sameImageExternalProc.pid,
+          port: 11434,
+          bin: process.execPath,
+          imageName: path.basename(process.execPath).toLowerCase(),
+          identityToken: matchingOsToken,
+          instanceId: 'dead-sentinel-instance-id',
+          sentinelEndpoint:
+            process.platform === 'win32'
+              ? '\\\\.\\pipe\\agy-ko-llm-dead-nonexistent-pipe'
+              : path.join(tmpDir, 'dead-nonexistent.sock'),
+          authToken: '00'.repeat(32),
+          spawnedAt: Date.now() - 10000,
+        }),
+        'utf8'
+      );
+
+      const stopRes = await llmSvc.stopLocalLlmServer(false, { llmPidPath });
+      assert.equal(
+        stopRes.stoppedCount,
+        0,
+        'stopLocalLlmServer must refuse to signal a process whose sentinel pipe is absent/unauthenticated even when OS image name matches'
+      );
+      assert.equal(
+        settingsStorage.isProcessAlive(sameImageExternalProc.pid),
+        true,
+        'external same-image process reusing the old PID must survive completely unharmed (0 signals)'
+      );
+
+      // (1b) Extensionless binary normalization (`ollama` -> `ollama.exe` on win32)
+      assert.equal(
+        typeof llmSvc.normalizeExecutableImageName,
+        'function',
+        'local-llm-service.js must export normalizeExecutableImageName'
+      );
+      assert.equal(
+        llmSvc.normalizeExecutableImageName('ollama'),
+        process.platform === 'win32' ? 'ollama.exe' : 'ollama',
+        'extensionless executable name must normalize with .exe on Windows so image tokens never mismatch'
+      );
+      assert.equal(
+        llmSvc.normalizeExecutableImageName('C:\\Program Files\\Ollama\\ollama'),
+        process.platform === 'win32' ? 'ollama.exe' : path.basename('C:\\Program Files\\Ollama\\ollama')
+      );
+    } finally {
+      if (sameImageExternalProc && settingsStorage.isProcessAlive(sameImageExternalProc.pid)) {
+        try { process.kill(sameImageExternalProc.pid, 'SIGKILL'); } catch {}
+      }
+      await sleep(40);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('2. [D-0039] Watcher authenticated sentinel replacement, zero SIGKILL in waitForProcessExitSync, and atomic lock restore on race', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-reaudit-watch-'));
+    const settingsStorage = require(path.join(HOST_DIR, 'settings-storage.js'));
+    let liveUnownedProc = null;
+    let oldRealWatcherPid = null;
+    let newRealWatcherPid = null;
+
+    try {
+      // (2a) waitForProcessExitSync MUST NEVER send SIGKILL when target stays alive past timeout
+      liveUnownedProc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+      const exited = settingsStorage.waitForProcessExitSync(liveUnownedProc.pid, 80);
+      assert.equal(exited, false, 'waitForProcessExitSync must return false when timeout elapses');
+      assert.equal(
+        settingsStorage.isProcessAlive(liveUnownedProc.pid),
+        true,
+        'waitForProcessExitSync must NEVER send SIGKILL to the waited PID'
+      );
+
+      // (2b) Real sentinel-authenticated old watcher shuts down cleanly before replacement spawns when mtime signature changes
+      const watcherEntry = path.join(tmpDir, 'fake_watcher_entry.js');
+      const watcherPidFile = path.join(tmpDir, 'ko_thought_watcher.pid');
+      const watcherScriptBody = `
+        const settingsStorage = require(${JSON.stringify(path.join(HOST_DIR, 'settings-storage.js'))});
+        settingsStorage.runStorageWatcherLoop({
+          entryScriptPath: __filename,
+          watcherPidPath: ${JSON.stringify(watcherPidFile)},
+          appStoragePath: ${JSON.stringify(path.join(tmpDir, 'app_storage.json'))},
+          configPath: ${JSON.stringify(path.join(tmpDir, 'config.json'))},
+          devtoolsPortFile: ${JSON.stringify(path.join(tmpDir, 'DevToolsActivePort'))},
+          isAsarPatchedFn: () => true,
+          pollIntervalMs: 100,
+        });
+      `;
+      fs.writeFileSync(watcherEntry, watcherScriptBody, 'utf8');
+      const pastDate = new Date(Date.now() - 20000);
+      fs.utimesSync(watcherEntry, pastDate, pastDate);
+
+      oldRealWatcherPid = settingsStorage.ensureStorageWatcher(watcherEntry, { watcherPidPath: watcherPidFile });
+      assert.ok(oldRealWatcherPid && settingsStorage.isProcessAlive(oldRealWatcherPid), 'first real watcher must spawn');
+
+      // Wait until the watcher loop binds its IPC sentinel
+      await sleep(220);
+
+      // Update mtime of watcherEntry so computeWatcherSignature changes
+      const newerDate = new Date(Date.now() - 5000);
+      fs.utimesSync(watcherEntry, newerDate, newerDate);
+
+      let oldAliveDuringReplacementSpawn = null;
+      newRealWatcherPid = settingsStorage.ensureStorageWatcher(watcherEntry, {
+        watcherPidPath: watcherPidFile,
+        exitWaitTimeoutMs: 1500,
+        spawnFn: (scriptPath, pidPath) => {
+          oldAliveDuringReplacementSpawn = settingsStorage.isProcessAlive(oldRealWatcherPid);
+          return settingsStorage.spawnDetachedWatcherProcess(scriptPath, pidPath);
+        },
+      });
+      assert.equal(
+        oldAliveDuringReplacementSpawn,
+        false,
+        'authenticated old watcher must exit via IPC sentinel before replacement watcher spawns'
+      );
+      assert.ok(newRealWatcherPid && newRealWatcherPid !== oldRealWatcherPid, 'new watcher must spawn');
+
+      // (2c) releaseExclusiveFileLock TOCTOU race: contender B replaces lockPath between A's readFileSync and renameSync
+      const raceLockPath = path.join(tmpDir, 'race.lock');
+      const tokenA = settingsStorage.acquireExclusiveFileLock(raceLockPath, 15000);
+      assert.ok(tokenA, 'Process A acquires initial lock');
+
+      const origRenameSync = fs.renameSync;
+      let injectedContender = false;
+      fs.renameSync = function (src, dest) {
+        if (!injectedContender && src === raceLockPath) {
+          injectedContender = true;
+          // Simulate contender B having reclaimed lockPath right before A's renameSync executes
+          fs.writeFileSync(
+            raceLockPath,
+            JSON.stringify({ pid: process.pid, token: 'contender-B-token', ts: Date.now() }),
+            'utf8'
+          );
+        }
+        return origRenameSync.call(fs, src, dest);
+      };
+      let releaseOutcome;
+      try {
+        releaseOutcome = settingsStorage.releaseExclusiveFileLock(raceLockPath, tokenA);
+      } finally {
+        fs.renameSync = origRenameSync;
+      }
+      assert.equal(releaseOutcome, false, 'Process A must detect displaced contender token and return false');
+      assert.equal(fs.existsSync(raceLockPath), true, 'Contender B lock file MUST be atomically restored, never deleted');
+      assert.equal(
+        JSON.parse(fs.readFileSync(raceLockPath, 'utf8')).token,
+        'contender-B-token',
+        'Restored lock file at lockPath must preserve Contender B exact token'
+      );
+    } finally {
+      for (const pid of [liveUnownedProc?.pid, oldRealWatcherPid, newRealWatcherPid]) {
+        if (pid && settingsStorage.isProcessAlive(pid)) {
+          try { process.kill(pid, 'SIGKILL'); } catch {}
+        }
+      }
+      await sleep(50);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('3. [D-0029/D-0034] Higher host patcher revision preserved (no downgrade), lock race restore, and RFC6455 close/interleave safety', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-reaudit-ws-'));
+    const statusbarPatcher = require(path.join(HOST_DIR, 'ensure_statusbar_patch.js'));
+    const entryPatcher = require(path.join(ROOT, 'scripts', 'ensure_ko_thought_patch.js'));
+    const savedGlobalWs = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
+
+    try {
+      // (3a) Newer host patcher (e.g. V5_R99 or V6_R1) must NOT be overwritten/downgraded
+      const higherHostPath = path.join(tmpDir, 'ensure_statusbar_patch.js');
+      const higherMarkerContent = '// Newer host copy AGY_STATUSBAR_PATCHER_V5_R99\nmodule.exports = { newer: true };\n';
+      fs.writeFileSync(higherHostPath, higherMarkerContent, 'utf8');
+      const didOverwriteHigher = entryPatcher.ensureHostStatusbarPatcherInstalled(higherHostPath);
+      assert.equal(didOverwriteHigher, false, 'ensureHostStatusbarPatcherInstalled must NOT downgrade V5_R99');
+      assert.equal(fs.readFileSync(higherHostPath, 'utf8'), higherMarkerContent);
+
+      // (3b) releaseLock TOCTOU race in ensure_statusbar_patch.js preserves contender B's lock
+      const sbLockPath = path.join(tmpDir, 'sb_race.lock');
+      assert.equal(statusbarPatcher.acquireLock(sbLockPath, 60000), true);
+      const origRenameSync = fs.renameSync;
+      let injected = false;
+      fs.renameSync = function (src, dest) {
+        if (!injected && src === sbLockPath) {
+          injected = true;
+          fs.writeFileSync(
+            sbLockPath,
+            JSON.stringify({ pid: process.pid, ts: Date.now(), token: 'sb-contender-B-token' }),
+            'utf8'
+          );
+        }
+        return origRenameSync.call(fs, src, dest);
+      };
+      let sbReleaseRes;
+      try {
+        sbReleaseRes = statusbarPatcher.releaseLock(sbLockPath);
+      } finally {
+        fs.renameSync = origRenameSync;
+      }
+      assert.equal(sbReleaseRes, false, 'releaseLock must return false when contender B replaced lock before rename');
+      assert.equal(fs.existsSync(sbLockPath), true, 'Contender B lock file in ensure_statusbar_patch.js must survive');
+      assert.equal(JSON.parse(fs.readFileSync(sbLockPath, 'utf8')).token, 'sb-contender-B-token');
+
+      // (3c) RFC6455: server sends Close(0x08) before CDP reply -> immediate reject (<300ms, not 1500ms timeout);
+      // interleaved data frame during fragmentation -> immediate protocol error;
+      // normal client close delivers masked 0x88 Close frame to server without TCP ECONNRESET.
+      Object.defineProperty(globalThis, 'WebSocket', { value: undefined, configurable: true, writable: true });
+
+      let serverMode = 'close_immediately';
+      let serverReceivedCloseFrame = false;
+      let serverSawConnReset = false;
+      const openSockets = new Set();
+      const wsSrv = http.createServer();
+      wsSrv.on('upgrade', (req, socket) => {
+        openSockets.add(socket);
+        socket.on('close', () => openSockets.delete(socket));
+        socket.on('end', () => {
+          try {
+            socket.end();
+          } catch {}
+        });
+        const accept = crypto
+          .createHash('sha1')
+          .update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+          .digest('base64');
+        socket.write(
+          'HTTP/1.1 101 Switching Protocols\r\n' +
+            'Upgrade: websocket\r\n' +
+            'Connection: Upgrade\r\n' +
+            `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
+        );
+        socket.on('error', (err) => {
+          if (err && err.code === 'ECONNRESET') serverSawConnReset = true;
+        });
+        let buf = Buffer.alloc(0);
+        socket.on('data', (chunk) => {
+          buf = Buffer.concat([buf, chunk]);
+          while (buf.length >= 2) {
+            const opcode = buf[0] & 0x0f;
+            const masked = (buf[1] & 0x80) !== 0;
+            let len = buf[1] & 0x7f;
+            let off = 2;
+            if (len === 126) {
+              if (buf.length < 4) return;
+              len = buf.readUInt16BE(2);
+              off = 4;
+            }
+            const mBytes = masked ? 4 : 0;
+            if (buf.length < off + mBytes + len) return;
+            const body = Buffer.from(buf.subarray(off + mBytes, off + mBytes + len));
+            if (masked) {
+              const m = buf.subarray(off, off + 4);
+              for (let i = 0; i < body.length; i++) body[i] ^= m[i & 3];
+            }
+            buf = buf.subarray(off + mBytes + len);
+
+            if (opcode === 0x08) {
+              serverReceivedCloseFrame = true;
+              socket.end();
+              return;
+            }
+            if (opcode === 0x01) {
+              if (serverMode === 'close_immediately') {
+                const closePayload = Buffer.from([0x03, 0xe8]); // 1000
+                socket.write(Buffer.concat([Buffer.from([0x88, closePayload.length]), closePayload]));
+              } else if (serverMode === 'interleave_fragment') {
+                // Send un-finished text fragment (FIN=0, opcode=0x01) followed illegally by a new text frame (FIN=1, opcode=0x01)
+                const frag1 = Buffer.from('{"id":1,', 'utf8');
+                const illegalNew = Buffer.from('{"id":1,"result":{"result":{"value":"INJECTED_OK"}}}', 'utf8');
+                socket.write(Buffer.concat([
+                  Buffer.from([0x01, frag1.length]),
+                  frag1,
+                  Buffer.from([0x81, illegalNew.length]),
+                  illegalNew,
+                ]));
+              } else {
+                const msg = JSON.parse(body.toString('utf8'));
+                const reply = Buffer.from(JSON.stringify({ id: msg.id, result: { result: { value: 'INJECTED_OK' } } }), 'utf8');
+                socket.write(Buffer.concat([Buffer.from([0x81, reply.length]), reply]));
+              }
+            }
+          }
+        });
+      });
+      await new Promise((r) => wsSrv.listen(0, '127.0.0.1', r));
+      const port = wsSrv.address().port;
+
+      try {
+        const t0 = Date.now();
+        await assert.rejects(
+          () => statusbarPatcher.injectViaBrowserCdpWs(`ws://127.0.0.1:${port}/devtools/page/1`, '"OK"', 'h1', 1500),
+          /closed/i,
+          'server 0x08 Close before CDP reply must reject immediately via onclose'
+        );
+        const closeElapsed = Date.now() - t0;
+        assert.ok(closeElapsed < 500, `0x08 Close must reject without waiting for 1500ms timeout (took ${closeElapsed}ms)`);
+
+        serverMode = 'interleave_fragment';
+        await assert.rejects(
+          () => statusbarPatcher.injectViaBrowserCdpWs(`ws://127.0.0.1:${port}/devtools/page/1`, '"OK"', 'h1', 1200),
+          /interleaved|fragment/i,
+          'interleaved data frame during fragmentation must trigger RFC6455 protocol error'
+        );
+
+        serverMode = 'ok';
+        serverReceivedCloseFrame = false;
+        serverSawConnReset = false;
+        const okVal = await statusbarPatcher.injectViaBrowserCdpWs(`ws://127.0.0.1:${port}/devtools/page/1`, '"OK"', 'h1', 1200);
+        assert.equal(okVal, 'INJECTED_OK');
+        await sleep(60);
+        assert.equal(serverReceivedCloseFrame, true, 'client close() must deliver 0x88 Close frame without immediate destroy RST');
+        assert.equal(serverSawConnReset, false, 'client close() must not trigger ECONNRESET on server');
+      } finally {
+        for (const s of openSockets) {
+          try {
+            s.destroy();
+          } catch {}
+        }
+        await new Promise((r) => wsSrv.close(r));
+      }
+    } finally {
+      if (savedGlobalWs) Object.defineProperty(globalThis, 'WebSocket', savedGlobalWs);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('4. [D-0032] Untrusted blob:/cdnOrigin rejection (including non-TT), iframe promotion rollback, and full __agyKoThoughtCleanup(true) teardown', () => {
+    const { assembleRendererSourceFromModules } = require(BUNDLE_INJECTOR_PATH);
+    const bundleCode = assembleRendererSourceFromModules();
+
+    let createdPolicySpec = null;
+    const makeMockDomElement = (tag) => {
+      const attrs = new Map();
+      const classes = new Set();
+      const listeners = [];
+      const el = {
+        nodeType: 1,
+        tagName: String(tag || 'DIV').toUpperCase(),
+        id: '',
+        className: '',
+        textContent: '',
+        nonce: '',
+        src: '',
+        href: '',
+        rel: '',
+        async: true,
+        onload: null,
+        onerror: null,
+        style: {},
+        children: [],
+        childNodes: [],
+        parentElement: null,
+        parentNode: null,
+        classList: {
+          add: (...cs) => cs.forEach((c) => classes.add(c)),
+          remove: (...cs) => cs.forEach((c) => classes.delete(c)),
+          contains: (c) => classes.has(c),
+        },
+        getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+        setAttribute: (k, v) => {
+          attrs.set(k, String(v));
+          if (k === 'id') el.id = String(v);
+          if (k === 'src') el.src = String(v);
+        },
+        removeAttribute: (k) => attrs.delete(k),
+        hasAttribute: (k) => attrs.has(k),
+        appendChild(ch) {
+          ch.parentElement = el;
+          ch.parentNode = el;
+          el.children.push(ch);
+          el.childNodes.push(ch);
+          return ch;
+        },
+        remove() {
+          if (el.parentElement) {
+            const idx = el.parentElement.children.indexOf(el);
+            if (idx >= 0) el.parentElement.children.splice(idx, 1);
+          }
+        },
+        closest: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener(type, fn, cap) {
+          listeners.push({ type, fn, cap: Boolean(cap) });
+        },
+        removeEventListener(type, fn, cap) {
+          const idx = listeners.findIndex((l) => l.type === type && l.fn === fn && l.cap === Boolean(cap));
+          if (idx >= 0) listeners.splice(idx, 1);
+        },
+        _listeners: listeners,
+      };
+      return el;
+    };
+
+    const evilIframe = makeMockDomElement('IFRAME');
+    evilIframe.setAttribute('src', 'https://evil.example/web/2.32.1/?iframe=true');
+    evilIframe.src = 'https://evil.example/web/2.32.1/?iframe=true';
+
+    const validOriginalSrc = 'https://antigravity.static.usercontent.goog/web/2.32.1/?iframe=true';
+    let currentIframeSrc = validOriginalSrc;
+    const validIframe = makeMockDomElement('IFRAME');
+    validIframe.setAttribute('src', validOriginalSrc);
+    class FakeHTMLIFrameElement {}
+    Object.defineProperty(FakeHTMLIFrameElement.prototype, 'src', {
+      configurable: true,
+      get() {
+        return currentIframeSrc;
+      },
+      set(v) {
+        currentIframeSrc = String(v);
+        if (this === validIframe && v === 'about:blank') {
+          validIframe.contentWindow = iframeWin;
+          validIframe.contentDocument = iframeDoc;
+        }
+      },
+    });
+    Object.setPrototypeOf(validIframe, FakeHTMLIFrameElement.prototype);
+
+    const iframeHead = makeMockDomElement('HEAD');
+    const iframeBody = makeMockDomElement('BODY');
+    const iframeDocEl = makeMockDomElement('HTML');
+    const iframeDoc = {
+      documentElement: iframeDocEl,
+      head: iframeHead,
+      body: iframeBody,
+      readyState: 'complete',
+      createElement: (tag) => makeMockDomElement(tag),
+      getElementById: (id) => iframeBody.children.find((c) => c.id === id) || null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+    const iframeWin = {
+      location: { origin: 'https://antigravity.google.com', href: 'about:blank' },
+      document: iframeDoc,
+      navigator: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      history: { replaceState: () => {} },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      Worker: function OrigWorker(u) { this.url = u; },
+      Blob: class FakeBlob {},
+      URL: { createObjectURL: () => 'blob:null/owned-worker-1', revokeObjectURL: () => {} },
+      setTimeout: () => 1,
+    };
+    // Cross-origin before promotion (contentWindow / contentDocument become accessible only upon src = 'about:blank')
+    validIframe.contentWindow = null;
+    validIframe.contentDocument = null;
+
+    let activeIframe = evilIframe;
+    const rcEl = {
+      querySelector: (sel) => (sel === 'iframe' ? activeIframe : null),
+    };
+    const rcInst = {
+      destroyed: false,
+      proxyCommand: async () => null,
+      onIframeLoad: function origOnLoad() { return 'ORIG_ON_LOAD'; },
+    };
+
+    const settingsNavOtherBtn = makeMockDomElement('BUTTON');
+    settingsNavOtherBtn.setAttribute('data-testid', 'settings-nav-item-General');
+    const navGroup = makeMockDomElement('DIV');
+    navGroup.appendChild(settingsNavOtherBtn);
+    const rightGrow = makeMockDomElement('DIV');
+    const settingsModal = makeMockDomElement('DIV');
+    settingsModal.querySelector = (sel) => {
+      if (sel.includes('settings-nav-item-Models') || sel.includes('settings-nav-item-')) return settingsNavOtherBtn;
+      if (sel === '.grow.w-full') return rightGrow;
+      return null;
+    };
+    settingsModal.querySelectorAll = (sel) => {
+      if (sel.includes('settings-nav-item-')) return [settingsNavOtherBtn];
+      return [];
+    };
+
+    const bodyEl = makeMockDomElement('BODY');
+    const headEl = makeMockDomElement('HEAD');
+    const winListeners = [];
+    const docObj = {
+      body: bodyEl,
+      head: headEl,
+      documentElement: makeMockDomElement('HTML'),
+      createElement: (tag) => makeMockDomElement(tag),
+      createTreeWalker: () => ({ nextNode: () => null }),
+      getElementById: (id) =>
+        bodyEl.children.find((c) => c.id === id) || headEl.children.find((c) => c.id === id) || null,
+      querySelector: (sel) => {
+        if (sel === 'ga-remote-control') return rcEl;
+        if (sel === '.settings-modal-container') return settingsModal;
+        return null;
+      },
+      querySelectorAll: () => [],
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+
+    const winObj = {
+      location: {
+        hostname: 'antigravity.google.com',
+        protocol: 'https:',
+        origin: 'https://antigravity.google.com',
+        href: 'https://antigravity.google.com/r/abc',
+        search: '',
+      },
+      document: docObj,
+      ng: { getComponent: () => rcInst },
+      HTMLIFrameElement: FakeHTMLIFrameElement,
+      // Start WITHOUT trustedTypes (`ttPolicy === null`) to test non-TT external cdnOrigin blocking!
+      trustedTypes: undefined,
+      MutationObserver: class {
+        observe() {}
+        disconnect() {}
+        takeRecords() { return []; }
+      },
+      Node: { TEXT_NODE: 3, ELEMENT_NODE: 1 },
+      NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4 },
+      addEventListener: (t, fn) => winListeners.push({ t, fn }),
+      removeEventListener: (t, fn) => {
+        const idx = winListeners.findIndex((x) => x.t === t && x.fn === fn);
+        if (idx >= 0) winListeners.splice(idx, 1);
+      },
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    };
+
+    vm.runInNewContext(bundleCode, {
+      window: winObj,
+      document: docObj,
+      URL,
+      URLSearchParams,
+      HTMLIFrameElement: FakeHTMLIFrameElement,
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    });
+
+    // (4a) With ttPolicy === null, untrusted evil.example iframe src MUST NOT be promoted!
+    assert.equal(
+      evilIframe.__agyKoPromoted,
+      undefined,
+      'bridgeRemoteControlIframe must reject untrusted external iframe src even when trustedTypes is absent'
+    );
+    assert.equal(
+      rcInst.__agySuppressAutoIframeLoad,
+      undefined,
+      'untrusted iframe src must not touch rcInst.__agySuppressAutoIframeLoad'
+    );
+
+    // (4b) Enable TrustedTypes and switch to valid Antigravity iframe -> test blob: origin checks & mainScript.onerror rollback
+    winObj.trustedTypes = {
+      createPolicy(_name, spec) {
+        createdPolicySpec = spec;
+        return spec;
+      },
+    };
+    activeIframe = validIframe;
+    winObj.__agyForceRescanAll();
+    assert.equal(validIframe.__agyKoPromoted, 'v13.33', 'trusted Antigravity iframe must begin promotion');
+    assert.equal(rcInst.__agySuppressAutoIframeLoad, true);
+
+    const loadListener = validIframe._listeners.find((l) => l.type === 'load');
+    assert.ok(loadListener, 'promotion must attach one-shot load listener');
+    loadListener.fn();
+
+    assert.ok(createdPolicySpec, 'TrustedTypes policy must be created');
+    assert.throws(
+      () => createdPolicySpec.createScriptURL('blob:https://evil.example/malicious-worker'),
+      { name: 'TypeError', message: /Blocked untrusted script URL/ },
+      'createScriptURL must reject blob: URLs from untrusted origins (blob:https://evil.example/...)'
+    );
+    assert.throws(
+      () => createdPolicySpec.createScriptURL('blob:null/forged-external-blob'),
+      { name: 'TypeError', message: /Blocked untrusted script URL/ },
+      'createScriptURL must reject unowned opaque blob:null/... URLs'
+    );
+
+    // Trigger mainScript.onerror and verify full rollback of __agySuppressAutoIframeLoad & iframe.src
+    const mainScriptEl = iframeHead.children.find((el) => el.tagName === 'SCRIPT' && String(el.src).endsWith('/main.js'));
+    assert.ok(mainScriptEl && typeof mainScriptEl.onerror === 'function', 'main.js script element must have onerror rollback');
+    mainScriptEl.onerror();
+    assert.equal(validIframe.__agyKoPromoted, undefined, 'mainScript.onerror must clear __agyKoPromoted');
+    assert.equal(
+      rcInst.__agySuppressAutoIframeLoad,
+      false,
+      'mainScript.onerror must restore rcInst.__agySuppressAutoIframeLoad = false so native iframe recovery works'
+    );
+    assert.equal(currentIframeSrc, validOriginalSrc, 'mainScript.onerror must restore original iframe src');
+
+    // (4c) Open quick settings modal, verify nav listener bound, then call __agyKoThoughtCleanup(true) and assert zero globals/listeners remain
+    winObj.__agyOpenTranslatorSettingsModal();
+    assert.ok(docObj.getElementById('agy-ko-translator-modal'), 'modal must mount before cleanup');
+    assert.equal(settingsNavOtherBtn._listeners.length, 1, 'settings nav button click listener bound');
+
+    winObj.__agyKoThoughtCleanup(true);
+
+    assert.equal(docObj.getElementById('agy-ko-translator-modal'), null, 'cleanup(true) must close open modal');
+    assert.equal(winListeners.filter((x) => x.t === 'keydown').length, 0, 'cleanup(true) must remove ESC keydown listener');
+    assert.equal(settingsNavOtherBtn._listeners.length, 0, 'cleanup(true) must remove settings nav click listener');
+    assert.equal(settingsNavOtherBtn.__agyKoNavBound, undefined, 'cleanup(true) must clear __agyKoNavBound flag');
+    const leftoverGlobals = Object.keys(winObj).filter((k) => k.startsWith('__agy'));
+    assert.deepEqual(
+      leftoverGlobals,
+      [],
+      `__agyKoThoughtCleanup(true) must remove all plugin globals on window, leftover: ${leftoverGlobals.join(', ')}`
+    );
+  });
+
+  await t.test('5. [D-0038] RELEASE_NOTES_TEMPLATE.md provides formal bilingual (English + Korean) sections in one document', () => {
+    const relNotesTpl = fs.readFileSync(path.join(ROOT, 'docs', 'templates', 'RELEASE_NOTES_TEMPLATE.md'), 'utf8');
+    assert.ok(/##\s+English\b/.test(relNotesTpl), 'RELEASE_NOTES_TEMPLATE.md must contain an ## English section');
+    assert.ok(/##\s+한국어/.test(relNotesTpl), 'RELEASE_NOTES_TEMPLATE.md must contain a ## 한국어 section');
+    assert.ok(relNotesTpl.includes('### Summary') && relNotesTpl.includes('### 요약'), 'both English and Korean summaries must be present');
+    assert.ok(
+      relNotesTpl.includes('### Highlights & Defect Fixes') && relNotesTpl.includes('### 주요 변경 사항 및 결함 수정'),
+      'both English and Korean defect-fix sections must be present'
+    );
+    assert.ok(
+      relNotesTpl.includes('### Upgrade Instructions') && relNotesTpl.includes('### 업그레이드 안내'),
+      'both English and Korean upgrade sections must be present'
+    );
+  });
+});

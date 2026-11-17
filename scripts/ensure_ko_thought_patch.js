@@ -28,18 +28,41 @@ const {
 } = require('./host/settings-storage');
 const { syncCombinedAutoinject, syncDistributableMirrors } = require('./host/bundle-injector');
 
+function parsePatcherCapabilityRevision(text) {
+  if (typeof text !== 'string' || !text) return null;
+  const match = text.match(/AGY_STATUSBAR_PATCHER_V(\d+)_R(\d+)/);
+  if (!match) return null;
+  const major = Number(match[1]);
+  const rev = Number(match[2]);
+  if (!Number.isInteger(major) || !Number.isInteger(rev)) return null;
+  return { major, rev };
+}
+
+function isPatcherRevisionAtLeast(candidate, baseline) {
+  if (!candidate || !baseline) return false;
+  if (candidate.major !== baseline.major) {
+    return candidate.major > baseline.major;
+  }
+  return candidate.rev >= baseline.rev;
+}
+
 /**
  * Installs or upgrades the host `~/.gemini/antigravity/ensure_statusbar_patch.js` copy when missing
- * or lacking the current `PATCHER_CAPABILITY_REVISION`. Returns `true` when installed/upgraded.
+ * or strictly older than the bundled `PATCHER_CAPABILITY_REVISION`. Never downgrades a newer host copy.
  */
 function ensureHostStatusbarPatcherInstalled(targetPath = ENSURE_STATUSBAR_PATCH_PATH) {
   try {
     if (!fs.existsSync(BUNDLED_ENSURE_STATUSBAR_PATCH_PATH)) {
       return false;
     }
+    const bundledRev = parsePatcherCapabilityRevision(PATCHER_CAPABILITY_REVISION);
     if (fs.existsSync(targetPath)) {
       const currentContent = fs.readFileSync(targetPath, 'utf8');
-      if (currentContent.includes(PATCHER_CAPABILITY_REVISION)) {
+      const currentRev = parsePatcherCapabilityRevision(currentContent);
+      if (bundledRev && currentRev && isPatcherRevisionAtLeast(currentRev, bundledRev)) {
+        return false;
+      }
+      if (!bundledRev && currentContent.includes(PATCHER_CAPABILITY_REVISION)) {
         return false;
       }
     }
@@ -176,6 +199,8 @@ if (require.main === module) {
 }
 
 module.exports = {
+  parsePatcherCapabilityRevision,
+  isPatcherRevisionAtLeast,
   ensureHostStatusbarPatcherInstalled,
   resolveStatusbarPatcherPath,
   applyProviderRuntimePolicy,

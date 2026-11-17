@@ -26,7 +26,7 @@ const DEVTOOLS_PORT_FILE = path.join(APPDATA, 'Antigravity', 'DevToolsActivePort
 const APP_STORAGE_PATH = path.join(APPDATA, 'Antigravity', 'app_storage.json');
 
 const PATCH_MARKER = 'AGY_STATUSBAR_AUTOINJECT_V5';
-const PATCHER_CAPABILITY_REVISION = 'AGY_STATUSBAR_PATCHER_V5_R2';
+const PATCHER_CAPABILITY_REVISION = 'AGY_STATUSBAR_PATCHER_V5_R3';
 const LEGACY_MARKERS = [
   'statusbar_autoinject.js',
   'AGY_STATUSBAR_AUTOINJECT_V2',
@@ -579,8 +579,32 @@ function acquireFileLock(lockPath, token, staleMs = LOCK_STALE_MS) {
   }
 }
 
+function restoreDisplacedLockFile(relTmp, lockPath) {
+  try {
+    fs.linkSync(relTmp, lockPath);
+    return true;
+  } catch (linkErr) {
+    if (linkErr && linkErr.code === 'EEXIST') {
+      return true;
+    }
+    try {
+      const rawBuf = fs.readFileSync(relTmp);
+      const fd = fs.openSync(lockPath, 'wx');
+      try {
+        fs.writeFileSync(fd, rawBuf);
+      } finally {
+        fs.closeSync(fd);
+      }
+      return true;
+    } catch (wxErr) {
+      return Boolean(wxErr && wxErr.code === 'EEXIST');
+    }
+  }
+}
+
 function releaseFileLock(lockPath, token) {
   if (!lockPath || !token) return false;
+  let relTmp = null;
   try {
     if (!fs.existsSync(lockPath)) return false;
     const raw = fs.readFileSync(lockPath, 'utf8');
@@ -588,18 +612,33 @@ function releaseFileLock(lockPath, token) {
     if (!lockInfo || lockInfo.token !== token) {
       return false;
     }
-    const relTmp = `${lockPath}.rel.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+    relTmp = `${lockPath}.rel.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+    fs.renameSync(lockPath, relTmp);
+    let movedInfo = null;
     try {
-      fs.renameSync(lockPath, relTmp);
-      fs.unlinkSync(relTmp);
-    } catch {
-      const verify = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-      if (verify && verify.token === token) {
-        fs.unlinkSync(lockPath);
-      }
+      movedInfo = JSON.parse(fs.readFileSync(relTmp, 'utf8'));
+    } catch {}
+    if (!movedInfo || movedInfo.token !== token) {
+      restoreDisplacedLockFile(relTmp, lockPath);
+      try {
+        fs.unlinkSync(relTmp);
+      } catch {}
+      return false;
     }
+    try {
+      fs.unlinkSync(relTmp);
+    } catch {}
     return true;
   } catch {
+    if (relTmp && fs.existsSync(relTmp)) {
+      try {
+        const movedInfo = JSON.parse(fs.readFileSync(relTmp, 'utf8'));
+        if (!movedInfo || movedInfo.token !== token) {
+          restoreDisplacedLockFile(relTmp, lockPath);
+        }
+        fs.unlinkSync(relTmp);
+      } catch {}
+    }
     return false;
   }
 }
@@ -780,10 +819,12 @@ function createRfc6455WebSocketClient(wsUrl) {
 
   let sock = null;
   let closed = false;
+  let closeNotified = false;
   const client = {
     onopen: null,
     onmessage: null,
     onerror: null,
+    onclose: null,
     send(data) {
       if (closed || !sock) throw new Error('WebSocket is not open');
       const payload = Buffer.from(String(data), 'utf8');
@@ -813,17 +854,36 @@ function createRfc6455WebSocketClient(wsUrl) {
       }
       sock.write(Buffer.concat([header, masked]));
     },
-    close() {
+    close(code = 1000) {
       if (closed) return;
       closed = true;
       try {
-        if (sock) {
+        if (sock && !sock.destroyed) {
           const mask = crypto.randomBytes(4);
-          sock.end(Buffer.concat([Buffer.from([0x88, 0x80]), mask]));
-          sock.destroy();
+          const statusBuf = Buffer.alloc(2);
+          statusBuf.writeUInt16BE(Number.isInteger(code) && code >= 1000 && code <= 4999 ? code : 1000, 0);
+          const maskedBody = Buffer.from([statusBuf[0] ^ mask[0], statusBuf[1] ^ mask[1]]);
+          sock.end(Buffer.concat([Buffer.from([0x88, 0x82]), mask, maskedBody]));
+          const destroyTimer = setTimeout(() => {
+            try {
+              if (sock && !sock.destroyed) sock.destroy();
+            } catch {}
+          }, 250);
+          if (destroyTimer && typeof destroyTimer.unref === 'function') {
+            destroyTimer.unref();
+          }
         }
       } catch {}
     },
+  };
+
+  const notifyClose = (code = 1005, reason = '') => {
+    if (closeNotified) return;
+    closeNotified = true;
+    closed = true;
+    if (typeof client.onclose === 'function') {
+      client.onclose({ code, reason });
+    }
   };
 
   const req = http.request({
@@ -841,6 +901,7 @@ function createRfc6455WebSocketClient(wsUrl) {
   const emitError = (err) => {
     if (closed) return;
     closed = true;
+    closeNotified = true;
     try { req.destroy(); } catch {}
     try { if (sock) sock.destroy(); } catch {}
     if (typeof client.onerror === 'function') {
@@ -865,10 +926,25 @@ function createRfc6455WebSocketClient(wsUrl) {
 
     const drainFrames = () => {
       while (!closed && recvBuf.length >= 2) {
+        const rsv = recvBuf[0] & 0x70;
+        if (rsv !== 0) {
+          emitError(new Error('Non-zero WebSocket RSV bits'));
+          return;
+        }
         const fin = (recvBuf[0] & 0x80) !== 0;
         const opcode = recvBuf[0] & 0x0f;
         const isMasked = (recvBuf[1] & 0x80) !== 0;
         let len = recvBuf[1] & 0x7f;
+        if (opcode >= 0x08) {
+          if (!fin) {
+            emitError(new Error('Fragmented WebSocket control frame is not allowed'));
+            return;
+          }
+          if (len > 125) {
+            emitError(new Error('WebSocket control frame payload exceeds 125 bytes'));
+            return;
+          }
+        }
         let offset = 2;
         if (len === 126) {
           if (recvBuf.length < 4) return;
@@ -898,7 +974,14 @@ function createRfc6455WebSocketClient(wsUrl) {
         recvBuf = recvBuf.subarray(offset + maskBytes + len);
 
         if (opcode === 0x08) {
-          client.close();
+          if (body.length === 1) {
+            emitError(new Error('Invalid 1-byte WebSocket Close frame payload'));
+            return;
+          }
+          const closeCode = body.length >= 2 ? body.readUInt16BE(0) : 1005;
+          const closeReason = body.length > 2 ? body.subarray(2).toString('utf8') : '';
+          client.close(body.length >= 2 ? closeCode : 1000);
+          notifyClose(closeCode, closeReason);
           return;
         }
         if (opcode === 0x09 && sock && !closed) {
@@ -916,6 +999,10 @@ function createRfc6455WebSocketClient(wsUrl) {
           continue;
         }
         if (opcode === 0x01 || opcode === 0x02) {
+          if (fragOpcode !== 0) {
+            emitError(new Error('Interleaved WebSocket data frame during fragmentation'));
+            return;
+          }
           if (fin) {
             if (opcode === 0x01 && typeof client.onmessage === 'function') {
               client.onmessage({ data: body.toString('utf8') });
@@ -948,7 +1035,10 @@ function createRfc6455WebSocketClient(wsUrl) {
               client.onmessage({ data: fullBuf.toString('utf8') });
             }
           }
+          continue;
         }
+        emitError(new Error(`Unsupported WebSocket opcode: ${opcode}`));
+        return;
       }
     };
 
@@ -961,8 +1051,11 @@ function createRfc6455WebSocketClient(wsUrl) {
       drainFrames();
     });
     socket.on('error', emitError);
+    socket.on('end', () => {
+      notifyClose(1006, 'Socket ended');
+    });
     socket.on('close', () => {
-      closed = true;
+      notifyClose(1006, 'Socket closed');
     });
 
     Promise.resolve().then(() => {
@@ -1060,6 +1153,13 @@ function configureTargetViaCdp(wsUrl, scriptCode, scriptHash, timeoutMs = 900) {
       try { ws.close(); } catch {}
       reject(err instanceof Error ? err : new Error('WebSocket error'));
     };
+
+    ws.onclose = (ev) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`WebSocket closed before CDP response (code=${ev?.code ?? 'unknown'})`));
+    };
   });
 }
 
@@ -1133,6 +1233,10 @@ function injectViaBrowserCdpWs(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) 
 
     ws.onerror = (err) => {
       finish(err instanceof Error ? err : new Error('Browser CDP WebSocket error'));
+    };
+
+    ws.onclose = (ev) => {
+      finish(new Error(`Browser CDP WebSocket closed unexpectedly (code=${ev?.code ?? 'unknown'})`));
     };
 
     ws.onopen = async () => {

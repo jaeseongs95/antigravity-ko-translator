@@ -783,6 +783,8 @@
     container.appendChild(wrapper);
   }
 
+  const boundSettingsNavListeners = [];
+
   function ensureNativeSettingsModalIntegration() {
     const modal = document.querySelector('.settings-modal-container');
     if (!modal) return;
@@ -899,13 +901,35 @@
       .querySelectorAll('button[data-testid^="settings-nav-item-"]:not([data-testid="settings-nav-item-KoTranslator"])')
       .forEach((otherBtn) => {
         if (!otherBtn.__agyKoNavBound) {
-          otherBtn.__agyKoNavBound = true;
-          otherBtn.addEventListener('click', () => deactivateKoPane(), true);
+          const listener = () => deactivateKoPane();
+          otherBtn.__agyKoNavBound = listener;
+          otherBtn.addEventListener('click', listener, true);
+          boundSettingsNavListeners.push({ btn: otherBtn, listener });
         }
       });
 
     // 3. Inject 'Thinking (추론 과정) 표시' row into Native Settings -> Appearance (모양 및 테마) -> Chat section
     ensureAppearanceChatThinkingIntegration(modal);
+  }
+
+  function cleanupNativeSettingsModalIntegration() {
+    while (boundSettingsNavListeners.length > 0) {
+      const entry = boundSettingsNavListeners.pop();
+      if (!entry || !entry.btn) continue;
+      try {
+        if (typeof entry.btn.removeEventListener === 'function') {
+          entry.btn.removeEventListener('click', entry.listener, true);
+        }
+      } catch (e) {}
+      try {
+        delete entry.btn.__agyKoNavBound;
+      } catch (e) {}
+    }
+    const modal = document.querySelector && document.querySelector('.settings-modal-container');
+    if (modal && typeof modal.removeAttribute === 'function') {
+      modal.removeAttribute('data-agy-ko-pane-active');
+    }
+    closeTranslatorSettingsModal();
   }
 
   function syncThinkingDisplayMenuControls() {

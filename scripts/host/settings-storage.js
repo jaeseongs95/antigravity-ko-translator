@@ -1,12 +1,15 @@
 /**
  * Module: scripts/host/settings-storage.js
  * Responsibility: Translator option persistence (`config.json` & `app_storage.json`), CLI flag parsing,
- * and headless background watcher process (`windowsHide: true` / `CREATE_NO_WINDOW`) for real-time
- * Native Settings UI synchronization and automatic recovery after Antigravity app updates or restarts.
+ * and headless background watcher process (`windowsHide: true` / `CREATE_NO_WINDOW`) with cryptographic
+ * IPC sentinel authentication and race-safe atomic file lock restoration.
  */
 
 const fs = require('fs');
+const os = require('os');
+const net = require('net');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const {
   APP_STORAGE_PATH,
@@ -69,18 +72,32 @@ function parseProviderCliArg(args) {
   return null;
 }
 
-function writeFileAtomicSync(targetPath, content) {
+function writeFileAtomicSync(targetPath, content, options = null) {
   const dir = path.dirname(targetPath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+  const writeOpts =
+    options && typeof options.mode === 'number'
+      ? { encoding: 'utf8', mode: options.mode }
+      : 'utf8';
+  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}`;
   try {
-    fs.writeFileSync(tmpPath, content, 'utf8');
+    fs.writeFileSync(tmpPath, content, writeOpts);
+    if (options && typeof options.mode === 'number' && process.platform !== 'win32') {
+      try {
+        fs.chmodSync(tmpPath, options.mode);
+      } catch {}
+    }
     try {
       fs.renameSync(tmpPath, targetPath);
     } catch {
       fs.copyFileSync(tmpPath, targetPath);
+      if (options && typeof options.mode === 'number' && process.platform !== 'win32') {
+        try {
+          fs.chmodSync(targetPath, options.mode);
+        } catch {}
+      }
       try {
         fs.unlinkSync(tmpPath);
       } catch {}
@@ -230,45 +247,90 @@ function sleepSyncMs(ms) {
   }
 }
 
+/**
+ * Pure non-signaling liveness wait. NEVER sends SIGTERM or SIGKILL to `pid`.
+ */
 function waitForProcessExitSync(pid, timeoutMs = 1500) {
   if (!isProcessAlive(pid)) return true;
-  const deadline = Date.now() + Math.max(50, timeoutMs);
+  const deadline = Date.now() + Math.max(20, timeoutMs);
   while (Date.now() < deadline) {
     if (!isProcessAlive(pid)) return true;
     sleepSyncMs(20);
   }
-  if (isProcessAlive(pid)) {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {}
-    const forceDeadline = Date.now() + 300;
-    while (Date.now() < forceDeadline) {
-      if (!isProcessAlive(pid)) return true;
-      sleepSyncMs(20);
-    }
-  }
   return !isProcessAlive(pid);
+}
+
+function timingSafeTokenMatch(candidate, expected) {
+  if (typeof candidate !== 'string' || typeof expected !== 'string') return false;
+  if (!candidate || candidate.length !== expected.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(candidate, 'utf8'), Buffer.from(expected, 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+function buildWatcherSentinelEndpoint(instanceId) {
+  if (process.platform === 'win32') {
+    return `\\\\.\\pipe\\agy-ko-watch-${instanceId}`;
+  }
+  const uidTag = typeof process.getuid === 'function' ? String(process.getuid()) : 'u';
+  const sockDir = path.join(os.tmpdir(), `agy-ko-ipc-${uidTag}`);
+  try {
+    fs.mkdirSync(sockDir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(sockDir, 0o700);
+  } catch {}
+  return path.join(sockDir, `w-${instanceId}.sock`);
+}
+
+function createWatcherSentinelCredentials() {
+  const instanceId = crypto.randomBytes(12).toString('hex');
+  const authToken = crypto.randomBytes(24).toString('hex');
+  const sentinelEndpoint = buildWatcherSentinelEndpoint(instanceId);
+  return { instanceId, authToken, sentinelEndpoint };
+}
+
+function formatWatcherPidRecord(pid, sig, creds = null) {
+  if (creds && creds.instanceId && creds.authToken && creds.sentinelEndpoint) {
+    const endpointB64 = Buffer.from(creds.sentinelEndpoint, 'utf8').toString('base64url');
+    return `${pid}:${sig}:${creds.instanceId}:${creds.authToken}:${endpointB64}`;
+  }
+  return `${pid}:${sig}`;
 }
 
 function readWatcherPidRecord(pidFilePath) {
   try {
     if (!pidFilePath || !fs.existsSync(pidFilePath)) {
-      return { pid: null, sig: '' };
+      return { pid: null, sig: '', instanceId: '', authToken: '', sentinelEndpoint: '' };
     }
     const raw = fs.readFileSync(pidFilePath, 'utf8').trim();
-    if (!raw) return { pid: null, sig: '' };
-    const sepIdx = raw.indexOf(':');
-    const pidStr = sepIdx === -1 ? raw : raw.slice(0, sepIdx);
-    const sig = sepIdx === -1 ? '' : raw.slice(sepIdx + 1);
-    const parsedPid = Number(pidStr);
+    if (!raw) return { pid: null, sig: '', instanceId: '', authToken: '', sentinelEndpoint: '' };
+    const parts = raw.split(':');
+    const parsedPid = Number(parts[0]);
+    const sig = parts[1] || '';
+    const instanceId = parts[2] || '';
+    const authToken = parts[3] || '';
+    let sentinelEndpoint = '';
+    if (parts[4]) {
+      try {
+        sentinelEndpoint = Buffer.from(parts[4], 'base64url').toString('utf8');
+      } catch {
+        sentinelEndpoint = '';
+      }
+    }
     return {
       pid: Number.isInteger(parsedPid) && parsedPid > 0 ? parsedPid : null,
       sig,
+      instanceId,
+      authToken,
+      sentinelEndpoint,
     };
   } catch {
-    return { pid: null, sig: '' };
+    return { pid: null, sig: '', instanceId: '', authToken: '', sentinelEndpoint: '' };
   }
 }
+
+const spawnedWatcherCredsByPid = new Map();
 
 /**
  * Spawns the background storage & app-update watcher directly via Node/libuv with
@@ -276,7 +338,11 @@ function readWatcherPidRecord(pidFilePath) {
  * so Windows never allocates a console or triggers Windows Terminal (`DefTerm`).
  */
 function spawnDetachedWatcherProcess(entryScriptPath, pidFilePath = WATCHER_PID_PATH) {
-  const childEnv = { ...process.env };
+  const creds = createWatcherSentinelCredentials();
+  const childEnv = {
+    ...process.env,
+    AGY_KO_WATCHER_SENTINEL_CFG: JSON.stringify(creds),
+  };
   if (pidFilePath && pidFilePath !== WATCHER_PID_PATH) {
     childEnv.AGY_KO_WATCHER_PID_PATH = pidFilePath;
   }
@@ -287,7 +353,39 @@ function spawnDetachedWatcherProcess(entryScriptPath, pidFilePath = WATCHER_PID_
     env: childEnv,
   });
   child.unref();
+  if (child.pid) {
+    if (spawnedWatcherCredsByPid.size >= 64) {
+      const oldest = spawnedWatcherCredsByPid.keys().next().value;
+      if (oldest !== undefined) spawnedWatcherCredsByPid.delete(oldest);
+    }
+    spawnedWatcherCredsByPid.set(child.pid, creds);
+  }
   return child.pid || null;
+}
+
+function requestWatcherShutdownViaSentinelSync(record, timeoutMs = 1000) {
+  if (!record || !record.sentinelEndpoint || !record.authToken || !record.instanceId) {
+    return false;
+  }
+  try {
+    const res = spawnSync(process.execPath, [__filename, '--watcher-sentinel-stop'], {
+      env: {
+        ...process.env,
+        AGY_KO_WATCHER_STOP_REQ: JSON.stringify({
+          sentinelEndpoint: record.sentinelEndpoint,
+          authToken: record.authToken,
+          instanceId: record.instanceId,
+          timeoutMs: Math.max(150, timeoutMs),
+        }),
+      },
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: Math.max(400, timeoutMs + 400),
+    });
+    return Boolean(res && res.status === 0);
+  } catch {
+    return false;
+  }
 }
 
 function computeWatcherSignature(entryScriptPath) {
@@ -309,7 +407,7 @@ function computeWatcherSignature(entryScriptPath) {
 }
 
 function acquireExclusiveFileLock(lockPath, staleMs = 15000) {
-  const token = `${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+  const token = `${process.pid}:${Date.now()}:${crypto.randomBytes(6).toString('hex')}`;
   const tryOpenWx = () => {
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
     const fd = fs.openSync(lockPath, 'wx');
@@ -339,7 +437,7 @@ function acquireExclusiveFileLock(lockPath, staleMs = 15000) {
     const isStale = (ownerPid > 0 && !ownerAlive) || ageMs > staleMs;
     if (!isStale) return null;
 
-    const reclaimPath = `${lockPath}.reclaim.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    const reclaimPath = `${lockPath}.reclaim.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}`;
     try {
       fs.renameSync(lockPath, reclaimPath);
       try {
@@ -354,24 +452,63 @@ function acquireExclusiveFileLock(lockPath, staleMs = 15000) {
   }
 }
 
+function restoreDisplacedExclusiveLock(relPath, lockPath) {
+  try {
+    fs.linkSync(relPath, lockPath);
+    return true;
+  } catch (linkErr) {
+    if (linkErr && linkErr.code === 'EEXIST') {
+      return true;
+    }
+    try {
+      const rawBytes = fs.readFileSync(relPath);
+      const fd = fs.openSync(lockPath, 'wx');
+      try {
+        fs.writeFileSync(fd, rawBytes);
+      } finally {
+        fs.closeSync(fd);
+      }
+      return true;
+    } catch (wxErr) {
+      return Boolean(wxErr && wxErr.code === 'EEXIST');
+    }
+  }
+}
+
 function releaseExclusiveFileLock(lockPath, token) {
   if (!lockPath || !token) return false;
+  let relPath = null;
   try {
     if (!fs.existsSync(lockPath)) return false;
     const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
     if (!parsed || parsed.token !== token) return false;
-    const relPath = `${lockPath}.rel.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    relPath = `${lockPath}.rel.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}`;
+    fs.renameSync(lockPath, relPath);
+    let moved = null;
     try {
-      fs.renameSync(lockPath, relPath);
-      fs.unlinkSync(relPath);
-    } catch {
-      const verify = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-      if (verify && verify.token === token) {
-        fs.unlinkSync(lockPath);
-      }
+      moved = JSON.parse(fs.readFileSync(relPath, 'utf8'));
+    } catch {}
+    if (!moved || moved.token !== token) {
+      restoreDisplacedExclusiveLock(relPath, lockPath);
+      try {
+        fs.unlinkSync(relPath);
+      } catch {}
+      return false;
     }
+    try {
+      fs.unlinkSync(relPath);
+    } catch {}
     return true;
   } catch {
+    if (relPath && fs.existsSync(relPath)) {
+      try {
+        const moved = JSON.parse(fs.readFileSync(relPath, 'utf8'));
+        if (!moved || moved.token !== token) {
+          restoreDisplacedExclusiveLock(relPath, lockPath);
+        }
+        fs.unlinkSync(relPath);
+      } catch {}
+    }
     return false;
   }
 }
@@ -426,21 +563,19 @@ function ensureStorageWatcher(entryScriptPath, options = {}) {
         if (existing.sig === mySig) {
           return existing.pid;
         }
-        try {
-          process.kill(existing.pid, 'SIGTERM');
-        } catch (killErr) {
-          if (killErr && killErr.code !== 'ESRCH') {
-            process.stderr.write(
-              `[ko-thought-translator] Failed to terminate stale watcher ${existing.pid}: ${killErr.message}\n`
-            );
-          }
+        // Authenticate with the live watcher's cryptographic IPC sentinel before waiting.
+        // Unauthenticated or recycled PIDs receive ZERO OS signals (never SIGTERM/SIGKILL).
+        const stoppedViaSentinel = requestWatcherShutdownViaSentinelSync(existing, exitWaitTimeoutMs);
+        if (stoppedViaSentinel) {
+          waitForProcessExitSync(existing.pid, exitWaitTimeoutMs);
         }
-        waitForProcessExitSync(existing.pid, exitWaitTimeoutMs);
       }
 
       const spawnedPid = spawnFn(entryScriptPath, pidFilePath);
       if (spawnedPid) {
-        writeFileAtomicSync(pidFilePath, `${spawnedPid}:${mySig}`);
+        const creds = spawnedWatcherCredsByPid.get(spawnedPid) || null;
+        spawnedWatcherCredsByPid.delete(spawnedPid);
+        writeFileAtomicSync(pidFilePath, formatWatcherPidRecord(spawnedPid, mySig, creds), { mode: 0o600 });
       }
       return spawnedPid;
     } finally {
@@ -500,17 +635,30 @@ function runStorageWatcherLoop({
     appStoragePath: effectiveAppStoragePath,
   };
 
+  let creds = null;
+  if (process.env.AGY_KO_WATCHER_SENTINEL_CFG) {
+    try {
+      creds = JSON.parse(process.env.AGY_KO_WATCHER_SENTINEL_CFG);
+    } catch {
+      creds = null;
+    }
+    delete process.env.AGY_KO_WATCHER_SENTINEL_CFG;
+  }
+  if (!creds || !creds.instanceId || !creds.authToken || !creds.sentinelEndpoint) {
+    creds = createWatcherSentinelCredentials();
+  }
+
+  const mySig = computeWatcherSignature(entryScriptPath);
   try {
     const existing = readWatcherPidRecord(pidFilePath);
-    if (existing.pid && existing.pid !== process.pid && isProcessAlive(existing.pid)) {
+    if (existing.pid && existing.pid !== process.pid && existing.sig === mySig && isProcessAlive(existing.pid)) {
       return {
         stop() {},
         isStopped: () => true,
       };
     }
-    if (existing.pid !== process.pid) {
-      const mySig = computeWatcherSignature(entryScriptPath);
-      writeFileAtomicSync(pidFilePath, `${process.pid}:${mySig}`);
+    if (existing.pid !== process.pid || (!existing.instanceId && creds.instanceId)) {
+      writeFileAtomicSync(pidFilePath, formatWatcherPidRecord(process.pid, mySig, creds), { mode: 0o600 });
     }
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] watcher pid write error: ${err.message}\n`);
@@ -519,22 +667,46 @@ function runStorageWatcherLoop({
   let stopped = false;
   let intervalHandle = null;
   let pidDirWatcher = null;
+  let sentinelServer = null;
   const followupTimers = new Set();
 
-  const hasWatcherOwnership = () => !stopped && readWatcherPidRecord(pidFilePath).pid === process.pid;
+  const hasWatcherOwnership = () => {
+    if (stopped) return false;
+    const cur = readWatcherPidRecord(pidFilePath);
+    if (cur.pid !== process.pid) return false;
+    if (cur.instanceId && creds.instanceId && cur.instanceId !== creds.instanceId) return false;
+    return true;
+  };
+
+  const cleanupSentinelSocket = () => {
+    if (sentinelServer) {
+      try {
+        sentinelServer.close();
+      } catch {}
+      sentinelServer = null;
+    }
+    if (process.platform !== 'win32' && creds && creds.sentinelEndpoint) {
+      try {
+        if (fs.existsSync(creds.sentinelEndpoint)) {
+          fs.unlinkSync(creds.sentinelEndpoint);
+        }
+      } catch {}
+    }
+  };
 
   const stopWatcherLoop = ({ removeOwnPidFile = false } = {}) => {
+    if (intervalHandle) {
+      clearInterval(intervalHandle);
+      intervalHandle = null;
+    }
     if (stopped) return;
     stopped = true;
+    cleanupSentinelSocket();
     if (pidDirWatcher) {
       try {
         pidDirWatcher.close();
       } catch {}
       pidDirWatcher = null;
-    }
-    if (intervalHandle) {
-      clearInterval(intervalHandle);
-      intervalHandle = null;
     }
     for (const timer of followupTimers) {
       clearTimeout(timer);
@@ -542,12 +714,73 @@ function runStorageWatcherLoop({
     followupTimers.clear();
     process.removeListener('SIGTERM', onSignalTerminate);
     process.removeListener('SIGINT', onSignalTerminate);
-    if (removeOwnPidFile && readWatcherPidRecord(pidFilePath).pid === process.pid) {
-      try {
-        fs.unlinkSync(pidFilePath);
-      } catch {}
+    if (removeOwnPidFile) {
+      const cur = readWatcherPidRecord(pidFilePath);
+      if (cur.pid === process.pid && (!cur.instanceId || cur.instanceId === creds.instanceId)) {
+        try {
+          fs.unlinkSync(pidFilePath);
+        } catch {}
+      }
     }
   };
+
+  try {
+    if (process.platform !== 'win32' && fs.existsSync(creds.sentinelEndpoint)) {
+      try {
+        fs.unlinkSync(creds.sentinelEndpoint);
+      } catch {}
+    }
+    sentinelServer = net.createServer((conn) => {
+      let rawBuf = '';
+      conn.setEncoding('utf8');
+      conn.on('error', () => {});
+      conn.on('data', (chunk) => {
+        if (rawBuf.length + chunk.length > 4096) {
+          conn.destroy();
+          return;
+        }
+        rawBuf += chunk;
+        const nlIdx = rawBuf.indexOf('\n');
+        if (nlIdx === -1) return;
+        const line = rawBuf.slice(0, nlIdx).trim();
+        rawBuf = '';
+        let msg = null;
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          conn.destroy();
+          return;
+        }
+        if (!msg || !timingSafeTokenMatch(msg.authToken, creds.authToken)) {
+          try {
+            conn.end(JSON.stringify({ ok: false, error: 'unauthorized' }) + '\n');
+          } catch {}
+          return;
+        }
+        if (msg.op === 'shutdown') {
+          try {
+            conn.end(JSON.stringify({ ok: true, instanceId: creds.instanceId, pid: process.pid }) + '\n');
+          } catch {}
+          stopWatcherLoop({ removeOwnPidFile: false });
+          return;
+        }
+        try {
+          conn.end(JSON.stringify({ ok: true, instanceId: creds.instanceId, pid: process.pid }) + '\n');
+        } catch {}
+      });
+    });
+    sentinelServer.on('error', () => {});
+    sentinelServer.listen(creds.sentinelEndpoint, () => {
+      if (process.platform !== 'win32') {
+        try {
+          fs.chmodSync(creds.sentinelEndpoint, 0o600);
+        } catch {}
+      }
+    });
+    if (typeof sentinelServer.unref === 'function') {
+      sentinelServer.unref();
+    }
+  } catch {}
 
   function onSignalTerminate() {
     stopWatcherLoop({ removeOwnPidFile: true });
@@ -678,11 +911,67 @@ function runStorageWatcherLoop({
   } catch {}
 
   void checkStorageAndAppHealth();
-  intervalHandle = setInterval(checkStorageAndAppHealth, Math.max(15, Number(pollIntervalMs) || 400));
+  if (!stopped) {
+    intervalHandle = setInterval(checkStorageAndAppHealth, Math.max(15, Number(pollIntervalMs) || 400));
+  }
   return {
     stop: () => stopWatcherLoop({ removeOwnPidFile: true }),
     isStopped: () => stopped,
   };
+}
+
+function runWatcherSentinelStopCli() {
+  let reqCfg = null;
+  try {
+    reqCfg = JSON.parse(process.env.AGY_KO_WATCHER_STOP_REQ || '{}');
+  } catch {
+    process.exit(1);
+    return;
+  }
+  const { sentinelEndpoint, authToken, instanceId, timeoutMs = 1000 } = reqCfg || {};
+  if (!sentinelEndpoint || !authToken || !instanceId) {
+    process.exit(1);
+    return;
+  }
+  let done = false;
+  const finish = (code) => {
+    if (done) return;
+    done = true;
+    process.exit(code);
+  };
+  const timer = setTimeout(() => finish(1), Math.max(150, Number(timeoutMs) || 1000));
+  if (timer && typeof timer.unref === 'function') timer.unref();
+
+  try {
+    const sock = net.createConnection(sentinelEndpoint);
+    let buf = '';
+    sock.setEncoding('utf8');
+    sock.on('connect', () => {
+      sock.write(JSON.stringify({ op: 'shutdown', authToken }) + '\n');
+    });
+    sock.on('data', (chunk) => {
+      buf += chunk;
+      const nl = buf.indexOf('\n');
+      if (nl === -1) return;
+      try {
+        const reply = JSON.parse(buf.slice(0, nl).trim());
+        sock.destroy();
+        if (reply && reply.ok === true && reply.instanceId === instanceId) {
+          finish(0);
+          return;
+        }
+      } catch {}
+      finish(1);
+    });
+    sock.on('error', () => finish(1));
+    sock.on('close', () => finish(1));
+  } catch {
+    finish(1);
+  }
+}
+
+if (require.main === module && process.argv.includes('--watcher-sentinel-stop')) {
+  runWatcherSentinelStopCli();
 }
 
 module.exports = {
@@ -695,6 +984,7 @@ module.exports = {
   isZombieProcStatContent,
   isProcessAlive,
   waitForProcessExitSync,
+  readWatcherPidRecord,
   acquireExclusiveFileLock,
   releaseExclusiveFileLock,
   spawnDetachedWatcherProcess,
