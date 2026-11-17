@@ -337,8 +337,14 @@ const spawnedWatcherCredsByPid = new Map();
  * `windowsHide: true` (`CREATE_NO_WINDOW = 0x08000000`) and `stdio: 'ignore'`
  * so Windows never allocates a console or triggers Windows Terminal (`DefTerm`).
  */
-function spawnDetachedWatcherProcess(entryScriptPath, pidFilePath = WATCHER_PID_PATH) {
-  const creds = createWatcherSentinelCredentials();
+function spawnDetachedWatcherProcess(entryScriptPath, pidFilePath = WATCHER_PID_PATH, preGeneratedCreds = null) {
+  const creds =
+    preGeneratedCreds &&
+    preGeneratedCreds.instanceId &&
+    preGeneratedCreds.authToken &&
+    preGeneratedCreds.sentinelEndpoint
+      ? preGeneratedCreds
+      : createWatcherSentinelCredentials();
   const childEnv = {
     ...process.env,
     AGY_KO_WATCHER_SENTINEL_CFG: JSON.stringify(creds),
@@ -425,29 +431,80 @@ function acquireExclusiveFileLock(lockPath, staleMs = 15000) {
     if (!err || err.code !== 'EEXIST') return null;
   }
 
+  let reclaimPath = null;
   try {
     const stat = fs.statSync(lockPath);
     const ageMs = Date.now() - stat.mtimeMs;
+    let staleRaw = '';
+    let staleToken = null;
     let ownerPid = 0;
     try {
-      const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      staleRaw = fs.readFileSync(lockPath, 'utf8');
+      const parsed = JSON.parse(staleRaw);
       ownerPid = Number(parsed?.pid || 0);
+      staleToken = typeof parsed?.token === 'string' ? parsed.token : null;
     } catch {}
     const ownerAlive = ownerPid > 0 && isProcessAlive(ownerPid);
     const isStale = (ownerPid > 0 && !ownerAlive) || ageMs > staleMs;
     if (!isStale) return null;
 
-    const reclaimPath = `${lockPath}.reclaim.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}`;
+    reclaimPath = `${lockPath}.reclaim.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}`;
     try {
       fs.renameSync(lockPath, reclaimPath);
+    } catch {
+      reclaimPath = null;
+      return null;
+    }
+
+    let displacedNewLock = false;
+    try {
+      const movedRaw = fs.readFileSync(reclaimPath, 'utf8');
+      let moved = null;
+      try {
+        moved = JSON.parse(movedRaw);
+      } catch {}
+      if (staleToken !== null) {
+        if (!moved || moved.token !== staleToken) {
+          displacedNewLock = true;
+        }
+      } else if (movedRaw !== staleRaw) {
+        displacedNewLock = true;
+      }
+      if (!displacedNewLock && moved) {
+        const movedPid = Number(moved.pid || 0);
+        const movedStat = fs.statSync(reclaimPath);
+        const movedAgeMs = Date.now() - movedStat.mtimeMs;
+        const movedAlive = movedPid > 0 && isProcessAlive(movedPid);
+        const stillStale = (movedPid > 0 && !movedAlive) || movedAgeMs > staleMs;
+        if (!stillStale) {
+          displacedNewLock = true;
+        }
+      }
+    } catch {
+      displacedNewLock = true;
+    }
+
+    if (displacedNewLock) {
+      restoreDisplacedExclusiveLock(reclaimPath, lockPath);
       try {
         fs.unlinkSync(reclaimPath);
       } catch {}
-    } catch {
+      reclaimPath = null;
       return null;
     }
+
+    try {
+      fs.unlinkSync(reclaimPath);
+    } catch {}
+    reclaimPath = null;
     return tryOpenWx();
   } catch {
+    if (reclaimPath && fs.existsSync(reclaimPath)) {
+      try {
+        restoreDisplacedExclusiveLock(reclaimPath, lockPath);
+        fs.unlinkSync(reclaimPath);
+      } catch {}
+    }
     return null;
   }
 }
@@ -571,11 +628,50 @@ function ensureStorageWatcher(entryScriptPath, options = {}) {
         }
       }
 
-      const spawnedPid = spawnFn(entryScriptPath, pidFilePath);
+      const preGeneratedCreds = createWatcherSentinelCredentials();
+      const hadPrevSentinelEnv = Object.prototype.hasOwnProperty.call(
+        process.env,
+        'AGY_KO_WATCHER_SENTINEL_CFG'
+      );
+      const prevSentinelEnv = process.env.AGY_KO_WATCHER_SENTINEL_CFG;
+      process.env.AGY_KO_WATCHER_SENTINEL_CFG = JSON.stringify(preGeneratedCreds);
+      let spawnedPid;
+      try {
+        spawnedPid = spawnFn(entryScriptPath, pidFilePath, preGeneratedCreds);
+      } finally {
+        if (hadPrevSentinelEnv) {
+          process.env.AGY_KO_WATCHER_SENTINEL_CFG = prevSentinelEnv;
+        } else {
+          delete process.env.AGY_KO_WATCHER_SENTINEL_CFG;
+        }
+      }
       if (spawnedPid) {
-        const creds = spawnedWatcherCredsByPid.get(spawnedPid) || null;
+        const mappedCreds = spawnedWatcherCredsByPid.get(spawnedPid) || null;
         spawnedWatcherCredsByPid.delete(spawnedPid);
-        writeFileAtomicSync(pidFilePath, formatWatcherPidRecord(spawnedPid, mySig, creds), { mode: 0o600 });
+        const afterSpawnRec = readWatcherPidRecord(pidFilePath);
+        if (
+          afterSpawnRec.pid === spawnedPid &&
+          afterSpawnRec.instanceId &&
+          afterSpawnRec.authToken &&
+          afterSpawnRec.sentinelEndpoint
+        ) {
+          if (afterSpawnRec.sig !== mySig) {
+            writeFileAtomicSync(
+              pidFilePath,
+              formatWatcherPidRecord(spawnedPid, mySig, {
+                instanceId: afterSpawnRec.instanceId,
+                authToken: afterSpawnRec.authToken,
+                sentinelEndpoint: afterSpawnRec.sentinelEndpoint,
+              }),
+              { mode: 0o600 }
+            );
+          }
+        } else {
+          const effectiveCreds = mappedCreds || preGeneratedCreds;
+          writeFileAtomicSync(pidFilePath, formatWatcherPidRecord(spawnedPid, mySig, effectiveCreds), {
+            mode: 0o600,
+          });
+        }
       }
       return spawnedPid;
     } finally {
@@ -657,7 +753,7 @@ function runStorageWatcherLoop({
         isStopped: () => true,
       };
     }
-    if (existing.pid !== process.pid || (!existing.instanceId && creds.instanceId)) {
+    if (existing.pid !== process.pid || existing.sig !== mySig || existing.instanceId !== creds.instanceId) {
       writeFileAtomicSync(pidFilePath, formatWatcherPidRecord(process.pid, mySig, creds), { mode: 0o600 });
     }
   } catch (err) {

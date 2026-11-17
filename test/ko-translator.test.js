@@ -2974,9 +2974,10 @@ test('D-0032: custom translation adapter IDs survive host sync & Shift+click cyc
     createdPolicySpec.createScriptURL('https://www.gstatic.com/antigravity/web/2.32.1/main.js'),
     'https://www.gstatic.com/antigravity/web/2.32.1/main.js'
   );
-  assert.equal(
-    createdPolicySpec.createScriptURL('blob:https://antigravity.google.com/worker-blob-1'),
-    'blob:https://antigravity.google.com/worker-blob-1'
+  assert.throws(
+    () => createdPolicySpec.createScriptURL('blob:https://antigravity.google.com/worker-blob-1'),
+    { name: 'TypeError', message: /Blocked untrusted script URL/ },
+    'D-0032: createScriptURL must reject unowned same-origin blob: URLs before PatchedWorker registers them'
   );
   assert.throws(
     () => createdPolicySpec.createScriptURL('javascript:alert(1)'),
@@ -4912,5 +4913,468 @@ test(
       relNotesTpl.includes('### Upgrade Instructions') && relNotesTpl.includes('### 업그레이드 안내'),
       'both English and Korean upgrade sections must be present'
     );
+  });
+
+  await t.test('6. [D-0029 Round-2] acquireLock stale reclaim TOCTOU restores contender A lock & WS close normalizes 1004/1005/1006/1015', async () => {
+    const statusbarPatcher = require(path.join(HOST_DIR, 'ensure_statusbar_patch.js'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-adv-r2-d29-'));
+    try {
+      const sbAcqLockPath = path.join(tmpDir, 'sb_acquire_race.lock');
+      fs.writeFileSync(
+        sbAcqLockPath,
+        JSON.stringify({ pid: 99999999, token: 'dead-stale-owner', ts: Date.now() - 120000 }),
+        'utf8'
+      );
+      const pastDate = new Date(Date.now() - 120000);
+      fs.utimesSync(sbAcqLockPath, pastDate, pastDate);
+
+      const origRenameSync = fs.renameSync;
+      let raceInjected = false;
+      fs.renameSync = function (src, dest) {
+        if (!raceInjected && src === sbAcqLockPath) {
+          raceInjected = true;
+          fs.writeFileSync(
+            sbAcqLockPath,
+            JSON.stringify({ pid: process.pid, token: 'live-contender-A-token', ts: Date.now() }),
+            'utf8'
+          );
+        }
+        return origRenameSync.call(fs, src, dest);
+      };
+
+      let acqRes;
+      try {
+        acqRes = statusbarPatcher.acquireLock(sbAcqLockPath, 60000);
+      } finally {
+        fs.renameSync = origRenameSync;
+      }
+
+      assert.equal(acqRes, false, 'acquireLock must return false when contender A replaced stale lock before renameSync');
+      assert.equal(fs.existsSync(sbAcqLockPath), true, 'contender A live lock must be restored at lockPath');
+      assert.equal(
+        JSON.parse(fs.readFileSync(sbAcqLockPath, 'utf8')).token,
+        'live-contender-A-token',
+        'contender A token must remain intact without being overwritten by contender B'
+      );
+
+      // Verify RFC6455 close(code) wire normalization for reserved codes 1004, 1005, 1006, 1015 -> 1000
+      const receivedCloseCodes = [];
+      const openSockets = new Set();
+      const wsSrv = http.createServer();
+      wsSrv.on('upgrade', (req, socket) => {
+        openSockets.add(socket);
+        socket.on('close', () => openSockets.delete(socket));
+        socket.on('end', () => {
+          try {
+            socket.end();
+          } catch {}
+        });
+        const accept = crypto
+          .createHash('sha1')
+          .update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+          .digest('base64');
+        socket.write(
+          'HTTP/1.1 101 Switching Protocols\r\n' +
+            'Upgrade: websocket\r\n' +
+            'Connection: Upgrade\r\n' +
+            `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
+        );
+        let buf = Buffer.alloc(0);
+        socket.on('data', (chunk) => {
+          buf = Buffer.concat([buf, chunk]);
+          while (buf.length >= 2) {
+            const opcode = buf[0] & 0x0f;
+            const masked = (buf[1] & 0x80) !== 0;
+            const len = buf[1] & 0x7f;
+            const mBytes = masked ? 4 : 0;
+            if (buf.length < 2 + mBytes + len) return;
+            const body = Buffer.from(buf.subarray(2 + mBytes, 2 + mBytes + len));
+            if (masked) {
+              const m = buf.subarray(2, 6);
+              for (let i = 0; i < body.length; i++) body[i] ^= m[i & 3];
+            }
+            buf = buf.subarray(2 + mBytes + len);
+            if (opcode === 0x08 && body.length >= 2) {
+              receivedCloseCodes.push(body.readUInt16BE(0));
+              socket.end();
+              return;
+            }
+          }
+        });
+      });
+      await new Promise((r) => wsSrv.listen(0, '127.0.0.1', r));
+      const port = wsSrv.address().port;
+      try {
+        for (const reservedCode of [1004, 1005, 1006, 1015]) {
+          await new Promise((resolve, reject) => {
+            const client = statusbarPatcher.createRfc6455WebSocketClient(`ws://127.0.0.1:${port}/ws`);
+            const tmr = setTimeout(() => reject(new Error(`WS close(${reservedCode}) timed out`)), 1000);
+            client.onopen = () => {
+              client.close(reservedCode);
+            };
+            client.onclose = () => {
+              clearTimeout(tmr);
+              resolve();
+            };
+            client.onerror = (e) => {
+              clearTimeout(tmr);
+              reject(e);
+            };
+          });
+        }
+        await sleep(30);
+        assert.deepEqual(
+          receivedCloseCodes,
+          [1000, 1000, 1000, 1000],
+          `RFC6455 close() must normalize reserved codes 1004/1005/1006/1015 to 1000 on wire, got: ${receivedCloseCodes.join(',')}`
+        );
+      } finally {
+        for (const s of openSockets) {
+          try {
+            s.destroy();
+          } catch {}
+        }
+        await new Promise((r) => wsSrv.close(r));
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('7. [D-0039 Round-2] acquireExclusiveFileLock stale reclaim TOCTOU restores contender A lock & ensureStorageWatcher preserves 5-field sentinel credentials with custom spawnFn', () => {
+    const settingsStorage = require(path.join(HOST_DIR, 'settings-storage.js'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-adv-r2-d39-'));
+    try {
+      const exLockPath = path.join(tmpDir, 'watcher_acq_race.lock');
+      fs.writeFileSync(
+        exLockPath,
+        JSON.stringify({ pid: 99999999, token: 'dead-ex-owner', ts: Date.now() - 60000 }),
+        'utf8'
+      );
+      const pastDate = new Date(Date.now() - 60000);
+      fs.utimesSync(exLockPath, pastDate, pastDate);
+
+      const origRenameSync = fs.renameSync;
+      let exRaceInjected = false;
+      fs.renameSync = function (src, dest) {
+        if (!exRaceInjected && src === exLockPath) {
+          exRaceInjected = true;
+          fs.writeFileSync(
+            exLockPath,
+            JSON.stringify({ pid: process.pid, token: 'live-ex-contender-A', ts: Date.now() }),
+            'utf8'
+          );
+        }
+        return origRenameSync.call(fs, src, dest);
+      };
+
+      let acqTok;
+      try {
+        acqTok = settingsStorage.acquireExclusiveFileLock(exLockPath, 15000);
+      } finally {
+        fs.renameSync = origRenameSync;
+      }
+
+      assert.equal(acqTok, null, 'acquireExclusiveFileLock must return null when contender A replaced stale lock before renameSync');
+      assert.equal(fs.existsSync(exLockPath), true, 'contender A lock file must survive');
+      assert.equal(
+        JSON.parse(fs.readFileSync(exLockPath, 'utf8')).token,
+        'live-ex-contender-A',
+        'contender A token in acquireExclusiveFileLock must not be overwritten'
+      );
+
+      // Case (a): custom spawnFn where child writes 5-field sentinel record synchronously before returning PID
+      const entryScriptPath = path.join(ROOT, 'scripts', 'ensure_ko_thought_patch.js');
+      const pidPathA = path.join(tmpDir, 'watcher_a.pid');
+      const lockPathA = `${pidPathA}.lock`;
+      const childPipeEndpoint = process.platform === 'win32' ? '\\\\.\\pipe\\agy-ko-watch-childA' : '/tmp/agy-ko-watch-childA.sock';
+      const childEndpointB64 = Buffer.from(childPipeEndpoint, 'utf8').toString('base64url');
+      const retPidA = settingsStorage.ensureStorageWatcher(entryScriptPath, {
+        watcherPidPath: pidPathA,
+        watcherLockPath: lockPathA,
+        spawnFn: (_entry, targetPidPath) => {
+          fs.writeFileSync(
+            targetPidPath,
+            `${process.pid}:temp-sig:child-inst-a:child-tok-a:${childEndpointB64}`,
+            'utf8'
+          );
+          return process.pid;
+        },
+      });
+      assert.equal(retPidA, process.pid);
+      const recA = settingsStorage.readWatcherPidRecord(pidPathA);
+      assert.equal(recA.pid, process.pid);
+      assert.equal(recA.instanceId, 'child-inst-a', 'ensureStorageWatcher must preserve child-written 5-field instanceId instead of overwriting with 2-field');
+      assert.equal(recA.authToken, 'child-tok-a', 'ensureStorageWatcher must preserve child-written 5-field authToken');
+      assert.equal(recA.sentinelEndpoint, childPipeEndpoint, 'ensureStorageWatcher must preserve child-written 5-field sentinelEndpoint');
+
+      // Case (b): custom spawnFn that has not written pidFilePath yet -> parent pre-generates & passes 5-field sentinel credentials
+      const pidPathB = path.join(tmpDir, 'watcher_b.pid');
+      const lockPathB = `${pidPathB}.lock`;
+      let receivedEnvCfg = null;
+      const retPidB = settingsStorage.ensureStorageWatcher(entryScriptPath, {
+        watcherPidPath: pidPathB,
+        watcherLockPath: lockPathB,
+        spawnFn: () => {
+          receivedEnvCfg = process.env.AGY_KO_WATCHER_SENTINEL_CFG
+            ? JSON.parse(process.env.AGY_KO_WATCHER_SENTINEL_CFG)
+            : null;
+          return process.pid;
+        },
+      });
+      assert.equal(retPidB, process.pid);
+      assert.ok(receivedEnvCfg && receivedEnvCfg.instanceId && receivedEnvCfg.authToken && receivedEnvCfg.sentinelEndpoint, 'parent must supply pre-generated sentinel credentials to custom spawnFn via env');
+      const recB = settingsStorage.readWatcherPidRecord(pidPathB);
+      assert.equal(recB.instanceId, receivedEnvCfg.instanceId, 'pidFilePath must record 5-field pre-generated instanceId when custom spawnFn has not written yet');
+      assert.equal(recB.authToken, receivedEnvCfg.authToken);
+      assert.equal(recB.sentinelEndpoint, receivedEnvCfg.sentinelEndpoint);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('8. [D-0032 Round-2] TrustedTypes createScript one-time inline gate (zero window.__agyKoTrustedPolicy), unowned same-origin blob: rejection, and mainScript.onload clearing __agySuppressAutoIframeLoad', async () => {
+    const { assembleRendererSourceFromModules } = require(BUNDLE_INJECTOR_PATH);
+    const bundleCode = assembleRendererSourceFromModules();
+
+    let createdPolicySpec = null;
+    const createdScriptTexts = [];
+    const makeNode = (tag) => {
+      const attrs = new Map();
+      const listeners = [];
+      const el = {
+        nodeType: 1,
+        tagName: String(tag || 'DIV').toUpperCase(),
+        id: '',
+        className: '',
+        textContent: '',
+        text: '',
+        nonce: '',
+        src: '',
+        href: '',
+        rel: '',
+        async: true,
+        onload: null,
+        onerror: null,
+        style: {},
+        children: [],
+        childNodes: [],
+        parentElement: null,
+        parentNode: null,
+        classList: { add() {}, remove() {}, contains: () => false },
+        getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+        setAttribute: (k, v) => {
+          attrs.set(k, String(v));
+          if (k === 'id') el.id = String(v);
+          if (k === 'src') el.src = String(v);
+        },
+        removeAttribute: (k) => attrs.delete(k),
+        appendChild(ch) {
+          ch.parentElement = el;
+          ch.parentNode = el;
+          el.children.push(ch);
+          el.childNodes.push(ch);
+          if (ch.tagName === 'SCRIPT' && ch.text) createdScriptTexts.push(String(ch.text));
+          return ch;
+        },
+        remove() {},
+        closest: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener(type, fn) {
+          listeners.push({ type, fn });
+        },
+        removeEventListener() {},
+        _listeners: listeners,
+      };
+      return el;
+    };
+
+    const validSrc = 'https://antigravity.static.usercontent.goog/web/2.32.1/?iframe=true';
+    let curSrc = validSrc;
+    class FakeIframe {}
+    const validIframe = makeNode('IFRAME');
+    validIframe.setAttribute('src', validSrc);
+    const iframeHead = makeNode('HEAD');
+    const iframeBody = makeNode('BODY');
+    const iframeDocEl = makeNode('HTML');
+    const iframeDoc = {
+      documentElement: iframeDocEl,
+      head: iframeHead,
+      body: iframeBody,
+      readyState: 'complete',
+      createElement: (t) => makeNode(t),
+      createTreeWalker: () => ({ nextNode: () => null }),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      getElementById: (id) => iframeBody.children.find((c) => c.id === id) || null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+    const iframeWin = {
+      location: { origin: 'https://antigravity.google.com', href: 'about:blank' },
+      document: iframeDoc,
+      navigator: { userAgent: 'Mozilla/5.0' },
+      history: { replaceState: () => {} },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      Worker: function OrigW(u) { this.url = u; },
+      Blob: class FakeBlob {},
+      URL: { createObjectURL: () => 'blob:https://antigravity.google.com/owned-worker-99', revokeObjectURL: () => {} },
+      MutationObserver: class {
+        observe() {}
+        disconnect() {}
+        takeRecords() { return []; }
+      },
+      Node: { TEXT_NODE: 3, ELEMENT_NODE: 1 },
+      NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4 },
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    };
+    Object.defineProperty(FakeIframe.prototype, 'src', {
+      configurable: true,
+      get: () => curSrc,
+      set(v) {
+        curSrc = String(v);
+        if (this === validIframe && v === 'about:blank') {
+          validIframe.contentWindow = iframeWin;
+          validIframe.contentDocument = iframeDoc;
+        }
+      },
+    });
+    Object.setPrototypeOf(validIframe, FakeIframe.prototype);
+    validIframe.contentWindow = null;
+    validIframe.contentDocument = null;
+
+    let origOnLoadCalls = 0;
+    const rcInst = {
+      destroyed: false,
+      proxyCommand: async () => null,
+      onIframeLoad: function origOnLoad() {
+        origOnLoadCalls += 1;
+        return Promise.resolve('ORIG_LOADED');
+      },
+    };
+    const rcEl = { querySelector: (sel) => (sel === 'iframe' ? validIframe : null) };
+    const hostHead = makeNode('HEAD');
+    const hostBody = makeNode('BODY');
+    const hostDoc = {
+      body: hostBody,
+      head: hostHead,
+      documentElement: makeNode('HTML'),
+      createElement: (t) => makeNode(t),
+      createTreeWalker: () => ({ nextNode: () => null }),
+      getElementById: () => null,
+      querySelector: (sel) => (sel === 'ga-remote-control' ? rcEl : null),
+      querySelectorAll: () => [],
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+
+    let lastPassedCreateScriptInput = null;
+    const winObj = {
+      location: {
+        hostname: 'antigravity.google.com',
+        protocol: 'https:',
+        origin: 'https://antigravity.google.com',
+        href: 'https://antigravity.google.com/r/1',
+        search: '',
+      },
+      document: hostDoc,
+      ng: { getComponent: () => rcInst },
+      HTMLIFrameElement: FakeIframe,
+      __agyHostInstalledPlugins: {
+        resolved: true,
+        statusbar: true,
+        statusbarCode: 'window.__agyCompanionBootTest = 1;',
+      },
+      trustedTypes: {
+        createPolicy(_name, spec) {
+          createdPolicySpec = spec;
+          return {
+            createScript: (s) => {
+              lastPassedCreateScriptInput = s;
+              return spec.createScript(s);
+            },
+            createScriptURL: (u) => spec.createScriptURL(u),
+          };
+        },
+      },
+      MutationObserver: class {
+        observe() {}
+        disconnect() {}
+        takeRecords() { return []; }
+      },
+      Node: { TEXT_NODE: 3, ELEMENT_NODE: 1 },
+      NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4 },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    };
+
+    vm.runInNewContext(bundleCode, {
+      window: winObj,
+      document: hostDoc,
+      URL,
+      URLSearchParams,
+      HTMLIFrameElement: FakeIframe,
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    });
+
+    // Wait microtask for probeHostCompanionPluginsForRemote().then(...) -> injectRemoteCompanionScript(...)
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // (8a) window.__agyKoTrustedPolicy must NOT be exposed on window, and createScript must reject arbitrary & replayed inputs!
+    assert.equal(winObj.__agyKoTrustedPolicy, undefined, 'TrustedTypes policy must NEVER be exposed on window.__agyKoTrustedPolicy');
+    assert.ok(createdPolicySpec, 'TrustedTypes policy must be created');
+    assert.equal(createdScriptTexts.length, 1, 'injectRemoteCompanionScript must succeed once via authorized one-time inline ticket');
+    assert.throws(
+      () => createdPolicySpec.createScript('alert(1)'),
+      { name: 'TypeError' },
+      'createScript must reject arbitrary inline script gadgets with TypeError'
+    );
+    assert.throws(
+      () => createdPolicySpec.createScript(lastPassedCreateScriptInput),
+      { name: 'TypeError' },
+      'createScript one-time inline authorization must be immediately invalidated in finally and reject replay'
+    );
+
+    // (8b) Unowned same-origin blob: URL (`blob:https://antigravity.google.com/...`) must be rejected!
+    assert.equal(rcInst.__agySuppressAutoIframeLoad, true, 'during promotion before mainScript.onload, auto load is suppressed');
+    const blankLoadListener = validIframe._listeners.find((l) => l.type === 'load');
+    assert.ok(blankLoadListener, 'blank load listener must be registered');
+    blankLoadListener.fn();
+
+    assert.throws(
+      () => createdPolicySpec.createScriptURL('blob:https://antigravity.google.com/unowned-attacker-blob'),
+      { name: 'TypeError', message: /Blocked untrusted script URL/ },
+      'createScriptURL must reject unowned same-origin blob:https://antigravity.google.com/... URLs'
+    );
+    // Owned Worker blob URL created via PatchedWorker must still succeed
+    const w = new iframeWin.Worker('/diff_worker.js?v=2.32.1');
+    assert.equal(w.url, 'blob:https://antigravity.google.com/owned-worker-99');
+
+    // (8c) Promotion SUCCESS (`mainScript.onload`) MUST clear rcInst.__agySuppressAutoIframeLoad = false so subsequent onIframeLoad works!
+    const mainScriptEl = iframeHead.children.find((el) => el.tagName === 'SCRIPT' && String(el.src).endsWith('/main.js'));
+    assert.ok(mainScriptEl && typeof mainScriptEl.onload === 'function', 'main.js script element must have onload handler');
+    mainScriptEl.onload();
+    assert.equal(
+      rcInst.__agySuppressAutoIframeLoad,
+      false,
+      'mainScript.onload must clear rcInst.__agySuppressAutoIframeLoad = false upon promotion success'
+    );
+    const beforeManualCalls = origOnLoadCalls;
+    const manualRes = await rcInst.onIframeLoad();
+    assert.equal(manualRes, 'ORIG_LOADED', 'subsequent rcInst.onIframeLoad() after promotion success must invoke original method');
+    assert.equal(origOnLoadCalls, beforeManualCalls + 1, 'rcInst.onIframeLoad() must not remain permanently suppressed');
   });
 });

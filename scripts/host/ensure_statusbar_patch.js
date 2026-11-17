@@ -542,6 +542,7 @@ function writeLockPayload(lockPath, token) {
 }
 
 function acquireFileLock(lockPath, token, staleMs = LOCK_STALE_MS) {
+  let staleTmp = null;
   try {
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
     try {
@@ -553,10 +554,14 @@ function acquireFileLock(lockPath, token, staleMs = LOCK_STALE_MS) {
 
     const stat = fs.statSync(lockPath);
     const ageMs = Date.now() - stat.mtimeMs;
+    let staleRaw = '';
+    let staleToken = null;
     let ownerPid = 0;
     try {
-      const lockInfo = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      staleRaw = fs.readFileSync(lockPath, 'utf8');
+      const lockInfo = JSON.parse(staleRaw);
       ownerPid = Number(lockInfo?.pid || 0);
+      staleToken = typeof lockInfo?.token === 'string' ? lockInfo.token : null;
     } catch {}
     const ownerAlive = ownerPid > 0 && isProcessAlive(ownerPid);
     const isStale =
@@ -565,16 +570,67 @@ function acquireFileLock(lockPath, token, staleMs = LOCK_STALE_MS) {
       ageMs > staleMs * 10;
     if (!isStale) return false;
 
-    const staleTmp = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+    staleTmp = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
     try {
       fs.renameSync(lockPath, staleTmp);
-      try { fs.unlinkSync(staleTmp); } catch {}
     } catch {
+      staleTmp = null;
       return false;
     }
+
+    let displacedNewLock = false;
+    try {
+      const movedRaw = fs.readFileSync(staleTmp, 'utf8');
+      let movedInfo = null;
+      try {
+        movedInfo = JSON.parse(movedRaw);
+      } catch {}
+      if (staleToken !== null) {
+        if (!movedInfo || movedInfo.token !== staleToken) {
+          displacedNewLock = true;
+        }
+      } else if (movedRaw !== staleRaw) {
+        displacedNewLock = true;
+      }
+      if (!displacedNewLock && movedInfo) {
+        const movedPid = Number(movedInfo.pid || 0);
+        const movedStat = fs.statSync(staleTmp);
+        const movedAgeMs = Date.now() - movedStat.mtimeMs;
+        const movedAlive = movedPid > 0 && isProcessAlive(movedPid);
+        const stillStale =
+          (movedPid > 0 && !movedAlive) ||
+          (!movedAlive && movedAgeMs > staleMs) ||
+          movedAgeMs > staleMs * 10;
+        if (!stillStale) {
+          displacedNewLock = true;
+        }
+      }
+    } catch {
+      displacedNewLock = true;
+    }
+
+    if (displacedNewLock) {
+      restoreDisplacedLockFile(staleTmp, lockPath);
+      try {
+        fs.unlinkSync(staleTmp);
+      } catch {}
+      staleTmp = null;
+      return false;
+    }
+
+    try {
+      fs.unlinkSync(staleTmp);
+    } catch {}
+    staleTmp = null;
     writeLockPayload(lockPath, token);
     return true;
   } catch {
+    if (staleTmp && fs.existsSync(staleTmp)) {
+      try {
+        restoreDisplacedLockFile(staleTmp, lockPath);
+        fs.unlinkSync(staleTmp);
+      } catch {}
+    }
     return false;
   }
 }
@@ -859,9 +915,18 @@ function createRfc6455WebSocketClient(wsUrl) {
       closed = true;
       try {
         if (sock && !sock.destroyed) {
+          const normalizedCode =
+            Number.isInteger(code) &&
+            code !== 1004 &&
+            code !== 1005 &&
+            code !== 1006 &&
+            code !== 1015 &&
+            ((code >= 1000 && code <= 1014) || (code >= 3000 && code <= 4999))
+              ? code
+              : 1000;
           const mask = crypto.randomBytes(4);
           const statusBuf = Buffer.alloc(2);
-          statusBuf.writeUInt16BE(Number.isInteger(code) && code >= 1000 && code <= 4999 ? code : 1000, 0);
+          statusBuf.writeUInt16BE(normalizedCode, 0);
           const maskedBody = Buffer.from([statusBuf[0] ^ mask[0], statusBuf[1] ^ mask[1]]);
           sock.end(Buffer.concat([Buffer.from([0x88, 0x82]), mask, maskedBody]));
           const destroyTimer = setTimeout(() => {
