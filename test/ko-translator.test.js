@@ -3120,16 +3120,9 @@ test('D-0039 (KOTRANS-C1) & runtime verification suite: atomic watcher PID write
   const os = require('node:os');
   const http = require('node:http');
   const { spawn } = require('node:child_process');
+  const settingsStorage = require(path.join(HOST_DIR, 'settings-storage.js'));
 
-  const isPidAlive = (pid) => {
-    if (!pid || pid <= 0) return false;
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const isPidAlive = (pid) => settingsStorage.isProcessAlive(pid);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-d0039-'));
@@ -3259,7 +3252,9 @@ test('D-0039 (KOTRANS-C1) & runtime verification suite: atomic watcher PID write
     assert.equal(isPidAlive(staleChild.pid), true, 'stale watcher fixture must start alive');
     fs.writeFileSync(isolatedPidPath, `${staleChild.pid}:0-0-0-0`, 'utf8');
 
-    const settingsStorage = require(path.join(HOST_DIR, 'settings-storage.js'));
+    assert.equal(settingsStorage.isZombieProcStatContent('4242 (node (worker)) Z 1 4242 4242 0 -1 4194560'), true);
+    assert.equal(settingsStorage.isZombieProcStatContent('4242 (node) S 1 4242 4242 0 -1 4194560'), false);
+
     let staleAliveAtSpawnMoment = null;
     const replacementPid = settingsStorage.ensureStorageWatcher(dummyEntryPath, {
       watcherPidPath: isolatedPidPath,

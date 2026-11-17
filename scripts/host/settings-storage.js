@@ -7,7 +7,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const {
   APP_STORAGE_PATH,
   DEVTOOLS_PORT_FILE,
@@ -179,14 +179,38 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
   return { pretranslateEnabled: enabled, translationProvider: provider };
 }
 
+function isZombieProcStatContent(statRaw) {
+  if (typeof statRaw !== 'string' || !statRaw) return false;
+  const closeParen = statRaw.lastIndexOf(')');
+  if (closeParen === -1) return false;
+  const stateChar = statRaw.slice(closeParen + 1).trimStart()[0];
+  return stateChar === 'Z' || stateChar === 'X' || stateChar === 'x';
+}
+
 function isProcessAlive(pid) {
   if (!pid || isNaN(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+  } catch (err) {
+    return Boolean(err && err.code === 'EPERM');
   }
+  // On POSIX, `process.kill(pid, 0)` still succeeds while an exited child sits in
+  // zombie (`Z`) or dead (`X`/`x`) state before its parent's event loop runs `waitpid`.
+  if (process.platform === 'linux') {
+    try {
+      const statRaw = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      if (isZombieProcStatContent(statRaw)) return false;
+    } catch {
+      return false;
+    }
+  } else if (process.platform === 'darwin' || process.platform === 'freebsd') {
+    try {
+      const res = spawnSync('ps', ['-o', 'state=', '-p', String(pid)], { encoding: 'utf8' });
+      const stateStr = String(res.stdout || '').trim();
+      if (!stateStr || stateStr.startsWith('Z')) return false;
+    } catch {}
+  }
+  return true;
 }
 
 const SYNC_WAIT_INT32 =
@@ -538,6 +562,7 @@ module.exports = {
   parseProviderCliArg,
   writeFileAtomicSync,
   getOrSetTranslatorOptions,
+  isZombieProcStatContent,
   isProcessAlive,
   waitForProcessExitSync,
   spawnDetachedWatcherProcess,

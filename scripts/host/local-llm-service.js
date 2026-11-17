@@ -288,20 +288,32 @@ async function stopLocalLlmServer(forceProcessScan = false) {
         stoppedCount++;
       }
     } else {
-      const res = spawnSync('lsof', ['-ti', `:${port}`], {
+      const pidSet = new Set();
+      const lsofRes = spawnSync('lsof', [`-tiTCP:${port}`, '-sTCP:LISTEN'], {
         encoding: 'utf8',
       });
-      if (res.stdout) {
-        const pids = res.stdout
-          .split(/\r?\n/)
-          .map((s) => Number(s.trim()))
-          .filter((n) => n > 0 && n !== process.pid);
-        for (const pid of pids) {
-          try {
-            process.kill(pid, 'SIGTERM');
-            stoppedCount++;
-          } catch {}
+      if (lsofRes && lsofRes.stdout) {
+        for (const line of lsofRes.stdout.split(/\r?\n/)) {
+          const parsed = Number(line.trim());
+          if (parsed > 0 && parsed !== process.pid) pidSet.add(parsed);
         }
+      }
+      if (pidSet.size === 0) {
+        const ssRes = spawnSync('ss', ['-lptn', `sport = :${port}`], {
+          encoding: 'utf8',
+        });
+        if (ssRes && ssRes.stdout) {
+          for (const m of ssRes.stdout.matchAll(/pid=(\d+)/g)) {
+            const parsed = Number(m[1]);
+            if (parsed > 0 && parsed !== process.pid) pidSet.add(parsed);
+          }
+        }
+      }
+      for (const pid of pidSet) {
+        try {
+          process.kill(pid, 'SIGTERM');
+          stoppedCount++;
+        } catch {}
       }
     }
   } catch (err) {
