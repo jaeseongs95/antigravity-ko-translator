@@ -2,7 +2,7 @@
 
 > 🌐 **Language**: [English Documentation (README.md)](./README.md) | **한국어**
 
-Antigravity 2.0 데스크톱 앱과 **원격 제어(Remote Control) 웹·모바일 브라우저(`https://antigravity.google.com/r/...`)**에서 영어로 스트리밍되는 **Thinking(추론 과정) 본문**(사이드 질문 추론 및 브라우저 서브에이전트 실시간 추론 포함), **작업 단계 요약(`Worked for ...`)**, **앱 전체 정적 UI 메뉴·설정·위젯**을 실시간 한국어로 자동 전환하는 플러그인입니다 (`v1.2.37` / `v13.32`).
+Antigravity 2.0 데스크톱 앱과 **원격 제어(Remote Control) 웹·모바일 브라우저(`https://antigravity.google.com/r/...`)**에서 영어로 스트리밍되는 **Thinking(추론 과정) 본문**(사이드 질문 추론 및 브라우저 서브에이전트 실시간 추론 포함), **작업 단계 요약(`Worked for ...`)**, **앱 전체 정적 UI 메뉴·설정·위젯**을 실시간 한국어로 자동 전환하는 플러그인입니다 (`v1.2.38` / `v13.33`).
 
 ---
 
@@ -134,7 +134,7 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 ## 6. 모듈 구조 (SOLID Architecture)
 
 - **렌더러 계층 (`scripts/renderer/`)**:
-  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.31`), `remove-conversation-history: false`(`대화 기록` 메뉴) 자동 활성화, 네이티브 `verboseConversationSteps`(`대화 단계 표시: 기본값/상세히`) 설정 읽기 전용 조회, 비활성화 시 DOM 원본 복원, 세대(epoch) 가드 기반 번역 캐시(`memCache`/`localStorage`) 관리
+  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.33`), `remove-conversation-history: false`(`대화 기록` 메뉴) 자동 활성화, 네이티브 `verboseConversationSteps`(`대화 단계 표시: 기본값/상세히`) 설정 읽기 전용 조회, 비활성화 시 DOM 원본 복원, 세대(epoch) 가드 기반 번역 캐시(`memCache`/`localStorage`) 관리
   - `02-static-ui-dict.js`: 0ms 정적 UI 한국어 사전(`STATIC_UI_MAP`) 및 동기 패턴 매처
   - `03-text-tokenizer.js`: 코드(`⟦C0⟧`)·식별자/인용구(`⟦T0⟧`) 보호 토크나이저, 조사 교정, 마크다운 세그먼트 추출
   - `04-translation-adapters.js`: Port & Adapter 번역 엔진(`local-llm`, `google-translate`, 커스텀 어댑터) 및 동시성/취소 큐
@@ -145,9 +145,9 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 - **호스트 계층 (`scripts/host/` & `scripts/ensure_ko_thought_patch.js`)**:
   - `paths.js`: 호스트 경로, 배포 미러(`scripts/`, `dist/`, `plugins/`, `skills/`) 및 환경 상수
   - `ensure_statusbar_patch.js`: 단독 설치 환경을 위한 내장 `app.asar` 및 Live CDP 패처 폴백
-  - `local-llm-service.js`: 로컬 LLM 서버 기동·헬스체크·종료(프로세스 트리 정리) 어댑터
-  - `settings-storage.js`: `config.json` 정본(SSOT) 및 `app_storage.json` 원자적 동기화와 백그라운드 스토리지 감시 데몬
-  - `bundle-injector.js`: `scripts/renderer/*.js` 모듈 조립 및 `statusbar_autoinject.js` 번들(라인·블록 이중 마커 호환) 동기화
+  - `local-llm-service.js`: 로컬 LLM 서버 기동·동적 Origin 헬스체크 및 플러그인 직접 스폰 자식(`ko_thought_llm.pid` 정체성 토큰 검증) 한정 종료 어댑터
+  - `settings-storage.js`: `config.json` 정본(SSOT) 및 `app_storage.json` 원자적 동기화와 배타 파일 락 기반 백그라운드 스토리지 감시 데몬
+  - `bundle-injector.js`: `scripts/renderer/*.js` 순수 읽기 전용 조립, 명시적 `--sync-mirrors` 배포 미러 동기화 및 `statusbar_autoinject.js` 번들 동기화
   - `ensure_ko_thought_patch.js`: CLI / Hook 오케스트레이터 진입점
 
 ---

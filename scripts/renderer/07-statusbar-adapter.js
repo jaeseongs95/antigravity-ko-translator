@@ -14,7 +14,7 @@
 
   function formatStatusbarAdapterTitle() {
     const meta = getProviderDisplayMeta(activeTranslationProvider);
-    return `한글 번역 설정 (${KO_LOCALIZER_VERSION}) — 활성: ${meta.title}\n클릭: 한글 번역 계층 설정창 열기/닫기\nShift+클릭: 로컬 LLM ↔ Google 번역 빠른 전환`;
+    return `한글 번역 설정 (${KO_LOCALIZER_VERSION}) — 활성: ${meta.title}\n클릭: 한글 번역 계층 설정창 열기/닫기\nShift+클릭: 등록된 번역 어댑터 순환 전환`;
   }
 
   let disposeStatusbarAdapter = null;
@@ -30,7 +30,19 @@
       title: () => formatStatusbarAdapterTitle(),
       onClick(_ctx, event) {
         if (event && event.shiftKey) {
-          const nextProv = activeTranslationProvider === 'local-llm' ? 'google-translate' : 'local-llm';
+          const registeredIds =
+            typeof TRANSLATION_ADAPTERS !== 'undefined' && TRANSLATION_ADAPTERS
+              ? Object.keys(TRANSLATION_ADAPTERS)
+              : typeof window.__agyListTranslationProviders === 'function'
+              ? window.__agyListTranslationProviders()
+              : ['local-llm', 'google-translate'];
+          const curIdx = registeredIds.indexOf(activeTranslationProvider);
+          const nextProv =
+            registeredIds.length > 0
+              ? registeredIds[(curIdx + 1) % registeredIds.length]
+              : activeTranslationProvider === 'local-llm'
+              ? 'google-translate'
+              : 'local-llm';
           window.__agySetTranslationProvider(nextProv);
         } else {
           openOrToggleTranslatorSettingsModal();

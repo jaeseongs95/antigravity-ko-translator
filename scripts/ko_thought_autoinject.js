@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.37
+// @version      1.2.38
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -36,7 +36,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.32';
+  const KO_LOCALIZER_VERSION = 'v13.33';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -5314,7 +5314,7 @@
 
   function formatStatusbarAdapterTitle() {
     const meta = getProviderDisplayMeta(activeTranslationProvider);
-    return `한글 번역 설정 (${KO_LOCALIZER_VERSION}) — 활성: ${meta.title}\n클릭: 한글 번역 계층 설정창 열기/닫기\nShift+클릭: 로컬 LLM ↔ Google 번역 빠른 전환`;
+    return `한글 번역 설정 (${KO_LOCALIZER_VERSION}) — 활성: ${meta.title}\n클릭: 한글 번역 계층 설정창 열기/닫기\nShift+클릭: 등록된 번역 어댑터 순환 전환`;
   }
 
   let disposeStatusbarAdapter = null;
@@ -5330,7 +5330,19 @@
       title: () => formatStatusbarAdapterTitle(),
       onClick(_ctx, event) {
         if (event && event.shiftKey) {
-          const nextProv = activeTranslationProvider === 'local-llm' ? 'google-translate' : 'local-llm';
+          const registeredIds =
+            typeof TRANSLATION_ADAPTERS !== 'undefined' && TRANSLATION_ADAPTERS
+              ? Object.keys(TRANSLATION_ADAPTERS)
+              : typeof window.__agyListTranslationProviders === 'function'
+              ? window.__agyListTranslationProviders()
+              : ['local-llm', 'google-translate'];
+          const curIdx = registeredIds.indexOf(activeTranslationProvider);
+          const nextProv =
+            registeredIds.length > 0
+              ? registeredIds[(curIdx + 1) % registeredIds.length]
+              : activeTranslationProvider === 'local-llm'
+              ? 'google-translate'
+              : 'local-llm';
           window.__agySetTranslationProvider(nextProv);
         } else {
           openOrToggleTranslatorSettingsModal();
@@ -6671,21 +6683,47 @@
   }
   window.__agyRetranslateVisibleThoughts = retranslateVisibleThoughts;
 
+  function isTrustedRemoteScriptUrl(rawUrl) {
+    const str = String(rawUrl || '').trim();
+    if (!str) return false;
+    if (str.startsWith('blob:')) return true;
+    try {
+      const baseHref =
+        window.location && window.location.href && window.location.href !== 'about:blank'
+          ? window.location.href
+          : 'https://antigravity.google.com/';
+      const parsed = new URL(str, baseHref);
+      if (window.location && window.location.origin && window.location.origin !== 'null' && parsed.origin === window.location.origin) {
+        return true;
+      }
+      if (parsed.protocol !== 'https:') return false;
+      const host = parsed.hostname.toLowerCase();
+      return (
+        host === 'www.gstatic.com' ||
+        host === 'antigravity.google.com' ||
+        host.endsWith('.antigravity.google.com') ||
+        host === 'antigravity.static.usercontent.goog'
+      );
+    } catch (e) {
+      return false;
+    }
+  }
+
   function getTrustedPolicyForRemote() {
     if (window.__agyKoTrustedPolicy) return window.__agyKoTrustedPolicy;
     if (window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function') {
-      const names = [
-        'agy-ko-translator',
-        'agy-ko-translator-' + Date.now(),
-        'angular#unsafe-bypass',
-        'default',
-      ];
+      const names = ['agy-ko-translator', 'agy-ko-translator-rc'];
       for (const name of names) {
         try {
           const p = window.trustedTypes.createPolicy(name, {
-            createHTML: (s) => s,
-            createScript: (s) => s,
-            createScriptURL: (s) => s,
+            createScript: (s) => String(s),
+            createScriptURL: (u) => {
+              const s = String(u || '');
+              if (!isTrustedRemoteScriptUrl(s)) {
+                throw new TypeError(`Blocked untrusted script URL in ${name}: ${s}`);
+              }
+              return s;
+            },
           });
           window.__agyKoTrustedPolicy = p;
           return p;
@@ -7521,18 +7559,60 @@
         if (!cw || !cd) return;
 
         const nonce = document.querySelector('script[nonce]')?.nonce || '';
-        const nonceAttr = nonce ? ` nonce="${nonce}"` : '';
         const ttPolicy = getTrustedPolicyForRemote();
-        const shellHtml =
-          `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">` +
-          `<link rel="stylesheet" href="${cdnBaseUrl}/jetbox.css"${nonceAttr}>` +
-          `<link rel="stylesheet" href="${cdnBaseUrl}/compiled_tailwind.css"${nonceAttr}>` +
-          `<style>html,body,#root{height:100%;height:100dvh;max-height:100dvh;margin:0;overflow:hidden;background-color:transparent;overscroll-behavior:none;-webkit-text-size-adjust:100%;}</style>` +
-          `</head><body><div id="root"></div></body></html>`;
+        const safeCdnBase = /^https:\/\/[a-z0-9.-]+(?::\d+)?(?:\/[^\s"'<>]*)?$/i.test(cdnBaseUrl)
+          ? cdnBaseUrl
+          : '';
+        if (!safeCdnBase) return;
 
-        cd.open();
-        cd.write(ttPolicy ? ttPolicy.createHTML(shellHtml) : shellHtml);
-        cd.close();
+        if (cd.documentElement && typeof cd.documentElement.setAttribute === 'function') {
+          cd.documentElement.setAttribute('lang', 'en');
+        }
+        const ensureSection = (propName, tagName) => {
+          if (cd[propName]) return cd[propName];
+          const sec = cd.createElement(tagName);
+          if (cd.documentElement && typeof cd.documentElement.appendChild === 'function') {
+            cd.documentElement.appendChild(sec);
+          }
+          return sec;
+        };
+        const headEl = ensureSection('head', 'head');
+        const bodyEl = ensureSection('body', 'body');
+        headEl.textContent = '';
+        bodyEl.textContent = '';
+
+        const metaCharset = cd.createElement('meta');
+        metaCharset.setAttribute('charset', 'UTF-8');
+        headEl.appendChild(metaCharset);
+
+        const metaViewport = cd.createElement('meta');
+        metaViewport.setAttribute('name', 'viewport');
+        metaViewport.setAttribute(
+          'content',
+          'width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover'
+        );
+        headEl.appendChild(metaViewport);
+
+        for (const cssFile of ['jetbox.css', 'compiled_tailwind.css']) {
+          const linkEl = cd.createElement('link');
+          linkEl.rel = 'stylesheet';
+          linkEl.setAttribute('rel', 'stylesheet');
+          linkEl.href = `${safeCdnBase}/${cssFile}`;
+          linkEl.setAttribute('href', `${safeCdnBase}/${cssFile}`);
+          if (nonce) linkEl.nonce = nonce;
+          headEl.appendChild(linkEl);
+        }
+
+        const shellStyle = cd.createElement('style');
+        if (nonce) shellStyle.nonce = nonce;
+        shellStyle.textContent =
+          'html,body,#root{height:100%;height:100dvh;max-height:100dvh;margin:0;overflow:hidden;background-color:transparent;overscroll-behavior:none;-webkit-text-size-adjust:100%;}';
+        headEl.appendChild(shellStyle);
+
+        const rootDiv = cd.createElement('div');
+        rootDiv.id = 'root';
+        rootDiv.setAttribute('id', 'root');
+        bodyEl.appendChild(rootDiv);
 
         try {
           const prevDec = cw.__JETSKI_LS_CLIENT_DECORATOR__;
@@ -7683,7 +7763,28 @@
                       type: 'application/javascript',
                     });
                     const blobUrl = cw.URL.createObjectURL(blob);
-                    return new OrigWorker(ttPolicy ? ttPolicy.createScriptURL(blobUrl) : blobUrl, options);
+                    let revoked = false;
+                    const revokeBlobUrl = () => {
+                      if (revoked) return;
+                      revoked = true;
+                      try {
+                        if (cw.URL && typeof cw.URL.revokeObjectURL === 'function') {
+                          cw.URL.revokeObjectURL(blobUrl);
+                        }
+                      } catch (e) {}
+                    };
+                    try {
+                      const worker = new OrigWorker(ttPolicy ? ttPolicy.createScriptURL(blobUrl) : blobUrl, options);
+                      if (worker && typeof worker.addEventListener === 'function') {
+                        worker.addEventListener('error', revokeBlobUrl, { once: true });
+                      }
+                      const sched = typeof cw.setTimeout === 'function' ? cw.setTimeout.bind(cw) : setTimeout;
+                      sched(revokeBlobUrl, 1500);
+                      return worker;
+                    } catch (workerErr) {
+                      revokeBlobUrl();
+                      throw workerErr;
+                    }
                   }
                 } catch (e) {}
               }

@@ -27,10 +27,10 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.32';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.33';"));
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugin.json'), 'utf8'));
-  assert.equal(pkgJson.version, '1.2.37');
+  assert.equal(pkgJson.version, '1.2.38');
   assert.equal(pluginJson.version, pkgJson.version, 'D-0019: plugin.json version must stay synchronized with package.json');
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
@@ -993,7 +993,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.32',
+      __agyKoLocalizerActive: 'v13.33',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1590,8 +1590,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 14. D-0013~D-0019 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, .no-animations Web Animations suppression, 16ms FOUC elimination, worked-for latest turn guard, retranslateVisibleThoughts parent propagation, queued messages card & new strings, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.32') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.32 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v13.33') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.33 and must NOT claim verboseConversationSteps: true is force-enabled'
   );
   const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
   assert.ok(
@@ -2043,8 +2043,8 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
   const readmeKo = fs.readFileSync(readmeKoPath, 'utf8');
   assert.ok(readmeEn.includes('[한국어 문서 (README.ko.md)](./README.ko.md)'), 'D-0022: English README.md must link to README.ko.md at the top');
   assert.ok(readmeKo.includes('[English Documentation (README.md)](./README.md)'), 'D-0022: Korean README.ko.md must link to README.md at the top');
-  assert.ok(readmeEn.includes('v1.2.37') && readmeEn.includes('v13.32'), 'D-0022: README.md must reflect v1.2.37 / v13.32');
-  assert.ok(readmeKo.includes('v1.2.37') && readmeKo.includes('v13.32'), 'D-0022: README.ko.md must reflect v1.2.37 / v13.32');
+  assert.ok(readmeEn.includes('v1.2.38') && readmeEn.includes('v13.33'), 'D-0022: README.md must reflect v1.2.38 / v13.33');
+  assert.ok(readmeKo.includes('v1.2.38') && readmeKo.includes('v13.33'), 'D-0022: README.ko.md must reflect v1.2.38 / v13.33');
 
   // D-0023: Verify segment.isLatest:false overrides isLastContainer:true on Lhc fiber so historical execution segments inside the latest turn container are NEVER force-expanded on session switch
   const activeHelperMatch = mod08.match(
@@ -2582,10 +2582,10 @@ test('D-0024..D-0031 comprehensive audit regressions (v1.2.35 / v13.30 & Antigra
   );
 });
 
-test('D-0032: custom translation adapter IDs survive host sync, serialize safely in bundle-injector, and render provider-neutral status copy', () => {
+test('D-0032: custom translation adapter IDs survive host sync & Shift+click cycle, render in UI, and enforce Remote Control TrustedTypes/DOM/Worker security', async () => {
   const os = require('node:os');
   const settingsStorage = require(path.join(HOST_DIR, 'settings-storage.js'));
-  const { buildRuntimeConfiguredBundle } = require(BUNDLE_INJECTOR_PATH);
+  const { buildRuntimeConfiguredBundle, assembleRendererSourceFromModules } = require(BUNDLE_INJECTOR_PATH);
 
   assert.equal(
     settingsStorage.normalizeProviderName('DeepL-Pro'),
@@ -2601,6 +2601,21 @@ test('D-0032: custom translation adapter IDs survive host sync, serialize safely
     settingsStorage.normalizeProviderName("bad'quote"),
     null,
     'D-0032: normalizeProviderName must reject unsafe characters'
+  );
+  assert.equal(
+    settingsStorage.normalizeProviderName('bad:colon'),
+    null,
+    'D-0032: normalizeProviderName must reject colon characters so PID:signature delimiter cannot be polluted'
+  );
+  assert.equal(
+    settingsStorage.parseProviderCliArg(['--provider=foo=bar']),
+    null,
+    'D-0032: parseProviderCliArg must preserve full RHS after first = and reject invalid multi-= slugs instead of truncating to foo'
+  );
+  assert.equal(
+    settingsStorage.parsePretranslateCliArg(['--pretranslate=on=extra']),
+    null,
+    'D-0032: parsePretranslateCliArg must preserve full RHS after first = and reject invalid values'
   );
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-d0032-'));
@@ -2639,10 +2654,357 @@ test('D-0032: custom translation adapter IDs survive host sync, serialize safely
     'D-0032: buildRuntimeConfiguredBundle must embed custom provider ID cleanly'
   );
 
-  const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
+  // Runtime execution of assembled bundle for:
+  // (a) custom adapter Shift+click full rotation in 07-statusbar-adapter.js
+  // (b) actual DOM rendering of custom adapter active status in 06-settings-modal-ui.js
+  // (c) scoped TrustedTypes policy & createScriptURL allowlist, zero cd.write in onBlankLoad, and Worker Blob URL revocation in 08-dom-observer.js
+  const bundleCode = assembleRendererSourceFromModules();
+  const makeMockNode = (tag) => {
+    const attrs = new Map();
+    const listeners = new Map();
+    const node = {
+      nodeType: 1,
+      tagName: String(tag || 'DIV').toUpperCase(),
+      id: '',
+      className: '',
+      nonce: '',
+      rel: '',
+      href: '',
+      src: '',
+      type: '',
+      async: true,
+      style: {},
+      children: [],
+      childNodes: [],
+      parentNode: null,
+      parentElement: null,
+      _text: '',
+      get textContent() {
+        if (this.children.length === 0) return this._text;
+        return this._text + this.children.map((c) => c.textContent || '').join('');
+      },
+      set textContent(v) {
+        this._text = String(v ?? '');
+        this.children = [];
+        this.childNodes = [];
+      },
+      classList: {
+        _set: new Set(),
+        add(...cls) { cls.forEach((c) => this._set.add(c)); },
+        remove(...cls) { cls.forEach((c) => this._set.delete(c)); },
+        contains(c) { return this._set.has(c); },
+      },
+      setAttribute(k, v) {
+        attrs.set(k, String(v));
+        if (k === 'id') this.id = String(v);
+      },
+      getAttribute(k) {
+        return attrs.has(k) ? attrs.get(k) : null;
+      },
+      removeAttribute(k) {
+        attrs.delete(k);
+      },
+      appendChild(child) {
+        if (child && typeof child === 'object') {
+          child.parentNode = this;
+          child.parentElement = this;
+          this.children.push(child);
+          this.childNodes.push(child);
+        }
+        return child;
+      },
+      replaceChildren(...nodes) {
+        this.children = [];
+        this.childNodes = [];
+        this._text = '';
+        for (const n of nodes) this.appendChild(n);
+      },
+      addEventListener(ev, fn) {
+        if (!listeners.has(ev)) listeners.set(ev, []);
+        listeners.get(ev).push(fn);
+      },
+      removeEventListener(ev, fn) {
+        if (!listeners.has(ev)) return;
+        listeners.set(ev, listeners.get(ev).filter((f) => f !== fn));
+      },
+      dispatch(evName, payload = {}) {
+        for (const fn of listeners.get(evName) || []) fn(payload);
+      },
+      querySelector(sel) {
+        if (sel === 'iframe') return this.children.find((c) => c.tagName === 'IFRAME') || null;
+        return null;
+      },
+      querySelectorAll() {
+        return [];
+      },
+    };
+    return node;
+  };
+
+  let registeredStatusbarAdapter = null;
+  const createdPolicyNames = [];
+  let createdPolicySpec = null;
+  let cdWriteCalls = 0;
+  const revokedBlobUrls = [];
+  const cwTimers = [];
+
+  const iframeHead = makeMockNode('HEAD');
+  const iframeBody = makeMockNode('BODY');
+  const iframeDocEl = makeMockNode('HTML');
+  iframeDocEl.appendChild(iframeHead);
+  iframeDocEl.appendChild(iframeBody);
+
+  const findById = (root, id) => {
+    if (root.id === id) return root;
+    for (const ch of root.children || []) {
+      const hit = findById(ch, id);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  const iframeDoc = {
+    readyState: 'complete',
+    documentElement: iframeDocEl,
+    head: iframeHead,
+    body: iframeBody,
+    open() {},
+    write() {
+      cdWriteCalls++;
+    },
+    close() {},
+    createElement: (t) => makeMockNode(t),
+    getElementById: (id) => findById(iframeDocEl, id),
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+
+  class MockOrigWorker {
+    constructor(url, opts) {
+      this.url = String(url);
+      this.opts = opts;
+      this._errHandlers = [];
+    }
+    addEventListener(ev, fn) {
+      if (ev === 'error') this._errHandlers.push(fn);
+    }
+  }
+
+  const iframeWin = {
+    location: { origin: 'null', href: 'about:blank' },
+    document: iframeDoc,
+    Blob: class {
+      constructor(parts, opts) {
+        this.parts = parts;
+        this.opts = opts;
+      }
+    },
+    URL: {
+      createObjectURL: () => 'blob:https://antigravity.google.com/worker-blob-1',
+      revokeObjectURL: (u) => revokedBlobUrls.push(String(u)),
+    },
+    Worker: MockOrigWorker,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    setTimeout: (fn, ms) => {
+      cwTimers.push({ fn, ms });
+      return cwTimers.length;
+    },
+    clearTimeout: () => {},
+  };
+
+  const mockIframe = makeMockNode('IFRAME');
+  mockIframe.src = 'https://antigravity.static.usercontent.goog/antigravity/web/2.32.1/?iframe=true';
+  mockIframe.setAttribute('src', mockIframe.src);
+  mockIframe.contentWindow = iframeWin;
+  mockIframe.contentDocument = iframeDoc;
+
+  const mockRcEl = makeMockNode('GA-REMOTE-CONTROL');
+  mockRcEl.appendChild(mockIframe);
+
+  let openSettingsModalContainer = null;
+  const hostHead = makeMockNode('HEAD');
+  const hostBody = {
+    ...makeMockNode('BODY'),
+    appendChild(child) {
+      if (child && child.id === 'agy-ko-translator-modal') {
+        openSettingsModalContainer = child;
+      }
+      this.children.push(child);
+      this.childNodes.push(child);
+      return child;
+    },
+  };
+
+  const hostDoc = {
+    body: hostBody,
+    head: hostHead,
+    documentElement: makeMockNode('HTML'),
+    getElementById: (id) => (id === 'agy-ko-translator-modal' ? openSettingsModalContainer : null),
+    querySelector: (sel) => {
+      if (sel === 'script[nonce]') return { nonce: 'csp-nonce-xyz' };
+      if (sel === 'ga-remote-control') return mockRcEl;
+      return null;
+    },
+    querySelectorAll: () => [],
+    createElement: (t) => makeMockNode(t),
+    createTreeWalker: () => ({ nextNode: () => null }),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+
+  const memStore = new Map();
+  const hostWin = {
+    document: hostDoc,
+    location: {
+      hostname: 'antigravity.google.com',
+      origin: 'https://antigravity.google.com',
+      href: 'https://antigravity.google.com/',
+      search: '',
+      protocol: 'https:',
+    },
+    localStorage: {
+      getItem: (k) => (memStore.has(k) ? memStore.get(k) : null),
+      setItem: (k, v) => memStore.set(k, String(v)),
+      removeItem: (k) => memStore.delete(k),
+    },
+    agyStatusBar: {
+      registerAdapter(adapter) {
+        registeredStatusbarAdapter = adapter;
+        return () => {};
+      },
+      updateAll() {},
+    },
+    __agyRemoteControlInstance: {
+      destroyed: false,
+      iframeSrc: () => mockIframe.src,
+      onIframeLoad: () => Promise.resolve(),
+      proxyCommand: () => {},
+    },
+    trustedTypes: {
+      createPolicy(name, spec) {
+        createdPolicyNames.push(name);
+        createdPolicySpec = spec;
+        return {
+          name,
+          ...(spec.createHTML ? { createHTML: spec.createHTML } : {}),
+          ...(spec.createScript ? { createScript: spec.createScript } : {}),
+          ...(spec.createScriptURL ? { createScriptURL: spec.createScriptURL } : {}),
+        };
+      },
+    },
+    MutationObserver: class {
+      observe() {}
+      disconnect() {}
+      takeRecords() { return []; }
+    },
+    Node: { TEXT_NODE: 3, ELEMENT_NODE: 1, DOCUMENT_POSITION_FOLLOWING: 4 },
+    NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3 },
+    URL,
+    URLSearchParams,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    setTimeout: (fn) => {
+      if (typeof fn === 'function' && String(fn).includes('triggerBlankLoadOnce')) fn();
+      return 1;
+    },
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+  };
+
+  vm.runInNewContext(bundleCode, {
+    window: hostWin,
+    document: hostDoc,
+    URL,
+    URLSearchParams,
+    setTimeout: hostWin.setTimeout,
+    clearTimeout: hostWin.clearTimeout,
+    setInterval: hostWin.setInterval,
+    clearInterval: hostWin.clearInterval,
+  });
+
+  // Register custom adapter 'deepl-pro' and verify Shift+Click cycles across ALL registered providers
+  hostWin.__agyRegisterTranslationAdapter('deepl-pro', {
+    label: 'DeepL Pro',
+    maxConcurrency: 2,
+    translate: async () => '번역됨',
+  });
+  hostWin.__agySetTranslationProvider('deepl-pro', { retranslate: false });
+  assert.ok(registeredStatusbarAdapter, 'D-0032: statusbar adapter must register with window.agyStatusBar');
+
+  const visitedProviders = [];
+  for (let i = 0; i < 3; i++) {
+    registeredStatusbarAdapter.onClick({}, { shiftKey: true });
+    visitedProviders.push(hostWin.__agyGetTranslationProvider());
+  }
   assert.ok(
-    !mod06.includes("'○ 로컬 LLM 서버 자동 종료됨 (Google 번역 사용 중 — 메모리/GPU 반환)'"),
-    'D-0032: 06-settings-modal-ui.js must not hardcode "Google 번역 사용 중" when a custom non-LLM adapter is active'
+    visitedProviders.includes('local-llm') &&
+      visitedProviders.includes('google-translate') &&
+      visitedProviders.includes('deepl-pro'),
+    `D-0032: Shift+Click must cycle across all registered adapters including custom deepl-pro, saw: ${visitedProviders.join(' -> ')}`
+  );
+  assert.equal(
+    visitedProviders[2],
+    'deepl-pro',
+    'D-0032: 3 Shift+Clicks over 3 registered adapters must return to deepl-pro instead of permanently dropping it'
+  );
+
+  // Open settings modal while deepl-pro is active and verify rendered DOM copy uses 'DeepL Pro 사용 중'
+  registeredStatusbarAdapter.onClick({}, { shiftKey: false });
+  assert.ok(openSettingsModalContainer, 'D-0032: normal click on statusbar adapter must mount settings modal');
+  assert.ok(
+    openSettingsModalContainer.textContent.includes('DeepL Pro 사용 중'),
+    `D-0032: rendered settings modal must display active custom adapter label "DeepL Pro 사용 중", got: ${openSettingsModalContainer.textContent}`
+  );
+
+  // Trigger about:blank load on Remote Control iframe to verify TrustedTypes, zero cd.write, and Worker Blob URL revocation
+  mockIframe.dispatch('load');
+  assert.ok(
+    !createdPolicyNames.includes('default') && !createdPolicyNames.includes('angular#unsafe-bypass'),
+    `D-0032: getTrustedPolicyForRemote must NEVER attempt global 'default' or 'angular#unsafe-bypass' policies, saw: ${createdPolicyNames.join(', ')}`
+  );
+  assert.ok(createdPolicySpec, 'D-0032: scoped TrustedTypes policy must be created on Remote Control host');
+  assert.equal(
+    createdPolicySpec.createHTML,
+    undefined,
+    'D-0032: TrustedTypes policy must not expose passthrough createHTML'
+  );
+  assert.equal(
+    createdPolicySpec.createScriptURL('https://www.gstatic.com/antigravity/web/2.32.1/main.js'),
+    'https://www.gstatic.com/antigravity/web/2.32.1/main.js'
+  );
+  assert.equal(
+    createdPolicySpec.createScriptURL('blob:https://antigravity.google.com/worker-blob-1'),
+    'blob:https://antigravity.google.com/worker-blob-1'
+  );
+  assert.throws(
+    () => createdPolicySpec.createScriptURL('javascript:alert(1)'),
+    { name: 'TypeError', message: /Blocked untrusted script URL/ },
+    'D-0032: createScriptURL must block javascript: URLs'
+  );
+  assert.throws(
+    () => createdPolicySpec.createScriptURL('https://evil.example/x.js'),
+    { name: 'TypeError', message: /Blocked untrusted script URL/ },
+    'D-0032: createScriptURL must block untrusted external script origins'
+  );
+
+  assert.equal(cdWriteCalls, 0, 'D-0032: onBlankLoad must construct shell via DOM APIs with 0 document.write calls');
+  assert.ok(iframeDoc.getElementById('root'), 'D-0032: DOM-constructed iframe shell must mount #root element');
+  const styleLinks = iframeHead.children.filter((n) => n.tagName === 'LINK');
+  assert.ok(
+    styleLinks.length >= 2 && styleLinks.every((l) => l.nonce === 'csp-nonce-xyz'),
+    'D-0032: DOM-constructed stylesheet links must preserve CSP nonce property'
+  );
+
+  const workerInst = new iframeWin.Worker('/diff_worker.js?v=2.32.1');
+  assert.equal(workerInst.url, 'blob:https://antigravity.google.com/worker-blob-1');
+  for (const t of cwTimers) {
+    if (typeof t.fn === 'function') t.fn();
+  }
+  assert.ok(
+    revokedBlobUrls.includes('blob:https://antigravity.google.com/worker-blob-1'),
+    'D-0032: PatchedWorker must revoke created Blob URL via URL.revokeObjectURL to prevent memory leaks'
   );
 });
 
@@ -2767,10 +3129,19 @@ test('D-0033: clearing cache or switching providers cancels saveCacheTimer, bloc
   );
 });
 
-test('D-0034: CDP live target filter skips data:/about:/devtools: pages and bundle survives localStorage SecurityError', () => {
+test('D-0029 & D-0034: bundled ensure_statusbar_patch.js lexical transform, NUL-padded ASAR, RFC6455 WS fallback, AND active check, atomic lock reclaim, host patcher auto-upgrade, and localStorage fallback', async () => {
+  const os = require('node:os');
+  const http = require('node:http');
+  const crypto = require('node:crypto');
   const statusbarPatcher = require(path.join(HOST_DIR, 'ensure_statusbar_patch.js'));
+  const entryPatcher = require(path.join(ROOT, 'scripts', 'ensure_ko_thought_patch.js'));
   const { assembleRendererSourceFromModules } = require(BUNDLE_INJECTOR_PATH);
 
+  assert.equal(
+    statusbarPatcher.PATCHER_CAPABILITY_REVISION,
+    'AGY_STATUSBAR_PATCHER_V5_R2',
+    'D-0029/D-0034: ensure_statusbar_patch.js must export PATCHER_CAPABILITY_REVISION = AGY_STATUSBAR_PATCHER_V5_R2'
+  );
   assert.equal(
     typeof statusbarPatcher.isInjectablePageTarget,
     'function',
@@ -2801,6 +3172,200 @@ test('D-0034: CDP live target filter skips data:/about:/devtools: pages and bund
     }),
     false
   );
+
+  // 1. Lexical comment stripping inside transformExactSize preserves multiline template literal lines starting with //
+  const fakeMainSource = [
+    '// pure removable comment line 1 with plenty of padding characters to allow exact-size injection safely now',
+    '// pure removable comment line 2 with plenty of padding characters to allow exact-size injection safely now',
+    '// pure removable comment line 3 with plenty of padding characters to allow exact-size injection safely now',
+    '// pure removable comment line 4 with plenty of padding characters to allow exact-size injection safely now',
+    '// pure removable comment line 5 with plenty of padding characters to allow exact-size injection safely now',
+    '// pure removable comment line 6 with plenty of padding characters to allow exact-size injection safely now',
+    '// pure removable comment line 7 with plenty of padding characters to allow exact-size injection safely now',
+    '// pure removable comment line 8 with plenty of padding characters to allow exact-size injection safely now',
+    'const tpl = `line1',
+    '  // MUST_STAY_INSIDE_TEMPLATE_LITERAL',
+    'line3`;',
+    'this.mainWindow.webContents.on("did-finish-load", () => {});',
+  ].join('\n');
+  const transformedBuf = statusbarPatcher.transformExactSize(Buffer.from(fakeMainSource, 'utf8'));
+  assert.equal(transformedBuf.length, Buffer.byteLength(fakeMainSource, 'utf8'), 'D-0029: transformExactSize must preserve exact byte size');
+  assert.ok(
+    transformedBuf.toString('utf8').includes('  // MUST_STAY_INSIDE_TEMPLATE_LITERAL'),
+    'D-0029: transformExactSize must preserve // lines inside multiline template literals'
+  );
+
+  const tmpPatchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-d0029-'));
+  try {
+    // 2. 4-byte aligned NUL-padded ASAR header parsing in isAsarPatchedFast & readAsarArchive
+    const payloadBuf = Buffer.from(`${statusbarPatcher.PATCH_MARKER}\nconsole.log("ok");\n`, 'utf8');
+    const headerObj = {
+      files: {
+        out: {
+          files: {
+            'main.js': {
+              offset: '0',
+              size: payloadBuf.length,
+            },
+          },
+        },
+      },
+    };
+    let headerJsonBuf = Buffer.from(JSON.stringify(headerObj), 'utf8');
+    // Force 3 trailing NUL bytes so naive JSON.parse(rawString) throws SyntaxError unless .replace(/\0+$/, '') is applied
+    const padRemainder = (4 - ((headerJsonBuf.length) % 4)) % 4 || 4;
+    const paddedJsonBuf = Buffer.concat([headerJsonBuf, Buffer.alloc(padRemainder, 0)]);
+    const pickleHeader = Buffer.alloc(16);
+    pickleHeader.writeUInt32LE(4, 0);
+    pickleHeader.writeUInt32LE(paddedJsonBuf.length + 8, 4);
+    pickleHeader.writeUInt32LE(paddedJsonBuf.length + 4, 8);
+    pickleHeader.writeUInt32LE(paddedJsonBuf.length, 12);
+    const asarFile = path.join(tmpPatchDir, 'app.asar');
+    fs.writeFileSync(asarFile, Buffer.concat([pickleHeader, paddedJsonBuf, payloadBuf]));
+
+    assert.equal(
+      statusbarPatcher.isAsarPatchedFast(asarFile),
+      true,
+      'D-0029: isAsarPatchedFast must parse NUL-padded 4-byte aligned ASAR headers without SyntaxError'
+    );
+    const parsedArchive = statusbarPatcher.readAsarArchive(asarFile);
+    assert.equal(parsedArchive.header.files.out.files['main.js'].size, payloadBuf.length);
+
+    // 3. Built-in RFC6455 WebSocket fallback when globalThis.WebSocket is absent + Ping->Pong echo + exceptionDetails rejection
+    let sawPongPayload = null;
+    let mockEvalMode = 'ok';
+    const wsServer = http.createServer();
+    wsServer.on('upgrade', (req, socket) => {
+      const accept = crypto
+        .createHash('sha1')
+        .update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+        .digest('base64');
+      socket.write(
+        'HTTP/1.1 101 Switching Protocols\r\n' +
+          'Upgrade: websocket\r\n' +
+          'Connection: Upgrade\r\n' +
+          `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
+      );
+      // Immediately send RFC6455 Ping frame with payload 'hb'
+      const pingPayload = Buffer.from('hb', 'utf8');
+      socket.write(Buffer.concat([Buffer.from([0x89, pingPayload.length]), pingPayload]));
+
+      let recvBuf = Buffer.alloc(0);
+      socket.on('data', (chunk) => {
+        recvBuf = Buffer.concat([recvBuf, chunk]);
+        while (recvBuf.length >= 2) {
+          const opcode = recvBuf[0] & 0x0f;
+          const masked = (recvBuf[1] & 0x80) !== 0;
+          let len = recvBuf[1] & 0x7f;
+          let offset = 2;
+          if (len === 126) {
+            if (recvBuf.length < 4) return;
+            len = recvBuf.readUInt16BE(2);
+            offset = 4;
+          }
+          const maskBytes = masked ? 4 : 0;
+          if (recvBuf.length < offset + maskBytes + len) return;
+          const payload = Buffer.from(recvBuf.subarray(offset + maskBytes, offset + maskBytes + len));
+          if (masked) {
+            const mask = recvBuf.subarray(offset, offset + 4);
+            for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
+          }
+          recvBuf = recvBuf.subarray(offset + maskBytes + len);
+
+          if (opcode === 0x0a) {
+            sawPongPayload = payload.toString('utf8');
+          } else if (opcode === 0x01) {
+            const msg = JSON.parse(payload.toString('utf8'));
+            const replyObj =
+              mockEvalMode === 'exception'
+                ? { id: msg.id, result: { exceptionDetails: { text: 'Uncaught EvalError' } } }
+                : { id: msg.id, result: { result: { value: 'INJECTED_OK' } } };
+            const replyBuf = Buffer.from(JSON.stringify(replyObj), 'utf8');
+            const hdr =
+              replyBuf.length < 126
+                ? Buffer.from([0x81, replyBuf.length])
+                : Buffer.from([0x81, 126, (replyBuf.length >> 8) & 0xff, replyBuf.length & 0xff]);
+            socket.write(Buffer.concat([hdr, replyBuf]));
+          } else if (opcode === 0x08) {
+            socket.end();
+          }
+        }
+      });
+    });
+    await new Promise((r) => wsServer.listen(0, '127.0.0.1', r));
+    const wsPort = wsServer.address().port;
+    const savedGlobalWs = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
+    try {
+      Object.defineProperty(globalThis, 'WebSocket', { value: undefined, configurable: true, writable: true });
+      const okRes = await statusbarPatcher.injectViaBrowserCdpWs(
+        `ws://127.0.0.1:${wsPort}/devtools/page/1`,
+        '"INJECTED_OK"'
+      );
+      assert.equal(okRes, 'INJECTED_OK', 'D-0029: RFC6455 fallback WebSocket must evaluate and return INJECTED_OK without global WebSocket');
+      assert.equal(sawPongPayload, 'hb', 'D-0029: RFC6455 fallback WebSocket must echo Ping payload in Pong frame');
+
+      mockEvalMode = 'exception';
+      await assert.rejects(
+        () => statusbarPatcher.injectViaBrowserCdpWs(`ws://127.0.0.1:${wsPort}/devtools/page/1`, 'throw new Error("boom")'),
+        /exception|Uncaught EvalError/i,
+        'D-0029: injectViaBrowserCdpWs must reject when Runtime.evaluate returns result.exceptionDetails'
+      );
+    } finally {
+      if (savedGlobalWs) Object.defineProperty(globalThis, 'WebSocket', savedGlobalWs);
+      await new Promise((r) => wsServer.close(r));
+    }
+
+    // 4. Conjunction (&&) active check in buildImmediateEvalExpression when statusbar is active but ko-localizer is missing/outdated
+    const sampleCombinedBundle = [
+      'window.__agyStatusBarActive = true;',
+      "const KO_LOCALIZER_VERSION = 'v13.33';",
+      'window.__agyKoLocalizerActive = KO_LOCALIZER_VERSION;',
+      'window.__agyKoThoughtCleanup = function() {};',
+      'globalThis.__reinjectedCount = (globalThis.__reinjectedCount || 0) + 1;',
+    ].join('\n');
+    const evalExpr = statusbarPatcher.buildImmediateEvalExpression(sampleCombinedBundle, 'hash123');
+    const partialWindow = {
+      __agyStatusBarActive: true,
+      document: { querySelector: () => ({ id: 'agy-ctx-statusbar' }) },
+    };
+    const partialOutcome = vm.runInNewContext(evalExpr, { window: partialWindow });
+    assert.equal(
+      partialOutcome,
+      'INJECTED_OK',
+      'D-0029/D-0034: buildImmediateEvalExpression must NOT return ALREADY_ACTIVE when statusbar is mounted but __agyKoLocalizerActive is missing'
+    );
+    const fullWindow = {
+      __agyStatusBarActive: true,
+      __agyKoLocalizerActive: 'v13.33',
+      __agyKoThoughtCleanup: () => {},
+      document: { querySelector: () => ({ id: 'agy-ctx-statusbar' }) },
+    };
+    const fullOutcome = vm.runInNewContext(evalExpr, { window: fullWindow });
+    assert.equal(
+      fullOutcome,
+      'ALREADY_ACTIVE',
+      'D-0029/D-0034: buildImmediateEvalExpression must return ALREADY_ACTIVE only when all bundled plugins and exact KO_LOCALIZER_VERSION match'
+    );
+
+    // 5. Atomic stale lock reclaim & token-verified releaseLock + host ensure_statusbar_patch.js auto-upgrade
+    const testLockPath = path.join(tmpPatchDir, 'statusbar_patch.lock');
+    fs.writeFileSync(testLockPath, JSON.stringify({ pid: 99999999, ts: Date.now() - 120000, token: 'dead-token' }), 'utf8');
+    assert.equal(statusbarPatcher.acquireLock(testLockPath, 1000), true, 'D-0029: acquireLock must atomically reclaim dead/stale lock');
+    assert.equal(statusbarPatcher.acquireLock(testLockPath, 60000), false, 'D-0029: live held lock must block concurrent acquireLock');
+    statusbarPatcher.releaseLock(testLockPath);
+    assert.equal(fs.existsSync(testLockPath), false, 'D-0029: releaseLock must clean up owned lock file');
+
+    const staleHostPatcherPath = path.join(tmpPatchDir, 'ensure_statusbar_patch.js');
+    fs.writeFileSync(staleHostPatcherPath, '// outdated host patcher without capability revision\nmodule.exports = {};\n', 'utf8');
+    const upgraded = entryPatcher.ensureHostStatusbarPatcherInstalled(staleHostPatcherPath);
+    assert.equal(upgraded, true, 'D-0034: ensureHostStatusbarPatcherInstalled must overwrite outdated host patcher');
+    assert.ok(
+      fs.readFileSync(staleHostPatcherPath, 'utf8').includes('AGY_STATUSBAR_PATCHER_V5_R2'),
+      'D-0034: upgraded host ensure_statusbar_patch.js must contain latest PATCHER_CAPABILITY_REVISION'
+    );
+  } finally {
+    fs.rmSync(tmpPatchDir, { recursive: true, force: true });
+  }
 
   const bundleCode = assembleRendererSourceFromModules();
   const restrictedDoc = {
@@ -2944,6 +3509,54 @@ test('D-0035: Antigravity v2.32.1 Side Question body protection, Side Question &
   assert.ok(
     mod08.includes('side-question-answer'),
     'D-0035: Side Question answer markdown body must be protected while its g1 thinking blocks are translated'
+  );
+
+  // Runtime execution proof for guardSessionSwitchTransitions on side-question-tab-conversation
+  const guardMatch = mod08.match(
+    /function guardSessionSwitchTransitions\(\)\s*\{[\s\S]*?\n  \}\r?\n\r?\n  function /
+  );
+  assert.ok(guardMatch, 'D-0035: guardSessionSwitchTransitions must exist in 08-dom-observer.js');
+  const guardFnSrc = guardMatch[0].replace(/\r?\n\r?\n  function $/, '');
+  const sqAttrs = new Map([
+    ['data-testid', 'side-question-tab-conversation'],
+    ['data-cascade-id', 'cascade-sq-1'],
+  ]);
+  const sqClassSet = new Set();
+  const sqConvView = {
+    classList: {
+      contains: (c) => sqClassSet.has(c),
+      add: (c) => sqClassSet.add(c),
+      remove: (c) => sqClassSet.delete(c),
+    },
+    getAttribute: (k) => (sqAttrs.has(k) ? sqAttrs.get(k) : null),
+    setAttribute: (k, v) => sqAttrs.set(k, String(v)),
+    removeAttribute: (k) => sqAttrs.delete(k),
+    querySelector: () => ({ tagName: 'DIV' }),
+  };
+  const guardSandbox = {
+    lastObservedCascadeId: 'cascade-main-1',
+    sessionSwitchFreezeTimer: null,
+    sessionSwitchFreezeUntil: 0,
+    Date,
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    document: {
+      querySelectorAll: () => [sqConvView],
+      querySelector: () => sqConvView,
+    },
+  };
+  vm.runInNewContext(`${guardFnSrc}\n;guardSessionSwitchTransitions();`, guardSandbox);
+  sqAttrs.set('data-cascade-id', 'cascade-sq-2');
+  vm.runInNewContext('guardSessionSwitchTransitions();', guardSandbox);
+  assert.equal(
+    sqConvView.getAttribute('data-agy-session-switching'),
+    '1',
+    'D-0035: switching data-cascade-id on side-question-tab-conversation must arm data-agy-session-switching="1"'
+  );
+  assert.equal(
+    sqClassSet.has('no-animations'),
+    true,
+    'D-0035: switching data-cascade-id on side-question-tab-conversation must add .no-animations class'
   );
 });
 
@@ -3090,7 +3703,7 @@ test('D-0037: local-llm-service resolves dynamic probe Origin instead of hardcod
   }
 });
 
-test('D-0038: GitHub Actions CI covers Gitflow branches and standard README/Release Notes templates exist and match docs', () => {
+test('D-0038: GitHub Actions CI covers Gitflow branches, assembleRendererSourceFromModules is pure (zero disk writes), and all 4 mirrors match byte-for-byte', () => {
   const ciYaml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
   for (const branchPattern of ['main', 'develop', 'fix/**', 'feature/**', 'release/**', 'hotfix/**']) {
     assert.ok(
@@ -3107,6 +3720,54 @@ test('D-0038: GitHub Actions CI covers Gitflow branches and standard README/Rele
   const readmeKo = fs.readFileSync(path.join(ROOT, 'README.ko.md'), 'utf8');
   assert.ok(readmeEn.includes('README.ko.md'), 'D-0038: English README.md must link to Korean README.ko.md');
   assert.ok(readmeKo.includes('README.md'), 'D-0038: Korean README.ko.md must link to English README.md');
+
+  const bundleInjector = require(BUNDLE_INJECTOR_PATH);
+  assert.equal(
+    typeof bundleInjector.syncDistributableMirrors,
+    'function',
+    'D-0038: bundle-injector.js must export explicit syncDistributableMirrors() helper'
+  );
+
+  // Verify assembleRendererSourceFromModules() performs ZERO disk writes / renames at runtime
+  let diskMutationCalls = 0;
+  const origWriteFileSync = fs.writeFileSync;
+  const origRenameSync = fs.renameSync;
+  fs.writeFileSync = function (...args) {
+    diskMutationCalls++;
+    return origWriteFileSync.apply(this, args);
+  };
+  fs.renameSync = function (...args) {
+    diskMutationCalls++;
+    return origRenameSync.apply(this, args);
+  };
+  let expectedBundle;
+  try {
+    expectedBundle = bundleInjector.assembleRendererSourceFromModules();
+  } finally {
+    fs.writeFileSync = origWriteFileSync;
+    fs.renameSync = origRenameSync;
+  }
+  assert.equal(
+    diskMutationCalls,
+    0,
+    'D-0038: assembleRendererSourceFromModules() must be a pure read-only assembler with 0 disk writes during hooks/tests'
+  );
+
+  const mirrorRelPaths = [
+    path.join('scripts', 'ko_thought_autoinject.js'),
+    path.join('dist', 'ko_thought_autoinject.js'),
+    path.join('plugins', 'ko-thought-translator', 'scripts', 'ko_thought_autoinject.js'),
+    path.join('skills', 'ko-thought-translator', 'scripts', 'ko_thought_inject.js'),
+  ];
+  for (const rel of mirrorRelPaths) {
+    const abs = path.join(ROOT, rel);
+    assert.ok(fs.existsSync(abs), `D-0038: distributable mirror must exist: ${rel}`);
+    assert.equal(
+      fs.readFileSync(abs, 'utf8'),
+      expectedBundle,
+      `D-0038: distributable mirror ${rel} must match assembleRendererSourceFromModules() byte-for-byte`
+    );
+  }
 });
 
 /**
@@ -3216,6 +3877,10 @@ test('D-0039 (KOTRANS-C1) & runtime verification suite: atomic watcher PID write
 
     // Wait up to 900ms (> 2 watcher ticks at 400ms) for displaced watcher #1 to fence & self-exit
     await Promise.race([fenceExitPromise, sleep(900)]);
+    const kernelReapDeadline = Date.now() + 300;
+    while (fenceChildExitCode !== null && isPidAlive(fencedWatcherChild.pid) && Date.now() < kernelReapDeadline) {
+      await sleep(15);
+    }
 
     const staleSideEffects = fs.existsSync(sideEffectLogPath)
       ? fs.readFileSync(sideEffectLogPath, 'utf8').trim()
@@ -3356,14 +4021,15 @@ test('D-0039 (KOTRANS-C1) & runtime verification suite: atomic watcher PID write
       'TC-RT-03: DOM <code> ending in consonant p(jong=1) must correct trailing text node 를 -> 을'
     );
 
-    // 5. Runtime Check 4 (TC-RT-04): Real child HTTP server `stopLocalLlmServer()` port-matched tree termination & port release
+    // 5. Runtime Check 4 (D-0028 & D-0037): External unowned LLM server survival vs plugin-owned child termination
     const llmScript = `
       const http = require('http');
+      const portArg = Number(process.env.TEST_LLM_PORT || 0);
       const srv = http.createServer((req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
         res.end(JSON.stringify({ data: [{ id: 'runtime-verify-model' }] }));
       });
-      srv.listen(0, '127.0.0.1', () => {
+      srv.listen(portArg, '127.0.0.1', () => {
         process.stdout.write('READY:' + srv.address().port + '\\n');
       });
       setInterval(() => {}, 1000);
@@ -3390,31 +4056,176 @@ test('D-0039 (KOTRANS-C1) & runtime verification suite: atomic watcher PID write
     });
 
     const prevLlmUrl = process.env.AGY_LOCAL_LLM_BASE_URL;
+    const prevLlmPidPath = process.env.AGY_KO_LLM_PID_PATH;
+    const isolatedLlmPidPath = path.join(agyDir, 'ko_thought_llm.pid');
+    let ownedSpawnPid = null;
     try {
       process.env.AGY_LOCAL_LLM_BASE_URL = `http://127.0.0.1:${ephemeralPort}`;
+      process.env.AGY_KO_LLM_PID_PATH = isolatedLlmPidPath;
       const pathsModPath = path.join(HOST_DIR, 'paths.js');
       const llmModPath = path.join(HOST_DIR, 'local-llm-service.js');
       delete require.cache[require.resolve(pathsModPath)];
       delete require.cache[require.resolve(llmModPath)];
       const freshLlm = require(llmModPath);
 
+      // (5a) External unowned server MUST NEVER be killed even with forceProcessScan=true
       const beforeStopProbe = await freshLlm.probeLocalLlmServer(400);
-      assert.equal(beforeStopProbe.reachable, true, 'TC-RT-04: real child HTTP server must be reachable before stopLocalLlmServer');
-      assert.equal(isPidAlive(llmServerChild.pid), true);
+      assert.equal(beforeStopProbe.reachable, true, 'D-0028: external LLM server fixture must be reachable');
+      const unownedStop1 = await freshLlm.stopLocalLlmServer(false);
+      const unownedStop2 = await freshLlm.stopLocalLlmServer(true);
+      assert.equal(unownedStop1.stoppedCount, 0, 'D-0028: stopLocalLlmServer(false) must NOT kill unowned external LLM server');
+      assert.equal(unownedStop2.stoppedCount, 0, 'D-0028: stopLocalLlmServer(true) must NOT port-scan kill unowned external LLM server');
+      assert.equal(isPidAlive(llmServerChild.pid), true, 'D-0028: external unowned LLM PID must remain alive');
 
-      const stopRes = await freshLlm.stopLocalLlmServer(false);
-      assert.ok(stopRes.stoppedCount >= 1, 'TC-RT-04: stopLocalLlmServer must terminate at least 1 listening process on the configured port');
+      // (5b) Forged/recycled PID file with mismatched identityToken MUST NOT kill external process
+      fs.writeFileSync(
+        isolatedLlmPidPath,
+        JSON.stringify({
+          pid: llmServerChild.pid,
+          port: ephemeralPort,
+          identityToken: 'forged-mismatched-identity-token',
+          spawnedAt: Date.now() - 5000,
+        }),
+        'utf8'
+      );
+      const mismatchStop = await freshLlm.stopLocalLlmServer(false);
+      assert.equal(mismatchStop.stoppedCount, 0, 'D-0028: mismatched identityToken must abort signal delivery');
+      assert.equal(isPidAlive(llmServerChild.pid), true, 'D-0028: process with mismatched identityToken must survive');
+      assert.equal(fs.existsSync(isolatedLlmPidPath), false, 'D-0028: stale mismatched LLM PID file must be cleaned up');
 
-      const stopWaitDeadline = Date.now() + 1500;
-      while (isPidAlive(llmServerChild.pid) && Date.now() < stopWaitDeadline) {
+      // Shut down external fixture so we can test plugin-owned spawn & termination on a fresh port
+      process.kill(llmServerChild.pid, 'SIGKILL');
+      const extExitDeadline = Date.now() + 1500;
+      while (isPidAlive(llmServerChild.pid) && Date.now() < extExitDeadline) {
         await sleep(25);
       }
-      assert.equal(isPidAlive(llmServerChild.pid), false, 'TC-RT-04: real child LLM server PID must be terminated');
-      const afterStopProbe = await freshLlm.probeLocalLlmServer(250);
-      assert.equal(afterStopProbe.reachable, false, 'TC-RT-04: port must no longer accept connections after stopLocalLlmServer');
+
+      // (5c) Plugin-owned server spawned via ensureLocalLlmServer(true) records identityToken and IS terminated cleanly
+      const freeProbeSrv = http.createServer();
+      await new Promise((r) => freeProbeSrv.listen(0, '127.0.0.1', r));
+      const ownedPort = freeProbeSrv.address().port;
+      await new Promise((r) => freeProbeSrv.close(r));
+
+      const ownedServerFile = path.join(tmpRoot, 'owned_llm_server.js');
+      fs.writeFileSync(
+        ownedServerFile,
+        `const http = require('http'); const srv = http.createServer((req, res) => { res.writeHead(200, {'Content-Type':'application/json'}); res.end(JSON.stringify({data:[{id:'owned-model'}]})); }); srv.listen(${ownedPort}, '127.0.0.1'); setInterval(() => {}, 1000);\n`,
+        'utf8'
+      );
+
+      const prevBin = process.env.AGY_LOCAL_LLM_SERVER_BIN;
+      const prevArgs = process.env.AGY_LOCAL_LLM_SERVER_ARGS;
+      process.env.AGY_LOCAL_LLM_BASE_URL = `http://127.0.0.1:${ownedPort}`;
+      process.env.AGY_LOCAL_LLM_SERVER_BIN = process.execPath;
+      process.env.AGY_LOCAL_LLM_SERVER_ARGS = ownedServerFile;
+      delete require.cache[require.resolve(pathsModPath)];
+      delete require.cache[require.resolve(llmModPath)];
+      const ownedLlm = require(llmModPath);
+      try {
+        const ensureRes = await ownedLlm.ensureLocalLlmServer(true);
+        assert.equal(ensureRes.reachable, true, 'D-0028: plugin-spawned owned LLM server must become reachable');
+        assert.ok(fs.existsSync(isolatedLlmPidPath), 'D-0028: plugin-spawned LLM server must record ko_thought_llm.pid');
+        const pidMeta = JSON.parse(fs.readFileSync(isolatedLlmPidPath, 'utf8'));
+        ownedSpawnPid = pidMeta.pid;
+        assert.ok(Number.isInteger(ownedSpawnPid) && ownedSpawnPid > 0 && pidMeta.identityToken, 'D-0028: ko_thought_llm.pid must include pid and identityToken');
+        assert.equal(isPidAlive(ownedSpawnPid), true);
+
+        const ownedStopRes = await ownedLlm.stopLocalLlmServer(false);
+        assert.equal(ownedStopRes.stoppedCount, 1, 'D-0028: stopLocalLlmServer must terminate verified plugin-owned child');
+        const stopWaitDeadline = Date.now() + 1500;
+        while (isPidAlive(ownedSpawnPid) && Date.now() < stopWaitDeadline) {
+          await sleep(25);
+        }
+        assert.equal(isPidAlive(ownedSpawnPid), false, 'D-0028: owned child LLM server PID must exit');
+        const afterOwnedStop = await ownedLlm.probeLocalLlmServer(250);
+        assert.equal(afterOwnedStop.reachable, false, 'D-0028: owned LLM port must release after stopLocalLlmServer');
+      } finally {
+        if (ownedSpawnPid && isPidAlive(ownedSpawnPid)) {
+          try { process.kill(ownedSpawnPid, 'SIGKILL'); } catch {}
+        }
+        if (prevBin === undefined) delete process.env.AGY_LOCAL_LLM_SERVER_BIN;
+        else process.env.AGY_LOCAL_LLM_SERVER_BIN = prevBin;
+        if (prevArgs === undefined) delete process.env.AGY_LOCAL_LLM_SERVER_ARGS;
+        else process.env.AGY_LOCAL_LLM_SERVER_ARGS = prevArgs;
+      }
+
+      // 6. Runtime Check 5 (D-0039 Multi-process --hook stampede): 6 concurrent --hook children with open non-TTY stdin pipes
+      const raceHome = path.join(tmpRoot, 'hook_race_home');
+      const raceAgyDir = path.join(raceHome, '.gemini', 'antigravity');
+      const raceCfgDir = path.join(raceHome, '.gemini', 'config');
+      const raceRoamingDir = path.join(raceHome, 'AppData', 'Roaming', 'Antigravity');
+      fs.mkdirSync(raceAgyDir, { recursive: true });
+      fs.mkdirSync(raceCfgDir, { recursive: true });
+      fs.mkdirSync(raceRoamingDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(raceCfgDir, 'config.json'),
+        JSON.stringify({ plugins: { 'ko-thought-translator': { enabled: true, pretranslate: false, provider: 'google-translate' } } }, null, 2),
+        'utf8'
+      );
+      fs.writeFileSync(
+        path.join(raceRoamingDir, 'app_storage.json'),
+        JSON.stringify({ 'agy-ko-thought-pretranslate': '0', 'agy-ko-thought-provider': 'google-translate' }, null, 2),
+        'utf8'
+      );
+
+      const entryScriptAbs = path.join(ROOT, 'scripts', 'ensure_ko_thought_patch.js');
+      const hookRaceStart = Date.now();
+      const hookPromises = Array.from({ length: 6 }, () =>
+        new Promise((resolve, reject) => {
+          const child = spawn(process.execPath, [entryScriptAbs, '--hook'], {
+            windowsHide: true,
+            stdio: ['pipe', 'pipe', 'pipe'], // intentionally leave stdin pipe OPEN (no .end()) to catch blocking readFileSync(0)!
+            env: {
+              ...process.env,
+              USERPROFILE: raceHome,
+              HOME: raceHome,
+              APPDATA: path.join(raceHome, 'AppData', 'Roaming'),
+              LOCALAPPDATA: path.join(raceHome, 'AppData', 'Local'),
+              AGY_KO_LLM_PID_PATH: path.join(raceAgyDir, 'ko_thought_llm.pid'),
+            },
+          });
+          let stdout = '';
+          let stderr = '';
+          const killTimer = setTimeout(() => {
+            try { child.kill('SIGKILL'); } catch {}
+            reject(new Error(`D-0039: --hook timed out (>3200ms) — likely blocked on stdin or unbounded lock/CDP wait. stderr=${stderr}`));
+          }, 3200);
+          child.stdout.on('data', (d) => { stdout += d.toString('utf8'); });
+          child.stderr.on('data', (d) => { stderr += d.toString('utf8'); });
+          child.once('exit', (code) => {
+            clearTimeout(killTimer);
+            try { child.stdin.destroy(); } catch {}
+            resolve({ code, stdout: stdout.trim(), elapsedMs: Date.now() - hookRaceStart });
+          });
+        })
+      );
+
+      const hookResults = await Promise.all(hookPromises);
+      for (const hr of hookResults) {
+        assert.equal(hr.code, 0, 'D-0039: every concurrent --hook invocation must exit with code 0');
+        assert.equal(hr.stdout, '{}', 'D-0039: every --hook invocation must emit valid JSON {} to stdout');
+      }
+
+      const raceWatcherPidFile = path.join(raceAgyDir, 'ko_thought_watcher.pid');
+      assert.ok(fs.existsSync(raceWatcherPidFile), 'D-0039: concurrent --hook stampede must leave ko_thought_watcher.pid recorded');
+      await sleep(650); // wait > 1 watcher fencing tick (400ms) to ensure zero-watcher mutual suicide never happens
+      const winningPid = parseInt(fs.readFileSync(raceWatcherPidFile, 'utf8').split(':')[0], 10);
+      try {
+        assert.equal(
+          isPidAlive(winningPid),
+          true,
+          `D-0039: exactly one winning watcher (${winningPid}) must stay alive after concurrent --hook stampede (no zero-watcher self-fence)`
+        );
+      } finally {
+        if (winningPid && isPidAlive(winningPid)) {
+          try { process.kill(winningPid, 'SIGKILL'); } catch {}
+        }
+      }
     } finally {
       if (prevLlmUrl === undefined) delete process.env.AGY_LOCAL_LLM_BASE_URL;
       else process.env.AGY_LOCAL_LLM_BASE_URL = prevLlmUrl;
+      if (prevLlmPidPath === undefined) delete process.env.AGY_KO_LLM_PID_PATH;
+      else process.env.AGY_KO_LLM_PID_PATH = prevLlmPidPath;
       delete require.cache[require.resolve(path.join(HOST_DIR, 'paths.js'))];
       delete require.cache[require.resolve(path.join(HOST_DIR, 'local-llm-service.js'))];
     }

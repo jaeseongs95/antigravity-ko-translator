@@ -27,15 +27,20 @@ const {
 } = require('./settings-storage');
 
 function syncMirrorScriptFile(targetPath, content) {
-  if (!targetPath) return;
+  if (!targetPath) return false;
   try {
     const current = fs.existsSync(targetPath)
       ? fs.readFileSync(targetPath, 'utf8').replace(/\r\n/g, '\n')
       : '';
     if (current !== content) {
       writeFileAtomicSync(targetPath, content);
+      return true;
     }
-  } catch {}
+    return false;
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] syncMirrorScriptFile(${targetPath}) error: ${err.message}\n`);
+    return false;
+  }
 }
 
 function assembleRendererSourceFromModules() {
@@ -60,7 +65,7 @@ function assembleRendererSourceFromModules() {
     `// ==UserScript==\n` +
     `// @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)\n` +
     `// @namespace    https://github.com/jaeseongs95/antigravity-ko-translator\n` +
-    `// @version      1.2.37\n` +
+    `// @version      1.2.38\n` +
     `// @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.\n` +
     `// @match        https://antigravity.google.com/*\n` +
     `// @match        https://*.antigravity.google.com/*\n` +
@@ -96,13 +101,24 @@ function assembleRendererSourceFromModules() {
 
   const assembled = `${userscriptHeader}(function mountKoThoughtLocalizer(__agyWin, __agyDoc) {\n${runtimePrelude}\n\n${body}\n})(typeof window !== 'undefined' ? window : undefined, typeof document !== 'undefined' ? document : undefined);\n`;
 
-  // Keep canonical and remote companion fallback paths (`scripts/`, `dist/`, `plugins/ko-thought-translator/scripts/`, `skills/ko-thought-translator/scripts/`) in sync
-  syncMirrorScriptFile(KO_SCRIPT_PATH, assembled);
-  syncMirrorScriptFile(DIST_KO_SCRIPT_PATH, assembled);
-  syncMirrorScriptFile(LEGACY_PLUGIN_KO_SCRIPT_PATH, assembled);
-  syncMirrorScriptFile(LEGACY_SKILL_KO_SCRIPT_PATH, assembled);
-
   return assembled;
+}
+
+function syncDistributableMirrors() {
+  const assembled = assembleRendererSourceFromModules();
+  const targets = [
+    KO_SCRIPT_PATH,
+    DIST_KO_SCRIPT_PATH,
+    LEGACY_PLUGIN_KO_SCRIPT_PATH,
+    LEGACY_SKILL_KO_SCRIPT_PATH,
+  ];
+  let updatedCount = 0;
+  for (const target of targets) {
+    if (syncMirrorScriptFile(target, assembled)) {
+      updatedCount++;
+    }
+  }
+  return { updatedCount, targets };
 }
 
 function resolveEffectiveOptions(pretranslateEnabled = null, translationProvider = null) {
@@ -194,6 +210,7 @@ function syncCombinedAutoinject(pretranslateEnabled = null, translationProvider 
 
 module.exports = {
   assembleRendererSourceFromModules,
+  syncDistributableMirrors,
   buildRuntimeConfiguredBundle,
   syncCombinedAutoinject,
 };

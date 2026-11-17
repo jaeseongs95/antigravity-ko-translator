@@ -1,13 +1,16 @@
 /**
  * Module: scripts/host/local-llm-service.js
- * Responsibility: Local LLM server process lifecycle management (env resolution, HTTP health probe,
- * headless GPU startup via `windowsHide: true` / `CREATE_NO_WINDOW`, and port-based process tree termination).
+ * Responsibility: Local LLM server process lifecycle management (env resolution, dynamic-origin HTTP health probe,
+ * headless GPU startup via `windowsHide: true` / `CREATE_NO_WINDOW`, and identity-verified termination restricted
+ * strictly to plugin-spawned child processes).
  */
 
 const fs = require('fs');
+const path = require('path');
 const http = require('http');
 const { spawnSync, spawn } = require('child_process');
-const { LLM_BASE_URL, DEVTOOLS_PORT_FILE } = require('./paths');
+const { LLM_BASE_URL, LLM_PID_PATH, DEVTOOLS_PORT_FILE } = require('./paths');
+const { writeFileAtomicSync, isProcessAlive, waitForProcessExitSync } = require('./settings-storage');
 
 function readWindowsUserEnv(varName) {
   if (process.platform !== 'win32') return null;
@@ -119,6 +122,87 @@ function extractListeningPidsFromNetstat(stdout, port, selfPid = process.pid) {
   return pids;
 }
 
+function parseCsvColumns(line) {
+  const cols = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === ',' && !inQuotes) {
+      cols.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  cols.push(cur);
+  return cols;
+}
+
+function readProcessIdentityToken(pid) {
+  const targetPid = Number(pid);
+  if (!Number.isInteger(targetPid) || targetPid <= 0) return null;
+
+  if (process.platform === 'linux') {
+    try {
+      const statRaw = fs.readFileSync(`/proc/${targetPid}/stat`, 'utf8');
+      const closeParen = statRaw.lastIndexOf(')');
+      if (closeParen === -1) return null;
+      const fields = statRaw.slice(closeParen + 1).trim().split(/\s+/);
+      // Field 3 (state) is index 0; field 22 (starttime) is index 19
+      const starttime = fields[19];
+      return starttime ? `linux-starttime:${starttime}` : null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (process.platform === 'win32') {
+    try {
+      const res = spawnSync(
+        'tasklist',
+        ['/FI', `PID eq ${targetPid}`, '/FO', 'CSV', '/NH'],
+        { encoding: 'utf8', windowsHide: true, timeout: 1500 }
+      );
+      if (res && res.status === 0 && res.stdout) {
+        const lines = String(res.stdout)
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter((l) => l.startsWith('"'));
+        for (const line of lines) {
+          const cols = parseCsvColumns(line);
+          if (cols.length >= 2 && Number(cols[1]) === targetPid && cols[0]) {
+            return `win32-image:${cols[0].trim().toLowerCase()}`;
+          }
+        }
+      }
+    } catch (err) {
+      process.stderr.write(`[ko-thought-translator] readProcessIdentityToken(${targetPid}) error: ${err.message}\n`);
+    }
+    return null;
+  }
+
+  try {
+    const res = spawnSync('ps', ['-o', 'lstart=,comm=', '-p', String(targetPid)], {
+      encoding: 'utf8',
+      timeout: 1500,
+    });
+    const out = String(res?.stdout || '').trim();
+    return out ? `posix-ps:${out}` : null;
+  } catch {
+    return null;
+  }
+}
+
 function resolveLocalLlmCommand() {
   const bin = process.env.AGY_LOCAL_LLM_SERVER_BIN || readWindowsUserEnv('AGY_LOCAL_LLM_SERVER_BIN');
   if (!bin) return null;
@@ -175,7 +259,9 @@ async function resolveProbeOrigin(options = {}) {
         if (discovered) return discovered;
       }
     }
-  } catch {}
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] resolveProbeOrigin discovery error: ${err.message}\n`);
+  }
 
   return 'https://127.0.0.1';
 }
@@ -212,7 +298,9 @@ async function probeLocalLlmServer(timeoutMs = 500, options = {}) {
             try {
               const parsed = JSON.parse(body);
               models = Array.isArray(parsed?.data) ? parsed.data.map((m) => m.id) : [];
-            } catch {}
+            } catch {
+              models = [];
+            }
             const corsAllowed =
               corsOrigin === '*' ||
               corsOrigin === probeOrigin ||
@@ -234,21 +322,39 @@ async function probeLocalLlmServer(timeoutMs = 500, options = {}) {
       });
       req.on('error', () => done({ reachable: false, corsAllowed: false, probeOrigin, models: [] }));
       req.end();
-    } catch {
-      done({ reachable: false, corsAllowed: false, probeOrigin, models: [] });
+    } catch (err) {
+      done({ reachable: false, corsAllowed: false, probeOrigin, models: [], error: err.message });
     }
   });
+}
+
+function resolveEffectiveLlmPidPath(options = {}) {
+  return (options && options.llmPidPath) || process.env.AGY_KO_LLM_PID_PATH || LLM_PID_PATH;
+}
+
+function removeFileQuietly(filePath) {
+  try {
+    if (filePath && fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') {
+      process.stderr.write(`[ko-thought-translator] failed to unlink ${filePath}: ${err.message}\n`);
+    }
+  }
 }
 
 async function ensureLocalLlmServer(pluginEnabled = true, options = {}) {
   if (!pluginEnabled) return { skipped: true };
   const probe = await probeLocalLlmServer(450, options);
   if (probe.reachable) {
-    return probe;
+    // External server is already running; never claim ownership or write ko_thought_llm.pid
+    return { ...probe, ownedByPlugin: false };
   }
   const cmd = resolveLocalLlmCommand();
   if (!cmd) return probe;
   const spawnImpl = options && typeof options.spawnFn === 'function' ? options.spawnFn : spawn;
+  const llmPidPath = resolveEffectiveLlmPidPath(options);
   try {
     const child = spawnImpl(cmd.bin, cmd.args, {
       detached: true,
@@ -256,75 +362,133 @@ async function ensureLocalLlmServer(pluginEnabled = true, options = {}) {
       windowsHide: true,
       env: { ...process.env },
     });
-    child.unref();
+    if (child && typeof child.unref === 'function') {
+      child.unref();
+    }
+    if (child && Number.isInteger(child.pid) && child.pid > 0) {
+      let port = 11434;
+      try {
+        port = Number(new URL('/v1/models', LLM_BASE_URL).port) || 11434;
+      } catch {}
+      const fallbackToken =
+        process.platform === 'win32'
+          ? `win32-image:${path.basename(cmd.bin).toLowerCase()}`
+          : null;
+      const identityToken = readProcessIdentityToken(child.pid) || fallbackToken;
+      if (identityToken) {
+        writeFileAtomicSync(
+          llmPidPath,
+          JSON.stringify(
+            {
+              pid: child.pid,
+              port,
+              bin: cmd.bin,
+              imageName: path.basename(cmd.bin).toLowerCase(),
+              identityToken,
+              spawnedAt: Date.now(),
+            },
+            null,
+            2
+          ) + '\n'
+        );
+      }
+
+      if (!options || typeof options.spawnFn !== 'function') {
+        const waitBudgetMs = options && options.fastHook ? 250 : 1200;
+        const deadline = Date.now() + waitBudgetMs;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 50));
+          const postProbe = await probeLocalLlmServer(200, options);
+          if (postProbe.reachable) {
+            return { ...postProbe, ownedByPlugin: true, pid: child.pid };
+          }
+          if (!isProcessAlive(child.pid)) break;
+        }
+      }
+      return { ...probe, ownedByPlugin: true, pid: child.pid };
+    }
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] ensureLocalLlmServer error: ${err.message}\n`);
   }
   return probe;
 }
 
-async function stopLocalLlmServer(forceProcessScan = false) {
-  let stoppedCount = 0;
+/**
+ * Terminates ONLY the local LLM server process explicitly spawned and recorded by this plugin
+ * (`ko_thought_llm.pid`) after verifying OS process liveness and identity token match.
+ * Unowned external servers (e.g., user's standalone Ollama on :11434) are NEVER signaled.
+ */
+async function stopLocalLlmServer(_forceProcessScan = false, options = {}) {
+  const llmPidPath = resolveEffectiveLlmPidPath(options);
   try {
-    if (!forceProcessScan) {
-      const probe = await probeLocalLlmServer(150);
-      if (!probe.reachable) {
-        return { stoppedCount: 0 };
-      }
+    if (!llmPidPath || !fs.existsSync(llmPidPath)) {
+      return { stoppedCount: 0, skippedReason: 'no_owned_pid_file' };
     }
-    const url = new URL('/v1/models', LLM_BASE_URL);
-    const port = Number(url.port) || 11434;
+
+    let record = null;
+    try {
+      record = JSON.parse(fs.readFileSync(llmPidPath, 'utf8'));
+    } catch (parseErr) {
+      process.stderr.write(`[ko-thought-translator] corrupt LLM PID file removed: ${parseErr.message}\n`);
+      removeFileQuietly(llmPidPath);
+      return { stoppedCount: 0, skippedReason: 'corrupt_pid_file' };
+    }
+
+    const targetPid = Number(record?.pid);
+    if (!Number.isInteger(targetPid) || targetPid <= 0 || targetPid === process.pid) {
+      removeFileQuietly(llmPidPath);
+      return { stoppedCount: 0, skippedReason: 'invalid_pid_record' };
+    }
+
+    if (!isProcessAlive(targetPid)) {
+      removeFileQuietly(llmPidPath);
+      return { stoppedCount: 0, skippedReason: 'already_exited' };
+    }
+
+    const expectedToken = typeof record.identityToken === 'string' ? record.identityToken : '';
+    const currentToken = readProcessIdentityToken(targetPid);
+    if (!expectedToken || !currentToken || currentToken !== expectedToken) {
+      process.stderr.write(
+        `[ko-thought-translator] refusing to signal PID ${targetPid}: identity mismatch (expected=${expectedToken}, actual=${currentToken})\n`
+      );
+      removeFileQuietly(llmPidPath);
+      return { stoppedCount: 0, skippedReason: 'identity_mismatch' };
+    }
+
     if (process.platform === 'win32') {
-      const res = spawnSync('netstat', ['-ano'], {
-        encoding: 'utf8',
+      const killRes = spawnSync('taskkill', ['/F', '/T', '/PID', String(targetPid)], {
+        stdio: 'ignore',
         windowsHide: true,
+        timeout: 2500,
       });
-      const pids = extractListeningPidsFromNetstat(res.stdout, port, process.pid);
-      for (const pid of pids) {
-        spawnSync('taskkill', ['/F', '/T', '/PID', String(pid)], {
-          stdio: 'ignore',
-          windowsHide: true,
-        });
-        stoppedCount++;
+      if (killRes && killRes.error) {
+        process.stderr.write(`[ko-thought-translator] taskkill(${targetPid}) error: ${killRes.error.message}\n`);
       }
+      waitForProcessExitSync(targetPid, 800);
     } else {
-      const pidSet = new Set();
-      const lsofRes = spawnSync('lsof', [`-tiTCP:${port}`, '-sTCP:LISTEN'], {
-        encoding: 'utf8',
-      });
-      if (lsofRes && lsofRes.stdout) {
-        for (const line of lsofRes.stdout.split(/\r?\n/)) {
-          const parsed = Number(line.trim());
-          if (parsed > 0 && parsed !== process.pid) pidSet.add(parsed);
+      try {
+        process.kill(targetPid, 'SIGTERM');
+      } catch (killErr) {
+        if (killErr && killErr.code !== 'ESRCH') {
+          process.stderr.write(`[ko-thought-translator] SIGTERM(${targetPid}) error: ${killErr.message}\n`);
+          return { stoppedCount: 0, skippedReason: 'signal_error' };
         }
       }
-      if (pidSet.size === 0) {
-        const ssRes = spawnSync('ss', ['-lptn', `sport = :${port}`], {
-          encoding: 'utf8',
-        });
-        if (ssRes && ssRes.stdout) {
-          for (const m of ssRes.stdout.matchAll(/pid=(\d+)/g)) {
-            const parsed = Number(m[1]);
-            if (parsed > 0 && parsed !== process.pid) pidSet.add(parsed);
-          }
-        }
-      }
-      for (const pid of pidSet) {
-        try {
-          process.kill(pid, 'SIGTERM');
-          stoppedCount++;
-        } catch {}
-      }
+      waitForProcessExitSync(targetPid, 800);
     }
+
+    removeFileQuietly(llmPidPath);
+    return { stoppedCount: 1, terminatedPid: targetPid };
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] stopLocalLlmServer error: ${err.message}\n`);
+    return { stoppedCount: 0, skippedReason: 'unexpected_error' };
   }
-  return { stoppedCount };
 }
 
 module.exports = {
   parseCommandArgs,
   extractListeningPidsFromNetstat,
+  readProcessIdentityToken,
   readWindowsUserEnv,
   resolveLocalLlmCommand,
   probeLocalLlmServer,

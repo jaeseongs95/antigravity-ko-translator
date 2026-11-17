@@ -2,7 +2,7 @@
 
 > 🌐 **Language**: **English** | [한국어 문서 (README.ko.md)](./README.ko.md)
 
-Real-time Korean localization plugin for the Antigravity 2.0 desktop app and **Remote Control web/mobile browser (`https://antigravity.google.com/r/...`)** (`v1.2.37` / `v13.32`). Automatically translates streaming **Thinking blocks** (including Side Question reasoning & Browser Subagent live thoughts), **step progress summaries (`Worked for ...`)**, **conversation navigator & subagent/cron statuses**, and **static UI menus, settings, and widgets** into natural Korean with zero-latency static dictionary lookup and Port & Adapter translation engines.
+Real-time Korean localization plugin for the Antigravity 2.0 desktop app and **Remote Control web/mobile browser (`https://antigravity.google.com/r/...`)** (`v1.2.38` / `v13.33`). Automatically translates streaming **Thinking blocks** (including Side Question reasoning & Browser Subagent live thoughts), **step progress summaries (`Worked for ...`)**, **conversation navigator & subagent/cron statuses**, and **static UI menus, settings, and widgets** into natural Korean with zero-latency static dictionary lookup and Port & Adapter translation engines.
 
 ---
 
@@ -134,7 +134,7 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 ## 6. Module Architecture (SOLID)
 
 - **Renderer Layer (`scripts/renderer/`)**:
-  - `01-bootstrap-and-cache.js`: Version guard (`v13.31`), automatic activation of `remove-conversation-history: false` (`대화 기록` menu), read-only inspection of native `verboseConversationSteps`, full DOM restoration on disable, and epoch-guarded translation cache (`memCache` / `localStorage`) persistence.
+  - `01-bootstrap-and-cache.js`: Version guard (`v13.33`), automatic activation of `remove-conversation-history: false` (`대화 기록` menu), read-only inspection of native `verboseConversationSteps`, full DOM restoration on disable, and epoch-guarded translation cache (`memCache` / `localStorage`) persistence.
   - `02-static-ui-dict.js`: 0ms static UI Korean dictionary (`STATIC_UI_MAP`) and synchronous pattern matcher (`matchStaticUiPatternUncached`).
   - `03-text-tokenizer.js`: Code (`⟦C0⟧`) and identifier/quote (`⟦T0⟧`) protective tokenizer, Korean postposition fixer, and Markdown segment extractor.
   - `04-translation-adapters.js`: Port & Adapter translation engine (`local-llm`, `google-translate`, custom adapters) with concurrency & cancellation queues.
@@ -145,9 +145,9 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 - **Host Layer (`scripts/host/` & `scripts/ensure_ko_thought_patch.js`)**:
   - `paths.js`: Host paths, distributable bundle mirrors (`scripts/`, `dist/`, `plugins/`, `skills/`), and environment constants.
   - `ensure_statusbar_patch.js`: Built-in `app.asar` and Live CDP patcher fallback for standalone installations.
-  - `local-llm-service.js`: Local LLM server startup, health-check, and process-tree termination adapter.
-  - `settings-storage.js`: Single Source of Truth (`config.json`) & `app_storage.json` atomic synchronization and background storage watcher daemon.
-  - `bundle-injector.js`: Assembles `scripts/renderer/*.js` modules and synchronizes `statusbar_autoinject.js` (supporting both line and block markers).
+  - `local-llm-service.js`: Local LLM server startup, dynamic-origin health-check, and identity-verified termination restricted strictly to plugin-spawned child processes (`ko_thought_llm.pid`).
+  - `settings-storage.js`: Single Source of Truth (`config.json`) & `app_storage.json` atomic synchronization and lock-serialized background storage watcher daemon.
+  - `bundle-injector.js`: Pure read-only assembler for `scripts/renderer/*.js` modules, explicit `--sync-mirrors` synchronization, and `statusbar_autoinject.js` bundle sync.
   - `ensure_ko_thought_patch.js`: CLI / Hook orchestrator entry point.
 
 ---

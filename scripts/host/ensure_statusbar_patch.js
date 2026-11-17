@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Antigravity Statusbar Auto-Patch & Live CDP Recovery (v5)
+ * Antigravity Statusbar Auto-Patch & Live CDP Recovery (v5 R2)
  * Bundled fallback copy for standalone `ko-thought-translator` installations.
  */
 
@@ -10,7 +10,7 @@ const path = require('path');
 const crypto = require('crypto');
 const http = require('http');
 const vm = require('vm');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const HOME_DIR = process.env.USERPROFILE || process.env.HOME || os.homedir();
 const LOCAL_APPDATA = process.env.LOCALAPPDATA || path.join(HOME_DIR, 'AppData', 'Local');
@@ -20,11 +20,13 @@ const ASAR_PATH = path.join(LOCAL_APPDATA, 'Programs', 'antigravity', 'resources
 const AGY_DIR = path.join(HOME_DIR, '.gemini', 'antigravity');
 const AUTOINJECT_PATH = path.join(AGY_DIR, 'statusbar_autoinject.js');
 const LOCK_PATH = path.join(AGY_DIR, 'statusbar_patch.lock');
+const APP_STORAGE_LOCK_PATH = path.join(AGY_DIR, 'app_storage_sync.lock');
 const STATUS_PATH = path.join(AGY_DIR, 'statusbar_patch_status.json');
 const DEVTOOLS_PORT_FILE = path.join(APPDATA, 'Antigravity', 'DevToolsActivePort');
 const APP_STORAGE_PATH = path.join(APPDATA, 'Antigravity', 'app_storage.json');
 
 const PATCH_MARKER = 'AGY_STATUSBAR_AUTOINJECT_V5';
+const PATCHER_CAPABILITY_REVISION = 'AGY_STATUSBAR_PATCHER_V5_R2';
 const LEGACY_MARKERS = [
   'statusbar_autoinject.js',
   'AGY_STATUSBAR_AUTOINJECT_V2',
@@ -33,7 +35,9 @@ const LEGACY_MARKERS = [
 ];
 const STORAGE_CODE_KEY = 'agy-statusbar-code';
 const LOCK_STALE_MS = 60000;
+const APP_STORAGE_LOCK_STALE_MS = 15000;
 const BLOCK_SIZE = 4 * 1024 * 1024;
+const MAX_WS_BUFFER_BYTES = 16 * 1024 * 1024;
 
 const UTILS_ANCHOR_TARGET =
   "    void win.loadURL(url);";
@@ -87,13 +91,20 @@ const PRELOAD_ANCHOR_REPLACEMENT =
   "    }\n" +
   "}).catch(() => {});";
 
+const FALLBACK_DID_FINISH_LOAD_TARGET =
+  'this.mainWindow.webContents.on("did-finish-load", () => {});';
+
+const FALLBACK_DID_FINISH_LOAD_REPLACEMENT =
+  `// ${PATCH_MARKER}\n` +
+  'this.mainWindow.webContents.on("did-finish-load", () => { void 0; });';
+
 function sha256Hex(bufferOrString) {
   return crypto.createHash('sha256').update(bufferOrString).digest('hex');
 }
 
 function writeFileAtomicSync(targetPath, content) {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}`;
   try {
     fs.writeFileSync(tmpPath, content, 'utf8');
     try {
@@ -125,23 +136,252 @@ function computeIntegrity(buf) {
   };
 }
 
-function syncAppStorageCode() {
-  try {
-    if (!fs.existsSync(AUTOINJECT_PATH) || !fs.existsSync(APP_STORAGE_PATH)) {
-      return false;
-    }
-    const code = fs.readFileSync(AUTOINJECT_PATH, 'utf8');
-    const raw = fs.readFileSync(APP_STORAGE_PATH, 'utf8');
-    const data = JSON.parse(raw);
-    if (data[STORAGE_CODE_KEY] === code) {
-      return false;
-    }
-    data[STORAGE_CODE_KEY] = code;
-    writeFileAtomicSync(APP_STORAGE_PATH, JSON.stringify(data, null, 2));
-    return true;
-  } catch {
-    return false;
+const REGEX_KEYWORDS = new Set([
+  'return', 'throw', 'case', 'delete', 'void', 'typeof',
+  'instanceof', 'in', 'of', 'new', 'yield', 'await', 'else', 'do',
+]);
+
+function countTrailingBackslashes(str) {
+  let count = 0;
+  for (let i = str.length - 1; i >= 0 && str[i] === '\\'; i--) {
+    count += 1;
   }
+  return count;
+}
+
+function stripPureCommentLinesLexical(lines) {
+  const out = [];
+  const stack = [
+    { mode: 'CODE', braceDepth: 0, regexAllowed: true, prevWasDot: false, lastControlKw: false, parenStack: [] },
+  ];
+  let inBlockComment = false;
+  let inSingle = false;
+  let inDouble = false;
+
+  for (const line of lines) {
+    const startsInTemplate = stack[stack.length - 1].mode === 'TEMPLATE';
+    const startsInString = inSingle || inDouble;
+    const startsInBlockComment = inBlockComment;
+    const trimmed = line.trim();
+
+    if (!startsInTemplate && !startsInString && !startsInBlockComment && trimmed.includes(PATCH_MARKER)) {
+      out.push(line);
+      continue;
+    }
+
+    let i = 0;
+    let inRegex = false;
+    let inRegexCharClass = false;
+    let hasCodeTokenOnLine = false;
+
+    while (i < line.length) {
+      const ch = line[i];
+      const next = line[i + 1] || '';
+      const top = stack[stack.length - 1];
+
+      if (top.mode === 'TEMPLATE') {
+        hasCodeTokenOnLine = true;
+        if (ch === '\\') { i += 2; continue; }
+        if (ch === '`') {
+          stack.pop();
+          const outer = stack[stack.length - 1];
+          outer.regexAllowed = false;
+          outer.prevWasDot = false;
+          outer.lastControlKw = false;
+          i += 1;
+          continue;
+        }
+        if (ch === '$' && next === '{') {
+          stack.push({ mode: 'TEMPLATE_EXPR', braceDepth: 1, regexAllowed: true, prevWasDot: false, lastControlKw: false, parenStack: [] });
+          i += 2;
+          continue;
+        }
+        i += 1;
+        continue;
+      }
+
+      if (inBlockComment) {
+        if (ch === '*' && next === '/') {
+          inBlockComment = false;
+          i += 2;
+          continue;
+        }
+        i += 1;
+        continue;
+      }
+
+      if (inSingle) {
+        hasCodeTokenOnLine = true;
+        if (ch === '\\') { i += 2; continue; }
+        if (ch === "'") {
+          inSingle = false;
+          top.regexAllowed = false;
+          top.prevWasDot = false;
+          top.lastControlKw = false;
+        }
+        i += 1;
+        continue;
+      }
+
+      if (inDouble) {
+        hasCodeTokenOnLine = true;
+        if (ch === '\\') { i += 2; continue; }
+        if (ch === '"') {
+          inDouble = false;
+          top.regexAllowed = false;
+          top.prevWasDot = false;
+          top.lastControlKw = false;
+        }
+        i += 1;
+        continue;
+      }
+
+      if (inRegex) {
+        hasCodeTokenOnLine = true;
+        if (ch === '\\') { i += 2; continue; }
+        if (inRegexCharClass) {
+          if (ch === ']') inRegexCharClass = false;
+          i += 1;
+          continue;
+        }
+        if (ch === '[') { inRegexCharClass = true; i += 1; continue; }
+        if (ch === '/') {
+          inRegex = false;
+          i += 1;
+          while (i < line.length && /[A-Za-z]/.test(line[i])) i += 1;
+          top.regexAllowed = false;
+          top.prevWasDot = false;
+          top.lastControlKw = false;
+          continue;
+        }
+        i += 1;
+        continue;
+      }
+
+      if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\f' || ch === '\v') {
+        i += 1;
+        continue;
+      }
+      if (ch === '/' && next === '/') {
+        break;
+      }
+      if (ch === '/' && next === '*') {
+        inBlockComment = true;
+        i += 2;
+        continue;
+      }
+
+      hasCodeTokenOnLine = true;
+      if (ch === '/' && top.regexAllowed) {
+        inRegex = true;
+        inRegexCharClass = false;
+        i += 1;
+        continue;
+      }
+      if (ch === "'") { inSingle = true; i += 1; continue; }
+      if (ch === '"') { inDouble = true; i += 1; continue; }
+      if (ch === '`') { stack.push({ mode: 'TEMPLATE' }); i += 1; continue; }
+
+      if (/[A-Za-z_$]/.test(ch)) {
+        let end = i + 1;
+        while (end < line.length && /[A-Za-z0-9_$]/.test(line[end])) end += 1;
+        const word = line.slice(i, end);
+        const wasDot = top.prevWasDot;
+        top.regexAllowed = !wasDot && REGEX_KEYWORDS.has(word);
+        top.lastControlKw = !wasDot && (word === 'if' || word === 'while' || word === 'for' || word === 'with');
+        top.prevWasDot = false;
+        i = end;
+        continue;
+      }
+      if (/[0-9]/.test(ch) || (ch === '.' && /[0-9]/.test(next))) {
+        let end = i + 1;
+        while (end < line.length && /[0-9A-Za-z_.]/.test(line[end])) end += 1;
+        top.regexAllowed = false;
+        top.prevWasDot = false;
+        top.lastControlKw = false;
+        i = end;
+        continue;
+      }
+      if (ch === '(') {
+        top.parenStack.push(top.lastControlKw);
+        top.regexAllowed = true;
+        top.prevWasDot = false;
+        top.lastControlKw = false;
+        i += 1;
+        continue;
+      }
+      if (ch === ')') {
+        top.regexAllowed = Boolean(top.parenStack.pop());
+        top.prevWasDot = false;
+        top.lastControlKw = false;
+        i += 1;
+        continue;
+      }
+      if (ch === '[') { top.regexAllowed = true; top.prevWasDot = false; top.lastControlKw = false; i += 1; continue; }
+      if (ch === ']') { top.regexAllowed = false; top.prevWasDot = false; top.lastControlKw = false; i += 1; continue; }
+      if (ch === '{') {
+        if (top.mode === 'TEMPLATE_EXPR') top.braceDepth += 1;
+        top.regexAllowed = true;
+        top.prevWasDot = false;
+        top.lastControlKw = false;
+        i += 1;
+        continue;
+      }
+      if (ch === '}') {
+        if (top.mode === 'TEMPLATE_EXPR') {
+          top.braceDepth -= 1;
+          if (top.braceDepth === 0) {
+            stack.pop();
+            i += 1;
+            continue;
+          }
+        }
+        top.regexAllowed = true;
+        top.prevWasDot = false;
+        top.lastControlKw = false;
+        i += 1;
+        continue;
+      }
+      if ((ch === '+' && next === '+') || (ch === '-' && next === '-')) {
+        top.regexAllowed = false;
+        top.prevWasDot = false;
+        top.lastControlKw = false;
+        i += 2;
+        continue;
+      }
+      if (ch === '.' && next === '.' && line[i + 2] === '.') {
+        top.regexAllowed = true;
+        top.prevWasDot = false;
+        top.lastControlKw = false;
+        i += 3;
+        continue;
+      }
+      if (ch === '.') {
+        top.regexAllowed = false;
+        top.prevWasDot = true;
+        top.lastControlKw = false;
+        i += 1;
+        continue;
+      }
+      top.regexAllowed = true;
+      top.prevWasDot = false;
+      top.lastControlKw = false;
+      i += 1;
+    }
+
+    if (inSingle && countTrailingBackslashes(line) % 2 === 0) inSingle = false;
+    if (inDouble && countTrailingBackslashes(line) % 2 === 0) inDouble = false;
+
+    if (startsInTemplate || startsInString) {
+      out.push(line);
+      continue;
+    }
+    if (!hasCodeTokenOnLine && (startsInBlockComment || trimmed.startsWith('//') || trimmed.startsWith('/*'))) {
+      continue;
+    }
+    out.push(line);
+  }
+  return out;
 }
 
 function transformExactSize(origBuf, anchorTarget, anchorReplacement) {
@@ -150,39 +390,28 @@ function transformExactSize(origBuf, anchorTarget, anchorReplacement) {
   const hasCrlf = origStr.includes('\r\n');
   const normalized = origStr.replace(/\r\n/g, '\n');
 
-  const occ = normalized.split(anchorTarget).length - 1;
+  let effTarget = anchorTarget;
+  let effReplacement = anchorReplacement;
+  if (!effTarget) {
+    if (normalized.includes(MAIN_ANCHOR_TARGET)) {
+      effTarget = MAIN_ANCHOR_TARGET;
+      effReplacement = MAIN_ANCHOR_REPLACEMENT;
+    } else if (normalized.includes(UTILS_ANCHOR_TARGET)) {
+      effTarget = UTILS_ANCHOR_TARGET;
+      effReplacement = UTILS_ANCHOR_REPLACEMENT;
+    } else {
+      effTarget = FALLBACK_DID_FINISH_LOAD_TARGET;
+      effReplacement = FALLBACK_DID_FINISH_LOAD_REPLACEMENT;
+    }
+  }
+
+  const occ = normalized.split(effTarget).length - 1;
   if (occ !== 1) {
     throw new Error(`Anchor occurrences=${occ}`);
   }
 
-  const modified = normalized.replace(anchorTarget, anchorReplacement);
-  const lines = modified.split('\n');
-  const strippedLines = [];
-  let inBlockComment = false;
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.includes(PATCH_MARKER)) {
-      strippedLines.push(line);
-      continue;
-    }
-    if (inBlockComment) {
-      if (trimmed.includes('*/')) {
-        inBlockComment = false;
-      }
-      continue;
-    }
-    if (trimmed.startsWith('/*')) {
-      if (!trimmed.includes('*/')) {
-        inBlockComment = true;
-      }
-      continue;
-    }
-    if (trimmed.startsWith('//')) {
-      continue;
-    }
-    strippedLines.push(line);
-  }
+  const modified = normalized.replace(effTarget, effReplacement);
+  const strippedLines = stripPureCommentLinesLexical(modified.split('\n'));
 
   let candidate = strippedLines.join(hasCrlf ? '\r\n' : '\n');
   const candBytes = Buffer.byteLength(candidate, 'utf8');
@@ -223,11 +452,19 @@ function isAsarPatchedFast(asarPath = ASAR_PATH) {
 
     const headerBuf = Buffer.alloc(strSize);
     fs.readSync(fd, headerBuf, 0, strSize, 16);
-    const header = JSON.parse(headerBuf.toString('utf8'));
+    const header = JSON.parse(headerBuf.toString('utf8').replace(/\0+$/, ''));
     const dataOffset = 8 + u4;
 
     const distFiles = header?.files?.dist?.files;
-    if (!distFiles) return false;
+    if (!distFiles) {
+      const outMainNode = header?.files?.out?.files?.['main.js'];
+      if (outMainNode && outMainNode.size !== undefined && outMainNode.offset !== undefined) {
+        const outMainBuf = Buffer.alloc(outMainNode.size);
+        fs.readSync(fd, outMainBuf, 0, outMainNode.size, dataOffset + Number(outMainNode.offset));
+        return outMainBuf.toString('utf8').includes(PATCH_MARKER);
+      }
+      return false;
+    }
 
     const utilsNode = distFiles['utils.js'];
     const mainNode = distFiles['main.js'];
@@ -262,43 +499,161 @@ function isAsarPatchedFast(asarPath = ASAR_PATH) {
   }
 }
 
-let heldLockToken = null;
-let heldLockPath = null;
+function isProcessAlive(pid) {
+  const num = Number(pid);
+  if (!Number.isInteger(num) || num <= 0) return false;
+  try {
+    process.kill(num, 0);
+  } catch (err) {
+    return Boolean(err && err.code === 'EPERM');
+  }
+  if (process.platform === 'linux') {
+    try {
+      const statRaw = fs.readFileSync(`/proc/${num}/stat`, 'utf8');
+      const closeParen = statRaw.lastIndexOf(')');
+      if (closeParen !== -1) {
+        const stateChar = statRaw.slice(closeParen + 1).trimStart()[0];
+        if (stateChar === 'Z' || stateChar === 'X' || stateChar === 'x') return false;
+      }
+    } catch {
+      return false;
+    }
+  } else if (process.platform === 'darwin' || process.platform === 'freebsd') {
+    try {
+      const res = spawnSync('ps', ['-o', 'state=', '-p', String(num)], { encoding: 'utf8' });
+      const stateStr = String(res.stdout || '').trim();
+      if (!stateStr || stateStr.startsWith('Z')) return false;
+    } catch {}
+  }
+  return true;
+}
 
-function acquireLock(lockPath = LOCK_PATH, staleMs = LOCK_STALE_MS) {
+function writeLockPayload(lockPath, token) {
+  const fd = fs.openSync(lockPath, 'wx');
+  try {
+    fs.writeFileSync(
+      fd,
+      JSON.stringify({ pid: process.pid, token, ts: Date.now(), startedAt: new Date().toISOString() }),
+      'utf8'
+    );
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function acquireFileLock(lockPath, token, staleMs = LOCK_STALE_MS) {
   try {
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-    if (fs.existsSync(lockPath)) {
-      const stat = fs.statSync(lockPath);
-      if (Date.now() - stat.mtimeMs > staleMs) {
-        try { fs.unlinkSync(lockPath); } catch {}
-      }
+    try {
+      writeLockPayload(lockPath, token);
+      return true;
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') return false;
     }
-    const token = `${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-    const fd = fs.openSync(lockPath, 'wx');
-    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token, startedAt: new Date().toISOString() }), 'utf8');
-    fs.closeSync(fd);
-    heldLockToken = token;
-    heldLockPath = lockPath;
+
+    const stat = fs.statSync(lockPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    let ownerPid = 0;
+    try {
+      const lockInfo = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      ownerPid = Number(lockInfo?.pid || 0);
+    } catch {}
+    const ownerAlive = ownerPid > 0 && isProcessAlive(ownerPid);
+    const isStale =
+      (ownerPid > 0 && !ownerAlive) ||
+      (!ownerAlive && ageMs > staleMs) ||
+      ageMs > staleMs * 10;
+    if (!isStale) return false;
+
+    const staleTmp = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+    try {
+      fs.renameSync(lockPath, staleTmp);
+      try { fs.unlinkSync(staleTmp); } catch {}
+    } catch {
+      return false;
+    }
+    writeLockPayload(lockPath, token);
     return true;
   } catch {
     return false;
   }
 }
 
-function releaseLock(lockPath = heldLockPath || LOCK_PATH) {
+function releaseFileLock(lockPath, token) {
+  if (!lockPath || !token) return false;
   try {
-    if (heldLockToken && fs.existsSync(lockPath)) {
-      const raw = fs.readFileSync(lockPath, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.token === heldLockToken) {
+    if (!fs.existsSync(lockPath)) return false;
+    const raw = fs.readFileSync(lockPath, 'utf8');
+    const lockInfo = JSON.parse(raw);
+    if (!lockInfo || lockInfo.token !== token) {
+      return false;
+    }
+    const relTmp = `${lockPath}.rel.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+    try {
+      fs.renameSync(lockPath, relTmp);
+      fs.unlinkSync(relTmp);
+    } catch {
+      const verify = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      if (verify && verify.token === token) {
         fs.unlinkSync(lockPath);
       }
     }
-  } catch {}
-  if (lockPath === heldLockPath || lockPath === LOCK_PATH) {
-    heldLockToken = null;
-    heldLockPath = null;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const heldLockTokensByPath = new Map();
+
+function acquireLock(lockPath = LOCK_PATH, staleMs = LOCK_STALE_MS) {
+  const token = `${process.pid}:${Date.now()}:${crypto.randomBytes(4).toString('hex')}`;
+  if (acquireFileLock(lockPath, token, staleMs)) {
+    heldLockTokensByPath.set(lockPath, token);
+    return true;
+  }
+  return false;
+}
+
+function releaseLock(lockPath = LOCK_PATH) {
+  const token = heldLockTokensByPath.get(lockPath);
+  if (!token) return false;
+  const released = releaseFileLock(lockPath, token);
+  heldLockTokensByPath.delete(lockPath);
+  return released;
+}
+
+function syncAppStorageCode() {
+  let storageLockToken = null;
+  try {
+    if (!fs.existsSync(AUTOINJECT_PATH) || !fs.existsSync(APP_STORAGE_PATH)) {
+      return false;
+    }
+    const code = fs.readFileSync(AUTOINJECT_PATH, 'utf8');
+    const fastData = JSON.parse(fs.readFileSync(APP_STORAGE_PATH, 'utf8'));
+    if (fastData && typeof fastData === 'object' && fastData[STORAGE_CODE_KEY] === code) {
+      return false;
+    }
+
+    const candToken = `${process.pid}:storage:${crypto.randomBytes(4).toString('hex')}`;
+    if (!acquireFileLock(APP_STORAGE_LOCK_PATH, candToken, APP_STORAGE_LOCK_STALE_MS)) {
+      return false;
+    }
+    storageLockToken = candToken;
+
+    const data = JSON.parse(fs.readFileSync(APP_STORAGE_PATH, 'utf8'));
+    if (!data || typeof data !== 'object' || data[STORAGE_CODE_KEY] === code) {
+      return false;
+    }
+    data[STORAGE_CODE_KEY] = code;
+    writeFileAtomicSync(APP_STORAGE_PATH, JSON.stringify(data, null, 2));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (storageLockToken) {
+      releaseFileLock(APP_STORAGE_LOCK_PATH, storageLockToken);
+    }
   }
 }
 
@@ -315,8 +670,13 @@ function readDevToolsEndpoint() {
     const lines = fs.readFileSync(DEVTOOLS_PORT_FILE, 'utf8').trim().split(/\r?\n/);
     const port = parseInt(lines[0], 10);
     if (!port || Number.isNaN(port)) return null;
-    const browserPath = lines[1] ? lines[1].trim() : '';
-    return { port, browserPath };
+    const rawWsLine = (lines[1] || '').trim();
+    const browserWsUrl = rawWsLine
+      ? (rawWsLine.startsWith('ws://') || rawWsLine.startsWith('wss://')
+        ? rawWsLine
+        : `ws://127.0.0.1:${port}${rawWsLine.startsWith('/') ? rawWsLine : `/${rawWsLine}`}`)
+      : null;
+    return { port, browserPath: rawWsLine, browserWsUrl };
   } catch {
     return null;
   }
@@ -327,7 +687,7 @@ function readDevToolsPort() {
   return ep ? ep.port : null;
 }
 
-function httpGetJson(port, reqPath, timeoutMs = 1500) {
+function httpGetJson(port, reqPath, timeoutMs = 700) {
   return new Promise((resolve, reject) => {
     const req = http.get({ host: '127.0.0.1', port, path: reqPath, timeout: timeoutMs }, (res) => {
       let raw = '';
@@ -348,14 +708,293 @@ function httpGetJson(port, reqPath, timeoutMs = 1500) {
   });
 }
 
-function configureTargetViaCdp(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) {
-  return new Promise((resolve, reject) => {
-    if (typeof WebSocket !== 'function') {
-      reject(new Error('Global WebSocket unavailable'));
+function detectBundledPlugins(scriptCode) {
+  const text = typeof scriptCode === 'string' ? scriptCode : '';
+  const expectsStatusbar =
+    /^(?:\/\/ @name[ \t]+Antigravity Custom Statusbar\b|\/\/ === BEGIN_AGY_STATUSBAR(?:_V\d+)? ===|\/\* === BEGIN_AGY_STATUSBAR(?:_V\d+)? === \*\/|[ \t]*function\s+mountStatusBar\s*\(|[ \t]*window\.__agyStatusBarActive\s*=)/m.test(text);
+  const expectsMcp =
+    /^(?:\/\/ @name[ \t]+Antigravity Custom MCP Server Manager\b|\/\/ === BEGIN_AGY_MCP_MANAGER(?:_V\d+)? ===|\/\* === BEGIN_AGY_MCP_MANAGER(?:_V\d+)? === \*\/|[ \t]*function\s+mountMcpManager\s*\()/m.test(text);
+  const expectsKo =
+    /^(?:\/\/ @name[ \t]+Antigravity Korean Thought & UI Translator\b|\/\/ === BEGIN_AGY_KO_THOUGHT_LOCALIZER(?:_V\d+)? ===|\/\* === BEGIN_AGY_KO_THOUGHT_LOCALIZER(?:_V\d+)? === \*\/|[ \t]*window\.__agyKoThoughtCleanup\s*=|[ \t]*const\s+KO_LOCALIZER_VERSION\s*=)/m.test(text);
+  const koVerMatch = text.match(/const\s+KO_LOCALIZER_VERSION\s*=\s*['"]([^'"]+)['"]/);
+  return {
+    expectsStatusbar,
+    expectsMcp,
+    expectsKo,
+    expectedKoVersion: koVerMatch ? koVerMatch[1] : null,
+  };
+}
+
+function buildImmediateEvalExpression(scriptCode, scriptHash) {
+  const { expectsStatusbar, expectsMcp, expectsKo, expectedKoVersion } = detectBundledPlugins(scriptCode);
+  const activeChecks = [];
+  if (expectsStatusbar) {
+    activeChecks.push(
+      'Boolean((window.agyStatusBar && typeof window.__agyStatusBarCleanup === "function") || (window.__agyStatusBarActive && window.document && window.document.querySelector(".agy-ctx-statusbar")))'
+    );
+  }
+  if (expectsMcp) {
+    activeChecks.push('Boolean(window.agyMcpManager && typeof window.agyMcpManager.destroy === "function")');
+  }
+  if (expectsKo) {
+    if (expectedKoVersion) {
+      activeChecks.push(
+        `Boolean(window.__agyKoLocalizerActive === ${JSON.stringify(expectedKoVersion)} && typeof window.__agyKoThoughtCleanup === "function")`
+      );
+    } else {
+      activeChecks.push('Boolean(typeof window.__agyKoThoughtCleanup === "function" && window.__agyKoLocalizerActive)');
+    }
+  }
+  const hasExplicitHashGuard = scriptHash !== undefined && scriptHash !== null;
+  const activeGuardExpr = activeChecks.length > 0 ? activeChecks.join(' && ') : 'false';
+  const hashCondExpr = hasExplicitHashGuard
+    ? `(${activeGuardExpr}) && (!window.__agyStatusBarHash || window.__agyStatusBarHash === ${JSON.stringify(scriptHash)})`
+    : activeGuardExpr;
+  const hashAssignStmt = hasExplicitHashGuard
+    ? `window.__agyStatusBarHash = ${JSON.stringify(scriptHash)};`
+    : '';
+
+  return `(() => {
+      if (${hashCondExpr}) {
+        return 'ALREADY_ACTIVE';
+      }
+      ${scriptCode}
+      ${hashAssignStmt}
+      return 'INJECTED_OK';
+    })()`;
+}
+
+function isInjectablePageTarget(t) {
+  if (!t || t.type !== 'page') return false;
+  const url = String(t.url || '').trim();
+  return /^https?:\/\//i.test(url);
+}
+
+function createRfc6455WebSocketClient(wsUrl) {
+  const parsed = new URL(wsUrl);
+  const secKey = crypto.randomBytes(16).toString('base64');
+  const expectedAccept = crypto
+    .createHash('sha1')
+    .update(secKey + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+    .digest('base64');
+
+  let sock = null;
+  let closed = false;
+  const client = {
+    onopen: null,
+    onmessage: null,
+    onerror: null,
+    send(data) {
+      if (closed || !sock) throw new Error('WebSocket is not open');
+      const payload = Buffer.from(String(data), 'utf8');
+      const mask = crypto.randomBytes(4);
+      let header;
+      if (payload.length < 126) {
+        header = Buffer.alloc(6);
+        header[0] = 0x81;
+        header[1] = 0x80 | payload.length;
+        mask.copy(header, 2);
+      } else if (payload.length < 65536) {
+        header = Buffer.alloc(8);
+        header[0] = 0x81;
+        header[1] = 0x80 | 126;
+        header.writeUInt16BE(payload.length, 2);
+        mask.copy(header, 4);
+      } else {
+        header = Buffer.alloc(14);
+        header[0] = 0x81;
+        header[1] = 0x80 | 127;
+        header.writeBigUInt64BE(BigInt(payload.length), 2);
+        mask.copy(header, 10);
+      }
+      const masked = Buffer.allocUnsafe(payload.length);
+      for (let i = 0; i < payload.length; i++) {
+        masked[i] = payload[i] ^ mask[i & 3];
+      }
+      sock.write(Buffer.concat([header, masked]));
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      try {
+        if (sock) {
+          const mask = crypto.randomBytes(4);
+          sock.end(Buffer.concat([Buffer.from([0x88, 0x80]), mask]));
+          sock.destroy();
+        }
+      } catch {}
+    },
+  };
+
+  const req = http.request({
+    host: parsed.hostname || '127.0.0.1',
+    port: Number(parsed.port) || 80,
+    path: (parsed.pathname || '/') + (parsed.search || ''),
+    headers: {
+      Connection: 'Upgrade',
+      Upgrade: 'websocket',
+      'Sec-WebSocket-Version': '13',
+      'Sec-WebSocket-Key': secKey,
+    },
+  });
+
+  const emitError = (err) => {
+    if (closed) return;
+    closed = true;
+    try { req.destroy(); } catch {}
+    try { if (sock) sock.destroy(); } catch {}
+    if (typeof client.onerror === 'function') {
+      client.onerror(err instanceof Error ? err : new Error(String(err)));
+    }
+  };
+
+  req.on('error', emitError);
+  req.on('response', (res) => {
+    emitError(new Error(`Unexpected HTTP response ${res.statusCode} during WebSocket upgrade`));
+  });
+  req.on('upgrade', (res, socket, head) => {
+    if (res.headers['sec-websocket-accept'] !== expectedAccept) {
+      emitError(new Error('Invalid Sec-WebSocket-Accept header'));
       return;
     }
+    sock = socket;
+    let recvBuf = head && head.length > 0 ? Buffer.from(head) : Buffer.alloc(0);
+    let fragOpcode = 0;
+    let fragChunks = [];
+    let fragBytes = 0;
+
+    const drainFrames = () => {
+      while (!closed && recvBuf.length >= 2) {
+        const fin = (recvBuf[0] & 0x80) !== 0;
+        const opcode = recvBuf[0] & 0x0f;
+        const isMasked = (recvBuf[1] & 0x80) !== 0;
+        let len = recvBuf[1] & 0x7f;
+        let offset = 2;
+        if (len === 126) {
+          if (recvBuf.length < 4) return;
+          len = recvBuf.readUInt16BE(2);
+          offset = 4;
+        } else if (len === 127) {
+          if (recvBuf.length < 10) return;
+          const bigLen = recvBuf.readBigUInt64BE(2);
+          if (bigLen > BigInt(MAX_WS_BUFFER_BYTES)) {
+            emitError(new Error('WebSocket frame payload exceeds maximum buffer size'));
+            return;
+          }
+          len = Number(bigLen);
+          offset = 10;
+        }
+        if (len > MAX_WS_BUFFER_BYTES) {
+          emitError(new Error('WebSocket frame payload exceeds maximum buffer size'));
+          return;
+        }
+        const maskBytes = isMasked ? 4 : 0;
+        if (recvBuf.length < offset + maskBytes + len) return;
+        const body = Buffer.from(recvBuf.subarray(offset + maskBytes, offset + maskBytes + len));
+        if (isMasked) {
+          const m = recvBuf.subarray(offset, offset + 4);
+          for (let i = 0; i < body.length; i++) body[i] ^= m[i & 3];
+        }
+        recvBuf = recvBuf.subarray(offset + maskBytes + len);
+
+        if (opcode === 0x08) {
+          client.close();
+          return;
+        }
+        if (opcode === 0x09 && sock && !closed) {
+          const pongPayload = body.length <= 125 ? body : body.subarray(0, 125);
+          const pongMask = crypto.randomBytes(4);
+          const pongHdr = Buffer.from([0x8a, 0x80 | pongPayload.length]);
+          const maskedPong = Buffer.allocUnsafe(pongPayload.length);
+          for (let i = 0; i < pongPayload.length; i++) {
+            maskedPong[i] = pongPayload[i] ^ pongMask[i & 3];
+          }
+          sock.write(Buffer.concat([pongHdr, pongMask, maskedPong]));
+          continue;
+        }
+        if (opcode === 0x0a) {
+          continue;
+        }
+        if (opcode === 0x01 || opcode === 0x02) {
+          if (fin) {
+            if (opcode === 0x01 && typeof client.onmessage === 'function') {
+              client.onmessage({ data: body.toString('utf8') });
+            }
+          } else {
+            fragOpcode = opcode;
+            fragChunks = [body];
+            fragBytes = body.length;
+          }
+          continue;
+        }
+        if (opcode === 0x00) {
+          if (!fragOpcode) {
+            emitError(new Error('Unexpected WebSocket continuation frame'));
+            return;
+          }
+          fragBytes += body.length;
+          if (fragBytes > MAX_WS_BUFFER_BYTES) {
+            emitError(new Error('WebSocket fragmented message exceeds maximum buffer size'));
+            return;
+          }
+          fragChunks.push(body);
+          if (fin) {
+            const fullBuf = Buffer.concat(fragChunks, fragBytes);
+            const completedOp = fragOpcode;
+            fragOpcode = 0;
+            fragChunks = [];
+            fragBytes = 0;
+            if (completedOp === 0x01 && typeof client.onmessage === 'function') {
+              client.onmessage({ data: fullBuf.toString('utf8') });
+            }
+          }
+        }
+      }
+    };
+
+    socket.on('data', (chunk) => {
+      if (recvBuf.length + chunk.length > MAX_WS_BUFFER_BYTES) {
+        emitError(new Error('WebSocket receive buffer exceeded maximum size'));
+        return;
+      }
+      recvBuf = Buffer.concat([recvBuf, chunk]);
+      drainFrames();
+    });
+    socket.on('error', emitError);
+    socket.on('close', () => {
+      closed = true;
+    });
+
+    Promise.resolve().then(() => {
+      if (!closed && typeof client.onopen === 'function') {
+        client.onopen();
+      }
+      if (!closed && recvBuf.length > 0) {
+        drainFrames();
+      }
+    });
+  });
+  req.end();
+  return client;
+}
+
+function openCdpWebSocket(wsUrl) {
+  if (typeof WebSocket === 'function') {
+    return new WebSocket(wsUrl);
+  }
+  return createRfc6455WebSocketClient(wsUrl);
+}
+
+function configureTargetViaCdp(wsUrl, scriptCode, scriptHash, timeoutMs = 900) {
+  return new Promise((resolve, reject) => {
     let settled = false;
-    const ws = new WebSocket(wsUrl);
+    let ws;
+    try {
+      ws = openCdpWebSocket(wsUrl);
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -363,18 +1002,8 @@ function configureTargetViaCdp(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) 
       reject(new Error('WebSocket evaluation timeout'));
     }, timeoutMs);
 
-    const immediateExpr = `(() => {
-      const hasActivePlugin =
-        Boolean(document.querySelector('.agy-ctx-statusbar') && window.__agyStatusBarCleanup) ||
-        Boolean(window.agyMcpManager) ||
-        Boolean(window.__agyKoThoughtCleanup);
-      if (hasActivePlugin && window.__agyStatusBarHash === ${JSON.stringify(scriptHash)}) {
-        return 'ALREADY_ACTIVE';
-      }
-      ${scriptCode}
-      window.__agyStatusBarHash = ${JSON.stringify(scriptHash)};
-      return 'INJECTED_OK';
-    })()`;
+    const effHash = scriptHash || sha256Hex(String(scriptCode || '')).slice(0, 16);
+    const immediateExpr = buildImmediateEvalExpression(scriptCode, effHash);
 
     ws.onopen = () => {
       try {
@@ -404,6 +1033,16 @@ function configureTargetViaCdp(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) 
           settled = true;
           clearTimeout(timer);
           try { ws.close(); } catch {}
+          if (msg.error) {
+            reject(new Error(msg.error.message || 'CDP Runtime.evaluate error'));
+            return;
+          }
+          if (msg?.result?.exceptionDetails) {
+            const det = msg.result.exceptionDetails;
+            const desc = det?.exception?.description || det?.text || 'CDP Runtime.evaluate exception';
+            reject(new Error(desc));
+            return;
+          }
           resolve(msg?.result?.result?.value ?? null);
         }
       } catch (err) {
@@ -424,89 +1063,115 @@ function configureTargetViaCdp(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) 
   });
 }
 
-function isInjectablePageTarget(t) {
-  if (!t || t.type !== 'page') return false;
-  const url = String(t.url || '').trim();
-  return /^https?:\/\//i.test(url);
-}
-
-async function injectViaBrowserCdpWs(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) {
-  if (typeof WebSocket !== 'function') {
-    return { pageTargetCount: 0, injectedCount: 0, skippedAlreadyActive: 0 };
+function injectViaBrowserCdpWs(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) {
+  if (typeof wsUrl === 'string' && wsUrl.includes('/devtools/page/')) {
+    return configureTargetViaCdp(wsUrl, scriptCode, scriptHash, timeoutMs);
   }
-  return new Promise((resolve) => {
-    let settled = false;
-    let idSeq = 1;
+  return new Promise((resolve, reject) => {
+    let closed = false;
+    let nextId = 1;
     const pending = new Map();
-    const ws = new WebSocket(wsUrl);
-    const finish = (val) => {
-      if (settled) return;
-      settled = true;
+    let ws;
+    try {
+      ws = openCdpWebSocket(wsUrl);
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+    const effHash = scriptHash || sha256Hex(String(scriptCode || '')).slice(0, 16);
+    const immediateExpr = buildImmediateEvalExpression(scriptCode, effHash);
+
+    const finish = (err, val) => {
+      if (closed) return;
+      closed = true;
       clearTimeout(timer);
+      for (const [, p] of pending) {
+        p.reject(err || new Error('Browser CDP socket closed'));
+      }
+      pending.clear();
       try { ws.close(); } catch {}
-      resolve(val);
+      if (err) reject(err);
+      else resolve(val);
     };
+
     const timer = setTimeout(() => {
-      finish({ pageTargetCount: 0, injectedCount: 0, skippedAlreadyActive: 0 });
+      finish(new Error('Browser CDP WebSocket timeout'));
     }, timeoutMs);
 
-    const call = (method, params = {}, sessionId = undefined) =>
+    const sendCdp = (method, params = {}, sessionId = undefined) =>
       new Promise((res, rej) => {
-        const id = idSeq++;
-        pending.set(id, { res, rej });
-        const payload = { id, method, params };
-        if (sessionId) payload.sessionId = sessionId;
-        ws.send(JSON.stringify(payload));
+        if (closed) {
+          rej(new Error('Browser CDP socket closed'));
+          return;
+        }
+        const id = nextId++;
+        pending.set(id, { resolve: res, reject: rej });
+        const payload = sessionId ? { id, method, params, sessionId } : { id, method, params };
+        try {
+          ws.send(JSON.stringify(payload));
+        } catch (err) {
+          pending.delete(id);
+          rej(err);
+        }
       });
 
-    ws.onmessage = (ev) => {
+    ws.onmessage = (event) => {
+      if (closed) return;
       try {
-        const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : String(ev.data));
-        if (msg.id && pending.has(msg.id)) {
-          const { res, rej } = pending.get(msg.id);
+        const msg = JSON.parse(typeof event.data === 'string' ? event.data : String(event.data));
+        if (msg && typeof msg.id === 'number' && pending.has(msg.id)) {
+          const entry = pending.get(msg.id);
           pending.delete(msg.id);
-          if (msg.error) rej(new Error(JSON.stringify(msg.error)));
-          else res(msg.result);
+          if (msg.error) {
+            entry.reject(new Error(msg.error.message || `CDP ${msg.error.code || ''} error`));
+          } else {
+            entry.resolve(msg.result);
+          }
         }
       } catch {}
     };
-    ws.onerror = () => finish({ pageTargetCount: 0, injectedCount: 0, skippedAlreadyActive: 0 });
+
+    ws.onerror = (err) => {
+      finish(err instanceof Error ? err : new Error('Browser CDP WebSocket error'));
+    };
+
     ws.onopen = async () => {
       try {
-        const { targetInfos } = await call('Target.getTargets');
-        const pages = (Array.isArray(targetInfos) ? targetInfos : []).filter((t) =>
-          isInjectablePageTarget(t)
-        );
+        const targetsRes = await sendCdp('Target.getTargets', {});
+        const targetInfos = Array.isArray(targetsRes?.targetInfos) ? targetsRes.targetInfos : [];
+        const pageTargets = targetInfos.filter((t) => t && t.targetId && isInjectablePageTarget(t));
         let injectedCount = 0;
         let skippedAlreadyActive = 0;
-        const immediateExpr = `(() => {
-          const hasActivePlugin =
-            Boolean(document.querySelector('.agy-ctx-statusbar') && window.__agyStatusBarCleanup) ||
-            Boolean(window.agyMcpManager) ||
-            Boolean(window.__agyKoThoughtCleanup);
-          if (hasActivePlugin && window.__agyStatusBarHash === ${JSON.stringify(scriptHash)}) {
-            return 'ALREADY_ACTIVE';
-          }
-          ${scriptCode}
-          window.__agyStatusBarHash = ${JSON.stringify(scriptHash)};
-          return 'INJECTED_OK';
-        })()`;
-        for (const p of pages) {
+
+        for (const target of pageTargets) {
+          let sessionId = null;
           try {
-            const { sessionId } = await call('Target.attachToTarget', { targetId: p.targetId, flatten: true });
-            const evalRes = await call(
+            const attachRes = await sendCdp('Target.attachToTarget', {
+              targetId: target.targetId,
+              flatten: true,
+            });
+            sessionId = attachRes?.sessionId || null;
+            if (!sessionId) continue;
+            const evalRes = await sendCdp(
               'Runtime.evaluate',
               { expression: immediateExpr, returnByValue: true },
               sessionId
             );
+            if (evalRes?.exceptionDetails) {
+              throw new Error(evalRes.exceptionDetails.text || 'CDP Runtime.evaluate exception');
+            }
             const val = evalRes?.result?.value;
             if (val === 'INJECTED_OK') injectedCount++;
             else if (val === 'ALREADY_ACTIVE') skippedAlreadyActive++;
-          } catch {}
+          } catch {} finally {
+            if (sessionId) {
+              try { await sendCdp('Target.detachFromTarget', { sessionId }); } catch {}
+            }
+          }
         }
-        finish({ pageTargetCount: pages.length, injectedCount, skippedAlreadyActive });
-      } catch {
-        finish({ pageTargetCount: 0, injectedCount: 0, skippedAlreadyActive: 0 });
+        finish(null, { pageTargetCount: pageTargets.length, injectedCount, skippedAlreadyActive });
+      } catch (err) {
+        finish(err);
       }
     };
   });
@@ -520,13 +1185,13 @@ async function injectViaCdpLive() {
   if (!endpoint) {
     return { attempted: false, reason: 'devtools_port_missing', injectedCount: 0 };
   }
-  const { port, browserPath } = endpoint;
+  const { port, browserWsUrl } = endpoint;
 
   const scriptCode = fs.readFileSync(AUTOINJECT_PATH, 'utf8');
   const scriptHash = sha256Hex(scriptCode).slice(0, 16);
   let targets = [];
   try {
-    targets = await httpGetJson(port, '/json/list', 1500);
+    targets = await httpGetJson(port, '/json/list', 700);
   } catch {}
   const pageTargets = (Array.isArray(targets) ? targets : []).filter(
     (t) => isInjectablePageTarget(t) && Boolean(t.webSocketDebuggerUrl)
@@ -538,7 +1203,7 @@ async function injectViaCdpLive() {
   if (pageTargets.length > 0) {
     for (const target of pageTargets) {
       try {
-        const val = await configureTargetViaCdp(target.webSocketDebuggerUrl, scriptCode, scriptHash, 1500);
+        const val = await configureTargetViaCdp(target.webSocketDebuggerUrl, scriptCode, scriptHash, 900);
         if (val === 'INJECTED_OK') injectedCount++;
         else if (val === 'ALREADY_ACTIVE') skippedAlreadyActive++;
       } catch {}
@@ -552,15 +1217,17 @@ async function injectViaCdpLive() {
     };
   }
 
-  if (browserPath && browserPath.startsWith('/devtools/browser/')) {
-    const wsRes = await injectViaBrowserCdpWs(`ws://127.0.0.1:${port}${browserPath}`, scriptCode, scriptHash, 1500);
-    return {
-      attempted: true,
-      port,
-      pageTargetCount: wsRes.pageTargetCount,
-      injectedCount: wsRes.injectedCount,
-      skippedAlreadyActive: wsRes.skippedAlreadyActive,
-    };
+  if (browserWsUrl) {
+    try {
+      const wsRes = await injectViaBrowserCdpWs(browserWsUrl, scriptCode, scriptHash, 1500);
+      return {
+        attempted: true,
+        port,
+        pageTargetCount: wsRes.pageTargetCount,
+        injectedCount: wsRes.injectedCount,
+        skippedAlreadyActive: wsRes.skippedAlreadyActive,
+      };
+    } catch {}
   }
 
   return {
@@ -578,7 +1245,7 @@ function readAsarArchive(filePath) {
   const u4 = buf.readUInt32LE(4);
   const strSize = buf.readUInt32LE(12);
   const dataOffset = 8 + u4;
-  const header = JSON.parse(buf.toString('utf8', 16, 16 + strSize));
+  const header = JSON.parse(buf.toString('utf8', 16, 16 + strSize).replace(/\0+$/, ''));
 
   const fileMap = new Map();
   function extractNode(node, relPath) {
@@ -623,6 +1290,7 @@ function patchAsarOnDisk() {
     return {
       status: 'ALREADY_PATCHED',
       patchVersion: PATCH_MARKER,
+      capabilityRevision: PATCHER_CAPABILITY_REVISION,
       appVersion: currentArchive?.appVersion || 'unknown',
     };
   }
@@ -751,6 +1419,7 @@ function patchAsarOnDisk() {
   return {
     status: 'PATCHED',
     patchVersion: PATCH_MARKER,
+    capabilityRevision: PATCHER_CAPABILITY_REVISION,
     appVersion,
     backupPath,
     backupCreated,
@@ -768,6 +1437,7 @@ async function runWorkerMode() {
   const statusReport = {
     updatedAt: new Date().toISOString(),
     pid: process.pid,
+    capabilityRevision: PATCHER_CAPABILITY_REVISION,
     cdp: null,
     asar: null,
   };
@@ -798,9 +1468,13 @@ async function runWorkerMode() {
 }
 
 async function runHookFastPath() {
-  try {
-    fs.readFileSync(0);
-  } catch {}
+  if (process.stdin && !process.stdin.isTTY) {
+    process.stdin.on('error', () => {});
+    process.stdin.resume();
+    if (typeof process.stdin.unref === 'function') {
+      process.stdin.unref();
+    }
+  }
 
   try {
     syncAppStorageCode();
@@ -831,7 +1505,18 @@ async function main() {
         lastStatus = JSON.parse(fs.readFileSync(STATUS_PATH, 'utf8'));
       }
     } catch {}
-    process.stdout.write(JSON.stringify({ isAsarPatched: patched, patchVersion: PATCH_MARKER, lastStatus }, null, 2) + '\n');
+    process.stdout.write(
+      JSON.stringify(
+        {
+          isAsarPatched: patched,
+          patchVersion: PATCH_MARKER,
+          capabilityRevision: PATCHER_CAPABILITY_REVISION,
+          lastStatus,
+        },
+        null,
+        2
+      ) + '\n'
+    );
     process.exit(0);
   } else {
     await runHookFastPath();
@@ -840,6 +1525,7 @@ async function main() {
 
 module.exports = {
   PATCH_MARKER,
+  PATCHER_CAPABILITY_REVISION,
   UTILS_ANCHOR_TARGET,
   UTILS_ANCHOR_REPLACEMENT,
   MAIN_ANCHOR_TARGET,
@@ -849,9 +1535,17 @@ module.exports = {
   sha256Hex,
   writeFileAtomicSync,
   computeIntegrity,
+  stripPureCommentLinesLexical,
   transformExactSize,
   isAsarPatchedFast,
+  readAsarArchive,
+  detectBundledPlugins,
+  buildImmediateEvalExpression,
   isInjectablePageTarget,
+  createRfc6455WebSocketClient,
+  openCdpWebSocket,
+  configureTargetViaCdp,
+  injectViaBrowserCdpWs,
   syncAppStorageCode,
   acquireLock,
   releaseLock,

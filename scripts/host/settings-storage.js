@@ -34,7 +34,7 @@ function parsePretranslateCliArg(args) {
   for (let i = 0; i < args.length; i++) {
     const a = String(args[i] || '');
     if (a.startsWith('--pretranslate=')) {
-      const val = a.split('=')[1].trim().toLowerCase();
+      const val = a.slice(a.indexOf('=') + 1).trim().toLowerCase();
       if (val === 'on' || val === 'true' || val === '1') return true;
       if (val === 'off' || val === 'false' || val === '0') return false;
     } else if (a === '--pretranslate' && i + 1 < args.length) {
@@ -51,7 +51,7 @@ function normalizeProviderName(raw) {
   if (!val) return null;
   if (val === 'google' || val === 'gtx' || val === 'google-translate') return 'google-translate';
   if (val === 'local' || val === 'llm' || val === 'ollama' || val === 'local-llm') return 'local-llm';
-  if (/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(val)) return val;
+  if (/^[a-z0-9][a-z0-9._-]{0,63}$/.test(val)) return val;
   return null;
 }
 
@@ -59,7 +59,7 @@ function parseProviderCliArg(args) {
   for (let i = 0; i < args.length; i++) {
     const a = String(args[i] || '');
     if (a.startsWith('--provider=') || a.startsWith('--adapter=')) {
-      const norm = normalizeProviderName(a.split('=')[1]);
+      const norm = normalizeProviderName(a.slice(a.indexOf('=') + 1));
       if (norm) return norm;
     } else if ((a === '--provider' || a === '--adapter') && i + 1 < args.length) {
       const norm = normalizeProviderName(args[i + 1]);
@@ -308,38 +308,144 @@ function computeWatcherSignature(entryScriptPath) {
     .join('-');
 }
 
+function acquireExclusiveFileLock(lockPath, staleMs = 15000) {
+  const token = `${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+  const tryOpenWx = () => {
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    const fd = fs.openSync(lockPath, 'wx');
+    try {
+      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, token, ts: Date.now() }), 'utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+    return token;
+  };
+
+  try {
+    return tryOpenWx();
+  } catch (err) {
+    if (!err || err.code !== 'EEXIST') return null;
+  }
+
+  try {
+    const stat = fs.statSync(lockPath);
+    const ageMs = Date.now() - stat.mtimeMs;
+    let ownerPid = 0;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      ownerPid = Number(parsed?.pid || 0);
+    } catch {}
+    const ownerAlive = ownerPid > 0 && isProcessAlive(ownerPid);
+    const isStale = (ownerPid > 0 && !ownerAlive) || ageMs > staleMs;
+    if (!isStale) return null;
+
+    const reclaimPath = `${lockPath}.reclaim.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      fs.renameSync(lockPath, reclaimPath);
+      try {
+        fs.unlinkSync(reclaimPath);
+      } catch {}
+    } catch {
+      return null;
+    }
+    return tryOpenWx();
+  } catch {
+    return null;
+  }
+}
+
+function releaseExclusiveFileLock(lockPath, token) {
+  if (!lockPath || !token) return false;
+  try {
+    if (!fs.existsSync(lockPath)) return false;
+    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    if (!parsed || parsed.token !== token) return false;
+    const relPath = `${lockPath}.rel.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      fs.renameSync(lockPath, relPath);
+      fs.unlinkSync(relPath);
+    } catch {
+      const verify = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+      if (verify && verify.token === token) {
+        fs.unlinkSync(lockPath);
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function ensureStorageWatcher(entryScriptPath, options = {}) {
   try {
     const pidFilePath =
       (options && options.watcherPidPath) || process.env.AGY_KO_WATCHER_PID_PATH || WATCHER_PID_PATH;
+    const lockPath = (options && options.watcherLockPath) || `${pidFilePath}.lock`;
     const spawnFn =
       options && typeof options.spawnFn === 'function' ? options.spawnFn : spawnDetachedWatcherProcess;
+    const fastHook = Boolean(options && options.fastHook);
     const exitWaitTimeoutMs =
-      options && typeof options.exitWaitTimeoutMs === 'number' ? options.exitWaitTimeoutMs : 1500;
+      options && typeof options.exitWaitTimeoutMs === 'number'
+        ? options.exitWaitTimeoutMs
+        : fastHook
+        ? 350
+        : 1500;
+    const lockBudgetMs =
+      options && typeof options.lockWaitTimeoutMs === 'number'
+        ? options.lockWaitTimeoutMs
+        : fastHook
+        ? 1200
+        : 2000;
     const mySig = computeWatcherSignature(entryScriptPath);
 
-    const existing = readWatcherPidRecord(pidFilePath);
-    if (existing.pid && isProcessAlive(existing.pid)) {
-      if (existing.sig === mySig) {
-        return existing.pid;
-      }
-      try {
-        process.kill(existing.pid, 'SIGTERM');
-      } catch (killErr) {
-        if (killErr && killErr.code !== 'ESRCH') {
-          process.stderr.write(
-            `[ko-thought-translator] Failed to terminate stale watcher ${existing.pid}: ${killErr.message}\n`
-          );
-        }
-      }
-      waitForProcessExitSync(existing.pid, exitWaitTimeoutMs);
+    // Fast lock-free check when an up-to-date live watcher already owns pidFilePath
+    const fastExisting = readWatcherPidRecord(pidFilePath);
+    if (fastExisting.pid && fastExisting.sig === mySig && isProcessAlive(fastExisting.pid)) {
+      return fastExisting.pid;
     }
 
-    const spawnedPid = spawnFn(entryScriptPath, pidFilePath);
-    if (spawnedPid) {
-      writeFileAtomicSync(pidFilePath, `${spawnedPid}:${mySig}`);
+    let lockToken = null;
+    const lockDeadline = Date.now() + Math.max(60, lockBudgetMs);
+    while (Date.now() < lockDeadline) {
+      lockToken = acquireExclusiveFileLock(lockPath, 15000);
+      if (lockToken) break;
+      const peerRecord = readWatcherPidRecord(pidFilePath);
+      if (peerRecord.pid && peerRecord.sig === mySig && isProcessAlive(peerRecord.pid)) {
+        return peerRecord.pid;
+      }
+      sleepSyncMs(20);
     }
-    return spawnedPid;
+    if (!lockToken) {
+      const peerRecord = readWatcherPidRecord(pidFilePath);
+      return peerRecord.pid && isProcessAlive(peerRecord.pid) ? peerRecord.pid : null;
+    }
+
+    try {
+      const existing = readWatcherPidRecord(pidFilePath);
+      if (existing.pid && isProcessAlive(existing.pid)) {
+        if (existing.sig === mySig) {
+          return existing.pid;
+        }
+        try {
+          process.kill(existing.pid, 'SIGTERM');
+        } catch (killErr) {
+          if (killErr && killErr.code !== 'ESRCH') {
+            process.stderr.write(
+              `[ko-thought-translator] Failed to terminate stale watcher ${existing.pid}: ${killErr.message}\n`
+            );
+          }
+        }
+        waitForProcessExitSync(existing.pid, exitWaitTimeoutMs);
+      }
+
+      const spawnedPid = spawnFn(entryScriptPath, pidFilePath);
+      if (spawnedPid) {
+        writeFileAtomicSync(pidFilePath, `${spawnedPid}:${mySig}`);
+      }
+      return spawnedPid;
+    } finally {
+      releaseExclusiveFileLock(lockPath, lockToken);
+    }
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] ensureStorageWatcher error: ${err.message}\n`);
     return null;
@@ -402,14 +508,17 @@ function runStorageWatcherLoop({
         isStopped: () => true,
       };
     }
-    const mySig = computeWatcherSignature(entryScriptPath);
-    writeFileAtomicSync(pidFilePath, `${process.pid}:${mySig}`);
+    if (existing.pid !== process.pid) {
+      const mySig = computeWatcherSignature(entryScriptPath);
+      writeFileAtomicSync(pidFilePath, `${process.pid}:${mySig}`);
+    }
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] watcher pid write error: ${err.message}\n`);
   }
 
   let stopped = false;
   let intervalHandle = null;
+  let pidDirWatcher = null;
   const followupTimers = new Set();
 
   const hasWatcherOwnership = () => !stopped && readWatcherPidRecord(pidFilePath).pid === process.pid;
@@ -417,6 +526,12 @@ function runStorageWatcherLoop({
   const stopWatcherLoop = ({ removeOwnPidFile = false } = {}) => {
     if (stopped) return;
     stopped = true;
+    if (pidDirWatcher) {
+      try {
+        pidDirWatcher.close();
+      } catch {}
+      pidDirWatcher = null;
+    }
     if (intervalHandle) {
       clearInterval(intervalHandle);
       intervalHandle = null;
@@ -547,6 +662,21 @@ function runStorageWatcherLoop({
     }
   };
 
+  try {
+    const pidDir = path.dirname(pidFilePath);
+    const pidBase = path.basename(pidFilePath);
+    if (fs.existsSync(pidDir)) {
+      pidDirWatcher = fs.watch(pidDir, { persistent: false }, (_eventType, filename) => {
+        if (!filename || filename === pidBase) {
+          if (!hasWatcherOwnership()) {
+            stopWatcherLoop({ removeOwnPidFile: false });
+          }
+        }
+      });
+      pidDirWatcher.on('error', () => {});
+    }
+  } catch {}
+
   void checkStorageAndAppHealth();
   intervalHandle = setInterval(checkStorageAndAppHealth, Math.max(15, Number(pollIntervalMs) || 400));
   return {
@@ -565,6 +695,8 @@ module.exports = {
   isZombieProcStatContent,
   isProcessAlive,
   waitForProcessExitSync,
+  acquireExclusiveFileLock,
+  releaseExclusiveFileLock,
   spawnDetachedWatcherProcess,
   ensureStorageWatcher,
   runStorageWatcherLoop,

@@ -39,6 +39,8 @@ const BUNDLED_ENSURE_STATUSBAR_PATCH_PATH = path.join(__dirname, 'ensure_statusb
 const STATUSBAR_AUTOINJECT_PATH = path.join(AGY_DIR, 'statusbar_autoinject.js');
 const ENSURE_STATUSBAR_PATCH_PATH = path.join(AGY_DIR, 'ensure_statusbar_patch.js');
 const WATCHER_PID_PATH = path.join(AGY_DIR, 'ko_thought_watcher.pid');
+const WATCHER_LOCK_PATH = `${WATCHER_PID_PATH}.lock`;
+const LLM_PID_PATH = process.env.AGY_KO_LLM_PID_PATH || path.join(AGY_DIR, 'ko_thought_llm.pid');
 const LLM_BASE_URL = process.env.AGY_LOCAL_LLM_BASE_URL || 'http://127.0.0.1:11434';
 
 const BEGIN_MARKER = '// === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 ===';
@@ -77,6 +79,8 @@ module.exports = {
   STATUSBAR_AUTOINJECT_PATH,
   ENSURE_STATUSBAR_PATCH_PATH,
   WATCHER_PID_PATH,
+  WATCHER_LOCK_PATH,
+  LLM_PID_PATH,
   LLM_BASE_URL,
   BEGIN_MARKER,
   END_MARKER,
