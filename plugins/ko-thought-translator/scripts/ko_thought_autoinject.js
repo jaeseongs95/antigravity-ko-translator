@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.35
+// @version      1.2.36
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -13,7 +13,18 @@
   const window = __agyWin || (typeof globalThis !== 'undefined' ? globalThis.window : undefined);
   const document = __agyDoc || (window ? window.document : undefined);
   if (!window || !document) return;
-  const localStorage = window.localStorage;
+  const localStorage = (() => {
+    try {
+      const ls = window.localStorage;
+      if (ls && typeof ls.getItem === 'function') return ls;
+    } catch (e) {}
+    const fallbackMap = new Map();
+    return {
+      getItem: (k) => (fallbackMap.has(String(k)) ? fallbackMap.get(String(k)) : null),
+      setItem: (k, v) => { fallbackMap.set(String(k), String(v)); },
+      removeItem: (k) => { fallbackMap.delete(String(k)); },
+    };
+  })();
   const fetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : (typeof globalThis.fetch === 'function' ? globalThis.fetch : undefined);
   const MutationObserver = window.MutationObserver || (typeof globalThis !== 'undefined' ? globalThis.MutationObserver : undefined);
   const Node = window.Node || (typeof globalThis !== 'undefined' ? globalThis.Node : undefined);
@@ -25,7 +36,7 @@
 
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.30';
+  const KO_LOCALIZER_VERSION = 'v13.31';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -172,7 +183,26 @@
     return false;
   }
 
+  let cacheEpoch = 0;
+  function bumpCacheEpoch() {
+    cacheEpoch += 1;
+    return cacheEpoch;
+  }
+
   let saveCacheTimer = null;
+  function clearTranslationCacheState() {
+    bumpCacheEpoch();
+    if (saveCacheTimer) {
+      clearTimeout(saveCacheTimer);
+      saveCacheTimer = null;
+    }
+    memCache.clear();
+    inflightMap.clear();
+    try {
+      localStorage.removeItem(CACHE_STORAGE_KEY);
+    } catch (e) {}
+  }
+
   function enforceMemCacheBound() {
     while (memCache.size > MAX_CACHE_ENTRIES) {
       const oldestKey = memCache.keys().next().value;
@@ -1843,7 +1873,17 @@
     'Ask before sensitive operations.': '민감한 작업 수행 전에 확인을 요청합니다.',
     'Automatically decide if commands run.': '명령어 자동 실행 여부를 판단합니다.',
     'Run all commands without restrictions.': '모든 명령어를 제한 없이 실행합니다.',
-    'Only this conversation uses this preset.': '이 대화에서만 해당 프리셋을 사용합니다.',
+    'Only this conversation uses this preset.': '이 대화에서만 이 프리셋을 사용합니다.',
+    'This Conversation': '이 대화',
+    'Inspecting documentation, config, or issues...': '문서, 설정 또는 이슈 확인 중...',
+    'Waiting for tool permission approval — click Open in full conversation (↗) to approve':
+      '도구 권한 승인 대기 중 — 전체 대화에서 열기(↗)를 클릭하여 승인하세요',
+    'Side Question:': '사이드 질문:',
+    'Help:': '도움말:',
+    'Cloud Triggers': '클라우드 트리거',
+    'Terminals & Tasks': '터미널 및 작업',
+    'Subagent Conversations': '서브에이전트 대화',
+    'Conversation Presets': '대화 프리셋',
     'Enable Notifications': '알림 활성화',
     'Notification Preferences': '알림 환경설정',
     'Screen Reader Mode': '스크린 리더 모드',
@@ -3091,13 +3131,16 @@
 
   function tokenizeBlockClone(origEl) {
     const clone = origEl.cloneNode(true);
-    const codeNodes = Array.from(clone.querySelectorAll('code'));
+    const codeNodes = Array.from(clone.querySelectorAll('code')).filter(
+      (c) => !(c.parentElement && typeof c.parentElement.closest === 'function' && c.parentElement.closest('code'))
+    );
     const savedCodes = [];
 
     for (let i = 0; i < codeNodes.length; i++) {
       const c = codeNodes[i];
+      if (!c.parentNode) continue;
       savedCodes.push(c.cloneNode(true));
-      const placeholder = document.createTextNode(`⟦C${i}⟧`);
+      const placeholder = document.createTextNode(`⟦C${savedCodes.length - 1}⟧`);
       c.parentNode.replaceChild(placeholder, c);
     }
 
@@ -3158,7 +3201,7 @@
     if (!s) return '';
     s = s.replace(/^#{1,6}\s+/, '');
     let codeIdx = 0;
-    s = s.replace(/`([^`\n]+)`/g, () => `⟦C${codeIdx++}⟧`);
+    s = s.replace(/(`+)([^\n]*?)\1/g, () => `⟦C${codeIdx++}⟧`);
     s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
     s = s.replace(/__([^_]+)__/g, '$1');
     return s.trim();
@@ -3532,8 +3575,16 @@
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
-    if (prev !== activeTranslationProvider && options.retranslate !== false && typeof retranslateVisibleThoughts === 'function') {
-      retranslateVisibleThoughts(false, _fromCrossFrame);
+    if (prev !== activeTranslationProvider) {
+      if (typeof bumpCacheEpoch === 'function') {
+        bumpCacheEpoch();
+      }
+      if (typeof resetPretranslatedHistory === 'function') {
+        resetPretranslatedHistory();
+      }
+      if (options.retranslate !== false && typeof retranslateVisibleThoughts === 'function') {
+        retranslateVisibleThoughts(false, _fromCrossFrame);
+      }
     }
     if (!_fromCrossFrame) {
       try {
@@ -3622,9 +3673,18 @@
       return inflightMap.get(clean);
     }
 
+    const reqEpoch = typeof cacheEpoch === 'number' ? cacheEpoch : 0;
+    const reqProvider = activeTranslationProvider;
+
     const runTranslation = () =>
       enqueueAdapterTask(async () => {
         if (signal && signal.aborted) return text;
+        if (
+          (typeof cacheEpoch === 'number' && cacheEpoch !== reqEpoch) ||
+          activeTranslationProvider !== reqProvider
+        ) {
+          return text;
+        }
         if (memCache.has(clean)) {
           const cached = memCache.get(clean);
           if (!isInvalidCachedOrTranslatedText(cached, clean)) {
@@ -3642,8 +3702,13 @@
           });
           if (signal && signal.aborted) return text;
           if (restored && restored !== clean && !isInvalidCachedOrTranslatedText(restored, clean)) {
-            memCache.set(clean, restored);
-            scheduleSaveCache();
+            if (
+              (typeof cacheEpoch !== 'number' || cacheEpoch === reqEpoch) &&
+              activeTranslationProvider === reqProvider
+            ) {
+              memCache.set(clean, restored);
+              scheduleSaveCache();
+            }
             return restored;
           }
         } catch (e) {
@@ -3798,6 +3863,9 @@
   window.__agySyncPersistentSettings = loadPersistentTranslatorSettings;
 
   const pretranslatedRawSet = new Set();
+  function resetPretranslatedHistory() {
+    pretranslatedRawSet.clear();
+  }
   let pretranslateRunning = false;
   let thoughtDebounceTimer = null;
   window.__agyPretranslateStats = {
@@ -4078,7 +4146,8 @@
 // Responsibility: Stylesheet injection, Native Antigravity 2.0 Settings Modal (.settings-modal-container) UI integration, and standalone Quick Translator Settings Modal (#agy-ko-translator-modal).
   const STYLE_ID = 'agy-ko-thought-style';
   const STYLE_CSS = `
-    .cursor-edit[data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap) {
+    .cursor-edit[data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap),
+    [data-agy-ko-thought-host="1"][data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap) {
       display: none !important;
     }
     .agy-ko-thought-wrap {
@@ -4087,7 +4156,8 @@
     }
     button[data-testid="thinking-collapsible-trigger"] > span[data-agy-orig-label="1"],
     button[data-testid="worked-for-collapsible"] > span[data-agy-orig-label="1"],
-    button[data-testid="tool-group-collapsible"] > span[data-agy-orig-label="1"] {
+    button[data-testid="tool-group-collapsible"] > span[data-agy-orig-label="1"],
+    [data-testid="side-question-answer"] button[aria-expanded] > span[data-agy-orig-label="1"] {
       display: none !important;
       font-size: 0 !important;
       visibility: hidden !important;
@@ -4112,13 +4182,16 @@
     [data-testid="conversation-view"][data-agy-session-switching="1"],
     [data-testid="conversation-view"][data-agy-session-switching="1"] *,
     [data-testid="subagent-tab-conversation"][data-agy-session-switching="1"],
-    [data-testid="subagent-tab-conversation"][data-agy-session-switching="1"] * {
+    [data-testid="subagent-tab-conversation"][data-agy-session-switching="1"] *,
+    [data-testid="side-question-tab-conversation"][data-agy-session-switching="1"],
+    [data-testid="side-question-tab-conversation"][data-agy-session-switching="1"] * {
       transition: none !important;
       animation: none !important;
     }
     html[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"],
     html[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"] + div,
-    html[data-agy-hide-thinking="1"] .cursor-edit {
+    html[data-agy-hide-thinking="1"] .cursor-edit,
+    html[data-agy-hide-thinking="1"] [data-agy-ko-thought-host="1"] {
       display: none !important;
     }
     .agy-ko-pill-group {
@@ -4673,8 +4746,8 @@
     llmStatusRow.className = 'agy-ko-subrow flex items-center justify-between gap-2 pt-1 text-xs text-muted-foreground flex-wrap';
     const llmStatusText = document.createElement('span');
     if (activeTranslationProvider !== 'local-llm') {
-      llmStatusText.textContent =
-        '○ 로컬 LLM 서버 자동 종료됨 (Google 번역 사용 중 — 메모리/GPU 반환)';
+      const activeProvMeta = getProviderDisplayMeta(activeTranslationProvider);
+      llmStatusText.textContent = `○ 로컬 LLM 서버 자동 종료됨 (${activeProvMeta.shortLabel} 사용 중 — 메모리/GPU 반환)`;
     } else if (resolvedLlmEndpoint && resolvedLlmEndpoint.baseUrl) {
       llmStatusText.textContent = `● 로컬 LLM 서버 연결됨: ${resolvedLlmEndpoint.baseUrl} (모델: ${resolvedLlmEndpoint.model})`;
       llmStatusText.style.color = '#58d68d';
@@ -5425,7 +5498,7 @@
         item.reject(new Error('TRANSLATE_THINKING_DISABLED'));
       } catch (e) {}
     }
-    document.querySelectorAll('.cursor-edit').forEach((el) => {
+    const resetHost = (el) => {
       if (el.__agyAbortCtrl) {
         try {
           el.__agyAbortCtrl.abort();
@@ -5441,6 +5514,17 @@
       const wrap = el.querySelector(':scope > .agy-ko-thought-wrap');
       if (wrap) wrap.remove();
       el.removeAttribute('data-agy-ko-ready');
+    };
+    document.querySelectorAll('.cursor-edit').forEach(resetHost);
+    document.querySelectorAll('[data-agy-ko-thought-host="1"]').forEach(resetHost);
+    document.querySelectorAll('[data-testid="browser-subagent-thinking"] span').forEach((el) => {
+      delete el.__agyDynamicSource;
+      delete el.__agyTranslatingDynamic;
+      if (el.firstChild && el.firstChild.__agyOrigValue !== undefined) {
+        el.firstChild.nodeValue = el.firstChild.__agyOrigValue;
+        delete el.firstChild.__agyOrigValue;
+        delete el.firstChild.__agyKoApplied;
+      }
     });
   }
 
@@ -5733,10 +5817,43 @@
       '.agy-ko-settings-root, #agy-ko-translator-modal, ' +
       '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
       'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
+      '[data-testid="side-question-answer"] button[aria-expanded], ' +
       '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
-      '[data-uri], [data-quotable-inline="true"], .cursor-edit';
+      '[data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], ' +
+      '[data-uri], [data-quotable-inline="true"], .cursor-edit, [data-agy-ko-thought-host="1"]';
     const selector = forAttributes ? baseExcluded : 'textarea, ' + baseExcluded;
     if (el.closest(selector)) {
+      return true;
+    }
+    if (!forAttributes && el.closest('[data-testid="side-question-question"]')) {
+      const txt = (el.textContent || '').trim();
+      if (
+        el.tagName === 'SPAN' &&
+        (txt === 'Side Question' ||
+          txt === 'Side Question:' ||
+          txt === '사이드 질문' ||
+          txt === '사이드 질문:' ||
+          txt === 'Help' ||
+          txt === 'Help:' ||
+          txt === '도움말' ||
+          txt === '도움말:')
+      ) {
+        return false;
+      }
+      return true;
+    }
+    if (!forAttributes && el.closest('[data-testid="side-question-answer"]')) {
+      if (
+        el.closest(
+          '[data-testid="side-question-tool-status"], [data-testid="side-question-waiting-status"], [data-testid="side-question-followup-thinking"]'
+        )
+      ) {
+        return false;
+      }
+      const txt = (el.textContent || '').trim();
+      if (txt === 'Thinking...' || txt === '생각하는 중...') {
+        return false;
+      }
       return true;
     }
     if (el.closest('[data-testid="agent-input-box"]')) {
@@ -5920,8 +6037,10 @@
     '.agy-ko-settings-root, #agy-ko-translator-modal, ' +
     '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
     'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
+    '[data-testid="side-question-answer"] button[aria-expanded], ' +
     '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
-    '[data-uri], [data-quotable-inline="true"], .cursor-edit';
+    '[data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], ' +
+    '[data-uri], [data-quotable-inline="true"], .cursor-edit, [data-agy-ko-thought-host="1"]';
 
   function localizeStaticUiInRoot(rootNode) {
     if (!rootNode) return;
@@ -6468,17 +6587,35 @@
         collapseTriggerButtonIfNeeded(btn);
       }
     }
+    const sideQuestionBtns = document.querySelectorAll('[data-testid="side-question-answer"] button[aria-expanded]');
+    for (const btn of sideQuestionBtns) {
+      processTriggerButton(btn);
+    }
   }
 
   function retranslateVisibleThoughts(clearCache = false, _fromCrossFrame = false) {
     if (clearCache) {
-      memCache.clear();
-      inflightMap.clear();
-      try {
-        localStorage.removeItem(CACHE_STORAGE_KEY);
-      } catch (e) {}
+      if (typeof clearTranslationCacheState === 'function') {
+        clearTranslationCacheState();
+      } else {
+        if (typeof bumpCacheEpoch === 'function') bumpCacheEpoch();
+        if (typeof saveCacheTimer !== 'undefined' && saveCacheTimer) {
+          clearTimeout(saveCacheTimer);
+          saveCacheTimer = null;
+        }
+        memCache.clear();
+        inflightMap.clear();
+        try {
+          localStorage.removeItem(CACHE_STORAGE_KEY);
+        } catch (e) {}
+      }
+      if (typeof resetPretranslatedHistory === 'function') {
+        resetPretranslatedHistory();
+      }
+    } else if (typeof bumpCacheEpoch === 'function') {
+      bumpCacheEpoch();
     }
-    document.querySelectorAll('.cursor-edit').forEach((el) => {
+    document.querySelectorAll('.cursor-edit, [data-agy-ko-thought-host="1"]').forEach((el) => {
       if (el.__agyAbortCtrl) {
         try {
           el.__agyAbortCtrl.abort();
@@ -6494,6 +6631,14 @@
       const wrap = el.querySelector(':scope > .agy-ko-thought-wrap');
       if (wrap) {
         Array.from(wrap.children).forEach((ch) => ch.removeAttribute('data-agy-src'));
+      }
+    });
+    document.querySelectorAll('[data-testid="browser-subagent-thinking"] span').forEach((el) => {
+      delete el.__agyDynamicSource;
+      delete el.__agyTranslatingDynamic;
+      if (el.firstChild && el.firstChild.__agyOrigValue !== undefined) {
+        el.firstChild.nodeValue = el.firstChild.__agyOrigValue;
+        delete el.firstChild.__agyKoApplied;
       }
     });
     scanThoughtBlocks();
@@ -7677,6 +7822,104 @@
     }, 60);
   }
 
+  function scanSideQuestionAndBrowserSubagentThoughts() {
+    if (!document || typeof document.querySelectorAll !== 'function') return;
+    const sqBtns = document.querySelectorAll('[data-testid="side-question-answer"] button[aria-expanded]');
+    for (const btn of sqBtns) {
+      processTriggerButton(btn);
+      const panel = btn.nextElementSibling;
+      if (!panel || panel.tagName !== 'DIV') continue;
+      let hostEl = panel.querySelector ? panel.querySelector('.cursor-edit') : null;
+      if (!hostEl && typeof panel.querySelectorAll === 'function') {
+        hostEl = Array.from(panel.querySelectorAll('div')).find(
+          (d) =>
+            String(d.className || '').includes('border-l') &&
+            Array.from(d.children || []).some(
+              (c) => c.tagName === 'DIV' && (!c.classList || !c.classList.contains('agy-ko-thought-wrap'))
+            )
+        );
+      }
+      if (
+        !hostEl &&
+        Array.from(panel.children || []).some(
+          (c) => c.tagName === 'DIV' && (!c.classList || !c.classList.contains('agy-ko-thought-wrap'))
+        )
+      ) {
+        hostEl = panel;
+      }
+      if (hostEl) {
+        if (!hostEl.classList || !hostEl.classList.contains('cursor-edit')) {
+          if (typeof hostEl.setAttribute === 'function') {
+            hostEl.setAttribute('data-agy-ko-thought-host', '1');
+          }
+        }
+        processCursorEdit(hostEl, btn);
+      }
+    }
+
+    const browserThoughtSpans = document.querySelectorAll('[data-testid="browser-subagent-thinking"] span');
+    const translateEnabled = typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true;
+    for (const el of browserThoughtSpans) {
+      if (!el.childNodes || el.childNodes.length !== 1 || el.firstChild.nodeType !== 3) continue;
+      const tn = el.firstChild;
+      if (!translateEnabled) {
+        delete el.__agyDynamicSource;
+        delete el.__agyTranslatingDynamic;
+        if (tn.__agyOrigValue !== undefined) {
+          tn.nodeValue = tn.__agyOrigValue;
+          delete tn.__agyOrigValue;
+          delete tn.__agyKoApplied;
+        }
+        continue;
+      }
+      const liveVal = tn.nodeValue || '';
+      const trimmed = liveVal.trim();
+      if (!trimmed) continue;
+      if (tn.__agyKoApplied && trimmed === tn.__agyKoApplied) continue;
+      tn.__agyOrigValue = liveVal;
+      if (isAlreadyKoreanOrNonEnglish(trimmed)) continue;
+
+      const syncKo = translateStaticUiSync(trimmed);
+      if (syncKo && syncKo !== trimmed) {
+        tn.__agyKoApplied = syncKo;
+        tn.nodeValue = syncKo;
+        continue;
+      }
+      if (memCache.has(trimmed)) {
+        const cached = memCache.get(trimmed);
+        if (!isInvalidCachedOrTranslatedText(cached, trimmed)) {
+          tn.__agyKoApplied = cached;
+          tn.nodeValue = cached;
+          continue;
+        }
+      }
+      if (el.__agyDynamicSource !== trimmed && !el.__agyTranslatingDynamic) {
+        el.__agyDynamicSource = trimmed;
+        el.__agyTranslatingDynamic = true;
+        translateThoughtTextEnToKo(trimmed)
+          .then((ko) => {
+            const wasTranslating = Boolean(el.__agyTranslatingDynamic);
+            delete el.__agyTranslatingDynamic;
+            if (disposed || !wasTranslating || !ko || ko === trimmed || el.isConnected === false) {
+              if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
+              return;
+            }
+            if (!el.firstChild || el.firstChild.nodeType !== 3 || (el.firstChild.nodeValue || '').trim() !== trimmed) {
+              if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
+              return;
+            }
+            el.firstChild.__agyOrigValue = el.firstChild.nodeValue;
+            el.firstChild.__agyKoApplied = ko;
+            el.firstChild.nodeValue = ko;
+          })
+          .catch(() => {
+            delete el.__agyTranslatingDynamic;
+            if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
+          });
+      }
+    }
+  }
+
   function scanThoughtBlocks() {
     ensureVerboseConversationStepsEnabled();
     scanTriggerButtonsSync();
@@ -7688,6 +7931,7 @@
         : null;
       processCursorEdit(cursorEdit, btn);
     }
+    scanSideQuestionAndBrowserSubagentThoughts();
     if (isPretranslateEnabled()) {
       pretranslateCollapsedThoughtsInBackground();
     }
@@ -7732,14 +7976,15 @@
         typeof document.querySelectorAll === 'function'
           ? Array.from(
               document.querySelectorAll(
-                '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"]'
+                '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]'
               )
             )
           : [];
       if (views.length === 0 && typeof document.querySelector === 'function') {
         const single =
           document.querySelector('[data-testid="conversation-view"]') ||
-          document.querySelector('[data-testid="subagent-tab-conversation"]');
+          document.querySelector('[data-testid="subagent-tab-conversation"]') ||
+          document.querySelector('[data-testid="side-question-tab-conversation"]');
         if (single) views.push(single);
       }
       if (views.length === 0) return;
@@ -7817,7 +8062,7 @@
               typeof document.querySelectorAll === 'function'
                 ? Array.from(
                     document.querySelectorAll(
-                      '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"]'
+                      '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]'
                     )
                   )
                 : targetViews;
@@ -7892,13 +8137,14 @@
       if (document.querySelectorAll) {
         document
           .querySelectorAll(
-            '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="idle-status-text"], [data-testid="conversation-navigator"]'
+            '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"], [data-testid="idle-status-text"], [data-testid="conversation-navigator"]'
           )
           .forEach((convEl) => localizeStaticUiInRoot(convEl));
       } else if (document.querySelector) {
         const convEl =
           document.querySelector('[data-testid="conversation-view"]') ||
-          document.querySelector('[data-testid="subagent-tab-conversation"]');
+          document.querySelector('[data-testid="subagent-tab-conversation"]') ||
+          document.querySelector('[data-testid="side-question-tab-conversation"]');
         if (convEl) localizeStaticUiInRoot(convEl);
       }
       const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');
@@ -7920,6 +8166,7 @@
           : null;
         processCursorEdit(cursorEdit, btn);
       }
+      scanSideQuestionAndBrowserSubagentThoughts();
       if (typeof observer !== 'undefined' && observer && typeof observer.takeRecords === 'function') {
         observer.takeRecords();
       }
@@ -8085,7 +8332,7 @@
     }
     delete window.__agyKoLocalizerActive;
     unregisterStatusbarTranslatorAdapter(fullRestore);
-    document.querySelectorAll('.cursor-edit').forEach((el) => {
+    document.querySelectorAll('.cursor-edit, [data-agy-ko-thought-host="1"]').forEach((el) => {
       if (el.__agyAbortCtrl) {
         try {
           el.__agyAbortCtrl.abort();
@@ -8126,9 +8373,12 @@
         el.removeAttribute('data-agy-orig-label');
         el.style.display = '';
       });
-      document.querySelectorAll('.cursor-edit[data-agy-ko-ready]').forEach((el) => {
-        el.removeAttribute('data-agy-ko-ready');
-      });
+      document
+        .querySelectorAll('.cursor-edit[data-agy-ko-ready], [data-agy-ko-thought-host="1"]')
+        .forEach((el) => {
+          el.removeAttribute('data-agy-ko-ready');
+          el.removeAttribute('data-agy-ko-thought-host');
+        });
       document.querySelectorAll('[data-agy-auto-expanded]').forEach((el) => {
         el.removeAttribute('data-agy-auto-expanded');
       });

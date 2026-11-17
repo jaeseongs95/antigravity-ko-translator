@@ -101,7 +101,7 @@
         item.reject(new Error('TRANSLATE_THINKING_DISABLED'));
       } catch (e) {}
     }
-    document.querySelectorAll('.cursor-edit').forEach((el) => {
+    const resetHost = (el) => {
       if (el.__agyAbortCtrl) {
         try {
           el.__agyAbortCtrl.abort();
@@ -117,6 +117,17 @@
       const wrap = el.querySelector(':scope > .agy-ko-thought-wrap');
       if (wrap) wrap.remove();
       el.removeAttribute('data-agy-ko-ready');
+    };
+    document.querySelectorAll('.cursor-edit').forEach(resetHost);
+    document.querySelectorAll('[data-agy-ko-thought-host="1"]').forEach(resetHost);
+    document.querySelectorAll('[data-testid="browser-subagent-thinking"] span').forEach((el) => {
+      delete el.__agyDynamicSource;
+      delete el.__agyTranslatingDynamic;
+      if (el.firstChild && el.firstChild.__agyOrigValue !== undefined) {
+        el.firstChild.nodeValue = el.firstChild.__agyOrigValue;
+        delete el.firstChild.__agyOrigValue;
+        delete el.firstChild.__agyKoApplied;
+      }
     });
   }
 
@@ -409,10 +420,43 @@
       '.agy-ko-settings-root, #agy-ko-translator-modal, ' +
       '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
       'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
+      '[data-testid="side-question-answer"] button[aria-expanded], ' +
       '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
-      '[data-uri], [data-quotable-inline="true"], .cursor-edit';
+      '[data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], ' +
+      '[data-uri], [data-quotable-inline="true"], .cursor-edit, [data-agy-ko-thought-host="1"]';
     const selector = forAttributes ? baseExcluded : 'textarea, ' + baseExcluded;
     if (el.closest(selector)) {
+      return true;
+    }
+    if (!forAttributes && el.closest('[data-testid="side-question-question"]')) {
+      const txt = (el.textContent || '').trim();
+      if (
+        el.tagName === 'SPAN' &&
+        (txt === 'Side Question' ||
+          txt === 'Side Question:' ||
+          txt === '사이드 질문' ||
+          txt === '사이드 질문:' ||
+          txt === 'Help' ||
+          txt === 'Help:' ||
+          txt === '도움말' ||
+          txt === '도움말:')
+      ) {
+        return false;
+      }
+      return true;
+    }
+    if (!forAttributes && el.closest('[data-testid="side-question-answer"]')) {
+      if (
+        el.closest(
+          '[data-testid="side-question-tool-status"], [data-testid="side-question-waiting-status"], [data-testid="side-question-followup-thinking"]'
+        )
+      ) {
+        return false;
+      }
+      const txt = (el.textContent || '').trim();
+      if (txt === 'Thinking...' || txt === '생각하는 중...') {
+        return false;
+      }
       return true;
     }
     if (el.closest('[data-testid="agent-input-box"]')) {
@@ -596,8 +640,10 @@
     '.agy-ko-settings-root, #agy-ko-translator-modal, ' +
     '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
     'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
+    '[data-testid="side-question-answer"] button[aria-expanded], ' +
     '[data-testid="planner-response-text"], [data-testid="user-message-bubble"], ' +
-    '[data-uri], [data-quotable-inline="true"], .cursor-edit';
+    '[data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], ' +
+    '[data-uri], [data-quotable-inline="true"], .cursor-edit, [data-agy-ko-thought-host="1"]';
 
   function localizeStaticUiInRoot(rootNode) {
     if (!rootNode) return;
@@ -1144,17 +1190,35 @@
         collapseTriggerButtonIfNeeded(btn);
       }
     }
+    const sideQuestionBtns = document.querySelectorAll('[data-testid="side-question-answer"] button[aria-expanded]');
+    for (const btn of sideQuestionBtns) {
+      processTriggerButton(btn);
+    }
   }
 
   function retranslateVisibleThoughts(clearCache = false, _fromCrossFrame = false) {
     if (clearCache) {
-      memCache.clear();
-      inflightMap.clear();
-      try {
-        localStorage.removeItem(CACHE_STORAGE_KEY);
-      } catch (e) {}
+      if (typeof clearTranslationCacheState === 'function') {
+        clearTranslationCacheState();
+      } else {
+        if (typeof bumpCacheEpoch === 'function') bumpCacheEpoch();
+        if (typeof saveCacheTimer !== 'undefined' && saveCacheTimer) {
+          clearTimeout(saveCacheTimer);
+          saveCacheTimer = null;
+        }
+        memCache.clear();
+        inflightMap.clear();
+        try {
+          localStorage.removeItem(CACHE_STORAGE_KEY);
+        } catch (e) {}
+      }
+      if (typeof resetPretranslatedHistory === 'function') {
+        resetPretranslatedHistory();
+      }
+    } else if (typeof bumpCacheEpoch === 'function') {
+      bumpCacheEpoch();
     }
-    document.querySelectorAll('.cursor-edit').forEach((el) => {
+    document.querySelectorAll('.cursor-edit, [data-agy-ko-thought-host="1"]').forEach((el) => {
       if (el.__agyAbortCtrl) {
         try {
           el.__agyAbortCtrl.abort();
@@ -1170,6 +1234,14 @@
       const wrap = el.querySelector(':scope > .agy-ko-thought-wrap');
       if (wrap) {
         Array.from(wrap.children).forEach((ch) => ch.removeAttribute('data-agy-src'));
+      }
+    });
+    document.querySelectorAll('[data-testid="browser-subagent-thinking"] span').forEach((el) => {
+      delete el.__agyDynamicSource;
+      delete el.__agyTranslatingDynamic;
+      if (el.firstChild && el.firstChild.__agyOrigValue !== undefined) {
+        el.firstChild.nodeValue = el.firstChild.__agyOrigValue;
+        delete el.firstChild.__agyKoApplied;
       }
     });
     scanThoughtBlocks();
@@ -2353,6 +2425,104 @@
     }, 60);
   }
 
+  function scanSideQuestionAndBrowserSubagentThoughts() {
+    if (!document || typeof document.querySelectorAll !== 'function') return;
+    const sqBtns = document.querySelectorAll('[data-testid="side-question-answer"] button[aria-expanded]');
+    for (const btn of sqBtns) {
+      processTriggerButton(btn);
+      const panel = btn.nextElementSibling;
+      if (!panel || panel.tagName !== 'DIV') continue;
+      let hostEl = panel.querySelector ? panel.querySelector('.cursor-edit') : null;
+      if (!hostEl && typeof panel.querySelectorAll === 'function') {
+        hostEl = Array.from(panel.querySelectorAll('div')).find(
+          (d) =>
+            String(d.className || '').includes('border-l') &&
+            Array.from(d.children || []).some(
+              (c) => c.tagName === 'DIV' && (!c.classList || !c.classList.contains('agy-ko-thought-wrap'))
+            )
+        );
+      }
+      if (
+        !hostEl &&
+        Array.from(panel.children || []).some(
+          (c) => c.tagName === 'DIV' && (!c.classList || !c.classList.contains('agy-ko-thought-wrap'))
+        )
+      ) {
+        hostEl = panel;
+      }
+      if (hostEl) {
+        if (!hostEl.classList || !hostEl.classList.contains('cursor-edit')) {
+          if (typeof hostEl.setAttribute === 'function') {
+            hostEl.setAttribute('data-agy-ko-thought-host', '1');
+          }
+        }
+        processCursorEdit(hostEl, btn);
+      }
+    }
+
+    const browserThoughtSpans = document.querySelectorAll('[data-testid="browser-subagent-thinking"] span');
+    const translateEnabled = typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true;
+    for (const el of browserThoughtSpans) {
+      if (!el.childNodes || el.childNodes.length !== 1 || el.firstChild.nodeType !== 3) continue;
+      const tn = el.firstChild;
+      if (!translateEnabled) {
+        delete el.__agyDynamicSource;
+        delete el.__agyTranslatingDynamic;
+        if (tn.__agyOrigValue !== undefined) {
+          tn.nodeValue = tn.__agyOrigValue;
+          delete tn.__agyOrigValue;
+          delete tn.__agyKoApplied;
+        }
+        continue;
+      }
+      const liveVal = tn.nodeValue || '';
+      const trimmed = liveVal.trim();
+      if (!trimmed) continue;
+      if (tn.__agyKoApplied && trimmed === tn.__agyKoApplied) continue;
+      tn.__agyOrigValue = liveVal;
+      if (isAlreadyKoreanOrNonEnglish(trimmed)) continue;
+
+      const syncKo = translateStaticUiSync(trimmed);
+      if (syncKo && syncKo !== trimmed) {
+        tn.__agyKoApplied = syncKo;
+        tn.nodeValue = syncKo;
+        continue;
+      }
+      if (memCache.has(trimmed)) {
+        const cached = memCache.get(trimmed);
+        if (!isInvalidCachedOrTranslatedText(cached, trimmed)) {
+          tn.__agyKoApplied = cached;
+          tn.nodeValue = cached;
+          continue;
+        }
+      }
+      if (el.__agyDynamicSource !== trimmed && !el.__agyTranslatingDynamic) {
+        el.__agyDynamicSource = trimmed;
+        el.__agyTranslatingDynamic = true;
+        translateThoughtTextEnToKo(trimmed)
+          .then((ko) => {
+            const wasTranslating = Boolean(el.__agyTranslatingDynamic);
+            delete el.__agyTranslatingDynamic;
+            if (disposed || !wasTranslating || !ko || ko === trimmed || el.isConnected === false) {
+              if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
+              return;
+            }
+            if (!el.firstChild || el.firstChild.nodeType !== 3 || (el.firstChild.nodeValue || '').trim() !== trimmed) {
+              if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
+              return;
+            }
+            el.firstChild.__agyOrigValue = el.firstChild.nodeValue;
+            el.firstChild.__agyKoApplied = ko;
+            el.firstChild.nodeValue = ko;
+          })
+          .catch(() => {
+            delete el.__agyTranslatingDynamic;
+            if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
+          });
+      }
+    }
+  }
+
   function scanThoughtBlocks() {
     ensureVerboseConversationStepsEnabled();
     scanTriggerButtonsSync();
@@ -2364,6 +2534,7 @@
         : null;
       processCursorEdit(cursorEdit, btn);
     }
+    scanSideQuestionAndBrowserSubagentThoughts();
     if (isPretranslateEnabled()) {
       pretranslateCollapsedThoughtsInBackground();
     }
@@ -2408,14 +2579,15 @@
         typeof document.querySelectorAll === 'function'
           ? Array.from(
               document.querySelectorAll(
-                '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"]'
+                '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]'
               )
             )
           : [];
       if (views.length === 0 && typeof document.querySelector === 'function') {
         const single =
           document.querySelector('[data-testid="conversation-view"]') ||
-          document.querySelector('[data-testid="subagent-tab-conversation"]');
+          document.querySelector('[data-testid="subagent-tab-conversation"]') ||
+          document.querySelector('[data-testid="side-question-tab-conversation"]');
         if (single) views.push(single);
       }
       if (views.length === 0) return;
@@ -2493,7 +2665,7 @@
               typeof document.querySelectorAll === 'function'
                 ? Array.from(
                     document.querySelectorAll(
-                      '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"]'
+                      '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]'
                     )
                   )
                 : targetViews;
@@ -2568,13 +2740,14 @@
       if (document.querySelectorAll) {
         document
           .querySelectorAll(
-            '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="idle-status-text"], [data-testid="conversation-navigator"]'
+            '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"], [data-testid="idle-status-text"], [data-testid="conversation-navigator"]'
           )
           .forEach((convEl) => localizeStaticUiInRoot(convEl));
       } else if (document.querySelector) {
         const convEl =
           document.querySelector('[data-testid="conversation-view"]') ||
-          document.querySelector('[data-testid="subagent-tab-conversation"]');
+          document.querySelector('[data-testid="subagent-tab-conversation"]') ||
+          document.querySelector('[data-testid="side-question-tab-conversation"]');
         if (convEl) localizeStaticUiInRoot(convEl);
       }
       const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');
@@ -2596,6 +2769,7 @@
           : null;
         processCursorEdit(cursorEdit, btn);
       }
+      scanSideQuestionAndBrowserSubagentThoughts();
       if (typeof observer !== 'undefined' && observer && typeof observer.takeRecords === 'function') {
         observer.takeRecords();
       }
@@ -2761,7 +2935,7 @@
     }
     delete window.__agyKoLocalizerActive;
     unregisterStatusbarTranslatorAdapter(fullRestore);
-    document.querySelectorAll('.cursor-edit').forEach((el) => {
+    document.querySelectorAll('.cursor-edit, [data-agy-ko-thought-host="1"]').forEach((el) => {
       if (el.__agyAbortCtrl) {
         try {
           el.__agyAbortCtrl.abort();
@@ -2802,9 +2976,12 @@
         el.removeAttribute('data-agy-orig-label');
         el.style.display = '';
       });
-      document.querySelectorAll('.cursor-edit[data-agy-ko-ready]').forEach((el) => {
-        el.removeAttribute('data-agy-ko-ready');
-      });
+      document
+        .querySelectorAll('.cursor-edit[data-agy-ko-ready], [data-agy-ko-thought-host="1"]')
+        .forEach((el) => {
+          el.removeAttribute('data-agy-ko-ready');
+          el.removeAttribute('data-agy-ko-thought-host');
+        });
       document.querySelectorAll('[data-agy-auto-expanded]').forEach((el) => {
         el.removeAttribute('data-agy-auto-expanded');
       });

@@ -2,7 +2,8 @@
 // Responsibility: Stylesheet injection, Native Antigravity 2.0 Settings Modal (.settings-modal-container) UI integration, and standalone Quick Translator Settings Modal (#agy-ko-translator-modal).
   const STYLE_ID = 'agy-ko-thought-style';
   const STYLE_CSS = `
-    .cursor-edit[data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap) {
+    .cursor-edit[data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap),
+    [data-agy-ko-thought-host="1"][data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap) {
       display: none !important;
     }
     .agy-ko-thought-wrap {
@@ -11,7 +12,8 @@
     }
     button[data-testid="thinking-collapsible-trigger"] > span[data-agy-orig-label="1"],
     button[data-testid="worked-for-collapsible"] > span[data-agy-orig-label="1"],
-    button[data-testid="tool-group-collapsible"] > span[data-agy-orig-label="1"] {
+    button[data-testid="tool-group-collapsible"] > span[data-agy-orig-label="1"],
+    [data-testid="side-question-answer"] button[aria-expanded] > span[data-agy-orig-label="1"] {
       display: none !important;
       font-size: 0 !important;
       visibility: hidden !important;
@@ -36,13 +38,16 @@
     [data-testid="conversation-view"][data-agy-session-switching="1"],
     [data-testid="conversation-view"][data-agy-session-switching="1"] *,
     [data-testid="subagent-tab-conversation"][data-agy-session-switching="1"],
-    [data-testid="subagent-tab-conversation"][data-agy-session-switching="1"] * {
+    [data-testid="subagent-tab-conversation"][data-agy-session-switching="1"] *,
+    [data-testid="side-question-tab-conversation"][data-agy-session-switching="1"],
+    [data-testid="side-question-tab-conversation"][data-agy-session-switching="1"] * {
       transition: none !important;
       animation: none !important;
     }
     html[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"],
     html[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"] + div,
-    html[data-agy-hide-thinking="1"] .cursor-edit {
+    html[data-agy-hide-thinking="1"] .cursor-edit,
+    html[data-agy-hide-thinking="1"] [data-agy-ko-thought-host="1"] {
       display: none !important;
     }
     .agy-ko-pill-group {
@@ -597,8 +602,8 @@
     llmStatusRow.className = 'agy-ko-subrow flex items-center justify-between gap-2 pt-1 text-xs text-muted-foreground flex-wrap';
     const llmStatusText = document.createElement('span');
     if (activeTranslationProvider !== 'local-llm') {
-      llmStatusText.textContent =
-        '○ 로컬 LLM 서버 자동 종료됨 (Google 번역 사용 중 — 메모리/GPU 반환)';
+      const activeProvMeta = getProviderDisplayMeta(activeTranslationProvider);
+      llmStatusText.textContent = `○ 로컬 LLM 서버 자동 종료됨 (${activeProvMeta.shortLabel} 사용 중 — 메모리/GPU 반환)`;
     } else if (resolvedLlmEndpoint && resolvedLlmEndpoint.baseUrl) {
       llmStatusText.textContent = `● 로컬 LLM 서버 연결됨: ${resolvedLlmEndpoint.baseUrl} (모델: ${resolvedLlmEndpoint.model})`;
       llmStatusText.style.color = '#58d68d';

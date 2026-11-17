@@ -424,6 +424,12 @@ function configureTargetViaCdp(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) 
   });
 }
 
+function isInjectablePageTarget(t) {
+  if (!t || t.type !== 'page') return false;
+  const url = String(t.url || '').trim();
+  return /^https?:\/\//i.test(url);
+}
+
 async function injectViaBrowserCdpWs(wsUrl, scriptCode, scriptHash, timeoutMs = 1500) {
   if (typeof WebSocket !== 'function') {
     return { pageTargetCount: 0, injectedCount: 0, skippedAlreadyActive: 0 };
@@ -468,8 +474,8 @@ async function injectViaBrowserCdpWs(wsUrl, scriptCode, scriptHash, timeoutMs = 
     ws.onopen = async () => {
       try {
         const { targetInfos } = await call('Target.getTargets');
-        const pages = (Array.isArray(targetInfos) ? targetInfos : []).filter(
-          (t) => t && t.type === 'page' && !String(t.url || '').startsWith('devtools://')
+        const pages = (Array.isArray(targetInfos) ? targetInfos : []).filter((t) =>
+          isInjectablePageTarget(t)
         );
         let injectedCount = 0;
         let skippedAlreadyActive = 0;
@@ -523,7 +529,7 @@ async function injectViaCdpLive() {
     targets = await httpGetJson(port, '/json/list', 1500);
   } catch {}
   const pageTargets = (Array.isArray(targets) ? targets : []).filter(
-    (t) => t && t.type === 'page' && t.webSocketDebuggerUrl && !String(t.url || '').startsWith('devtools://')
+    (t) => isInjectablePageTarget(t) && Boolean(t.webSocketDebuggerUrl)
   );
 
   let injectedCount = 0;
@@ -845,6 +851,7 @@ module.exports = {
   computeIntegrity,
   transformExactSize,
   isAsarPatchedFast,
+  isInjectablePageTarget,
   syncAppStorageCode,
   acquireLock,
   releaseLock,

@@ -174,13 +174,16 @@
 
   function tokenizeBlockClone(origEl) {
     const clone = origEl.cloneNode(true);
-    const codeNodes = Array.from(clone.querySelectorAll('code'));
+    const codeNodes = Array.from(clone.querySelectorAll('code')).filter(
+      (c) => !(c.parentElement && typeof c.parentElement.closest === 'function' && c.parentElement.closest('code'))
+    );
     const savedCodes = [];
 
     for (let i = 0; i < codeNodes.length; i++) {
       const c = codeNodes[i];
+      if (!c.parentNode) continue;
       savedCodes.push(c.cloneNode(true));
-      const placeholder = document.createTextNode(`⟦C${i}⟧`);
+      const placeholder = document.createTextNode(`⟦C${savedCodes.length - 1}⟧`);
       c.parentNode.replaceChild(placeholder, c);
     }
 
@@ -241,7 +244,7 @@
     if (!s) return '';
     s = s.replace(/^#{1,6}\s+/, '');
     let codeIdx = 0;
-    s = s.replace(/`([^`\n]+)`/g, () => `⟦C${codeIdx++}⟧`);
+    s = s.replace(/(`+)([^\n]*?)\1/g, () => `⟦C${codeIdx++}⟧`);
     s = s.replace(/\*\*([^*]+)\*\*/g, '$1');
     s = s.replace(/__([^_]+)__/g, '$1');
     return s.trim();

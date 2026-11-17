@@ -48,8 +48,10 @@ function parsePretranslateCliArg(args) {
 
 function normalizeProviderName(raw) {
   const val = String(raw || '').trim().toLowerCase();
+  if (!val) return null;
   if (val === 'google' || val === 'gtx' || val === 'google-translate') return 'google-translate';
   if (val === 'local' || val === 'llm' || val === 'ollama' || val === 'local-llm') return 'local-llm';
+  if (/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(val)) return val;
   return null;
 }
 
@@ -92,13 +94,19 @@ function writeFileAtomicSync(targetPath, content) {
   }
 }
 
-function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider = null) {
+function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider = null, pathOverrides = null) {
+  const configPath = (pathOverrides && pathOverrides.configPath) || CONFIG_JSON_PATH;
+  const appStoragePath = (pathOverrides && pathOverrides.appStoragePath) || APP_STORAGE_PATH;
+  const normalizedExplicitProvider =
+    explicitProvider !== null && explicitProvider !== undefined
+      ? normalizeProviderName(explicitProvider)
+      : null;
   let enabled = false;
   let provider = 'google-translate';
   let appStorage = null;
   try {
-    if (fs.existsSync(APP_STORAGE_PATH)) {
-      appStorage = JSON.parse(fs.readFileSync(APP_STORAGE_PATH, 'utf8'));
+    if (fs.existsSync(appStoragePath)) {
+      appStorage = JSON.parse(fs.readFileSync(appStoragePath, 'utf8'));
     }
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] app_storage.json read error: ${err.message}\n`);
@@ -106,8 +114,8 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
 
   try {
     let cfg = {};
-    if (fs.existsSync(CONFIG_JSON_PATH)) {
-      cfg = JSON.parse(fs.readFileSync(CONFIG_JSON_PATH, 'utf8'));
+    if (fs.existsSync(configPath)) {
+      cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     }
     const existingEntry = cfg?.plugins?.['ko-thought-translator'] || {};
     const configPre =
@@ -132,13 +140,13 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
         ? storagePre
         : false;
     provider =
-      explicitProvider !== null
-        ? explicitProvider
+      normalizedExplicitProvider !== null
+        ? normalizedExplicitProvider
         : configProv || storageProv || 'google-translate';
 
     if (
       explicitPretranslate !== null ||
-      explicitProvider !== null ||
+      normalizedExplicitProvider !== null ||
       existingEntry.pretranslate !== enabled ||
       existingEntry.provider !== provider
     ) {
@@ -149,20 +157,20 @@ function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider
         pretranslate: enabled,
         provider,
       };
-      writeFileAtomicSync(CONFIG_JSON_PATH, JSON.stringify(cfg, null, 2) + '\n');
+      writeFileAtomicSync(configPath, JSON.stringify(cfg, null, 2) + '\n');
     }
 
     const desiredPreStr = enabled ? '1' : '0';
     if (
       appStorage &&
       (explicitPretranslate !== null ||
-        explicitProvider !== null ||
+        normalizedExplicitProvider !== null ||
         appStorage['agy-ko-thought-pretranslate'] !== desiredPreStr ||
         appStorage['agy-ko-thought-provider'] !== provider)
     ) {
       appStorage['agy-ko-thought-pretranslate'] = desiredPreStr;
       appStorage['agy-ko-thought-provider'] = provider;
-      writeFileAtomicSync(APP_STORAGE_PATH, JSON.stringify(appStorage, null, 2));
+      writeFileAtomicSync(appStoragePath, JSON.stringify(appStorage, null, 2));
     }
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] config sync error: ${err.message}\n`);

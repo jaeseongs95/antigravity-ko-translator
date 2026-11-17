@@ -21,6 +21,7 @@ const {
 } = require('./paths');
 const {
   isPluginEnabled,
+  normalizeProviderName,
   getOrSetTranslatorOptions,
   writeFileAtomicSync,
 } = require('./settings-storage');
@@ -59,7 +60,7 @@ function assembleRendererSourceFromModules() {
     `// ==UserScript==\n` +
     `// @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)\n` +
     `// @namespace    https://github.com/jaeseongs95/antigravity-ko-translator\n` +
-    `// @version      1.2.35\n` +
+    `// @version      1.2.36\n` +
     `// @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.\n` +
     `// @match        https://antigravity.google.com/*\n` +
     `// @match        https://*.antigravity.google.com/*\n` +
@@ -72,7 +73,18 @@ function assembleRendererSourceFromModules() {
     `  const window = __agyWin || (typeof globalThis !== 'undefined' ? globalThis.window : undefined);\n` +
     `  const document = __agyDoc || (window ? window.document : undefined);\n` +
     `  if (!window || !document) return;\n` +
-    `  const localStorage = window.localStorage;\n` +
+    `  const localStorage = (() => {\n` +
+    `    try {\n` +
+    `      const ls = window.localStorage;\n` +
+    `      if (ls && typeof ls.getItem === 'function') return ls;\n` +
+    `    } catch (e) {}\n` +
+    `    const fallbackMap = new Map();\n` +
+    `    return {\n` +
+    `      getItem: (k) => (fallbackMap.has(String(k)) ? fallbackMap.get(String(k)) : null),\n` +
+    `      setItem: (k, v) => { fallbackMap.set(String(k), String(v)); },\n` +
+    `      removeItem: (k) => { fallbackMap.delete(String(k)); },\n` +
+    `    };\n` +
+    `  })();\n` +
     `  const fetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : (typeof globalThis.fetch === 'function' ? globalThis.fetch : undefined);\n` +
     `  const MutationObserver = window.MutationObserver || (typeof globalThis !== 'undefined' ? globalThis.MutationObserver : undefined);\n` +
     `  const Node = window.Node || (typeof globalThis !== 'undefined' ? globalThis.Node : undefined);\n` +
@@ -112,6 +124,8 @@ function resolveEffectiveOptions(pretranslateEnabled = null, translationProvider
 
 function buildRuntimeConfiguredBundle(pretranslateEnabled = null, translationProvider = null) {
   const effective = resolveEffectiveOptions(pretranslateEnabled, translationProvider);
+  const safeProvider = normalizeProviderName(effective.translationProvider) || 'google-translate';
+  const escapedSingleQuoted = `'${JSON.stringify(safeProvider).slice(1, -1).replace(/'/g, "\\'")}'`;
   const canonicalSource = assembleRendererSourceFromModules();
   return canonicalSource
     .trim()
@@ -120,8 +134,8 @@ function buildRuntimeConfiguredBundle(pretranslateEnabled = null, translationPro
       `const DEFAULT_PRETRANSLATE_ENABLED = ${effective.pretranslateEnabled ? 'true' : 'false'};`
     )
     .replace(
-      /const DEFAULT_TRANSLATION_PROVIDER = '[^']+';/,
-      `const DEFAULT_TRANSLATION_PROVIDER = '${effective.translationProvider}';`
+      /const DEFAULT_TRANSLATION_PROVIDER = (?:'[^']+'|"[^"]+");/,
+      `const DEFAULT_TRANSLATION_PROVIDER = ${escapedSingleQuoted};`
     );
 }
 

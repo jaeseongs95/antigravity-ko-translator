@@ -129,6 +129,9 @@
   window.__agySyncPersistentSettings = loadPersistentTranslatorSettings;
 
   const pretranslatedRawSet = new Set();
+  function resetPretranslatedHistory() {
+    pretranslatedRawSet.clear();
+  }
   let pretranslateRunning = false;
   let thoughtDebounceTimer = null;
   window.__agyPretranslateStats = {

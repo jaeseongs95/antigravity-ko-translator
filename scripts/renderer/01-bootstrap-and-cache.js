@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
 // Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.30';
+  const KO_LOCALIZER_VERSION = 'v13.31';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -147,7 +147,26 @@
     return false;
   }
 
+  let cacheEpoch = 0;
+  function bumpCacheEpoch() {
+    cacheEpoch += 1;
+    return cacheEpoch;
+  }
+
   let saveCacheTimer = null;
+  function clearTranslationCacheState() {
+    bumpCacheEpoch();
+    if (saveCacheTimer) {
+      clearTimeout(saveCacheTimer);
+      saveCacheTimer = null;
+    }
+    memCache.clear();
+    inflightMap.clear();
+    try {
+      localStorage.removeItem(CACHE_STORAGE_KEY);
+    } catch (e) {}
+  }
+
   function enforceMemCacheBound() {
     while (memCache.size > MAX_CACHE_ENTRIES) {
       const oldestKey = memCache.keys().next().value;

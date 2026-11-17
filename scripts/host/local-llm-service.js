@@ -4,9 +4,10 @@
  * headless GPU startup via `windowsHide: true` / `CREATE_NO_WINDOW`, and port-based process tree termination).
  */
 
+const fs = require('fs');
 const http = require('http');
 const { spawnSync, spawn } = require('child_process');
-const { LLM_BASE_URL } = require('./paths');
+const { LLM_BASE_URL, DEVTOOLS_PORT_FILE } = require('./paths');
 
 function readWindowsUserEnv(varName) {
   if (process.platform !== 'win32') return null;
@@ -128,7 +129,59 @@ function resolveLocalLlmCommand() {
   };
 }
 
-function probeLocalLlmServer(timeoutMs = 500) {
+async function resolveProbeOrigin(options = {}) {
+  if (options && typeof options.probeOrigin === 'string' && options.probeOrigin.trim()) {
+    return options.probeOrigin.trim();
+  }
+  const envOrigin = (
+    process.env.AGY_FRONTEND_ORIGIN ||
+    readWindowsUserEnv('AGY_FRONTEND_ORIGIN') ||
+    ''
+  ).trim();
+  if (envOrigin) return envOrigin;
+
+  try {
+    if (DEVTOOLS_PORT_FILE && fs.existsSync(DEVTOOLS_PORT_FILE)) {
+      const lines = fs.readFileSync(DEVTOOLS_PORT_FILE, 'utf8').trim().split(/\r?\n/);
+      const dtPort = parseInt(lines[0], 10);
+      if (dtPort && !Number.isNaN(dtPort)) {
+        const discovered = await new Promise((resolve) => {
+          const req = http.get(
+            { host: '127.0.0.1', port: dtPort, path: '/json/list', timeout: 120 },
+            (res) => {
+              let raw = '';
+              res.on('data', (c) => {
+                raw += c;
+              });
+              res.on('end', () => {
+                try {
+                  const list = JSON.parse(raw);
+                  const wb = Array.isArray(list)
+                    ? list.find((t) => t && t.type === 'page' && /^https?:\/\//i.test(String(t.url || '')))
+                    : null;
+                  resolve(wb ? new URL(wb.url).origin : null);
+                } catch {
+                  resolve(null);
+                }
+              });
+            }
+          );
+          req.on('timeout', () => {
+            req.destroy();
+            resolve(null);
+          });
+          req.on('error', () => resolve(null));
+        });
+        if (discovered) return discovered;
+      }
+    }
+  } catch {}
+
+  return 'https://127.0.0.1';
+}
+
+async function probeLocalLlmServer(timeoutMs = 500, options = {}) {
+  const probeOrigin = await resolveProbeOrigin(options);
   return new Promise((resolve) => {
     let settled = false;
     const done = (result) => {
@@ -145,7 +198,7 @@ function probeLocalLlmServer(timeoutMs = 500) {
           port: url.port || 11434,
           path: url.pathname,
           method: 'GET',
-          headers: { Origin: 'https://127.0.0.1:58033' },
+          headers: { Origin: probeOrigin },
           timeout: timeoutMs,
         },
         (res) => {
@@ -160,11 +213,16 @@ function probeLocalLlmServer(timeoutMs = 500) {
               const parsed = JSON.parse(body);
               models = Array.isArray(parsed?.data) ? parsed.data.map((m) => m.id) : [];
             } catch {}
+            const corsAllowed =
+              corsOrigin === '*' ||
+              corsOrigin === probeOrigin ||
+              (probeOrigin === 'https://127.0.0.1' && corsOrigin.includes('127.0.0.1'));
             done({
               reachable: true,
               statusCode: res.statusCode,
-              corsAllowed: corsOrigin === '*' || corsOrigin.includes('127.0.0.1'),
+              corsAllowed,
               corsOrigin,
+              probeOrigin,
               models,
             });
           });
@@ -172,26 +230,27 @@ function probeLocalLlmServer(timeoutMs = 500) {
       );
       req.on('timeout', () => {
         req.destroy();
-        done({ reachable: false, corsAllowed: false, models: [] });
+        done({ reachable: false, corsAllowed: false, probeOrigin, models: [] });
       });
-      req.on('error', () => done({ reachable: false, corsAllowed: false, models: [] }));
+      req.on('error', () => done({ reachable: false, corsAllowed: false, probeOrigin, models: [] }));
       req.end();
     } catch {
-      done({ reachable: false, corsAllowed: false, models: [] });
+      done({ reachable: false, corsAllowed: false, probeOrigin, models: [] });
     }
   });
 }
 
-async function ensureLocalLlmServer(pluginEnabled = true) {
+async function ensureLocalLlmServer(pluginEnabled = true, options = {}) {
   if (!pluginEnabled) return { skipped: true };
-  const probe = await probeLocalLlmServer(450);
-  if (probe.reachable && probe.corsAllowed) {
+  const probe = await probeLocalLlmServer(450, options);
+  if (probe.reachable) {
     return probe;
   }
   const cmd = resolveLocalLlmCommand();
   if (!cmd) return probe;
+  const spawnImpl = options && typeof options.spawnFn === 'function' ? options.spawnFn : spawn;
   try {
-    const child = spawn(cmd.bin, cmd.args, {
+    const child = spawnImpl(cmd.bin, cmd.args, {
       detached: true,
       stdio: 'ignore',
       windowsHide: true,

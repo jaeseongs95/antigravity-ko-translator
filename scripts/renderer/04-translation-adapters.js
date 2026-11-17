@@ -342,8 +342,16 @@
     if (typeof refreshTranslatorSettingsUi === 'function') {
       refreshTranslatorSettingsUi();
     }
-    if (prev !== activeTranslationProvider && options.retranslate !== false && typeof retranslateVisibleThoughts === 'function') {
-      retranslateVisibleThoughts(false, _fromCrossFrame);
+    if (prev !== activeTranslationProvider) {
+      if (typeof bumpCacheEpoch === 'function') {
+        bumpCacheEpoch();
+      }
+      if (typeof resetPretranslatedHistory === 'function') {
+        resetPretranslatedHistory();
+      }
+      if (options.retranslate !== false && typeof retranslateVisibleThoughts === 'function') {
+        retranslateVisibleThoughts(false, _fromCrossFrame);
+      }
     }
     if (!_fromCrossFrame) {
       try {
@@ -432,9 +440,18 @@
       return inflightMap.get(clean);
     }
 
+    const reqEpoch = typeof cacheEpoch === 'number' ? cacheEpoch : 0;
+    const reqProvider = activeTranslationProvider;
+
     const runTranslation = () =>
       enqueueAdapterTask(async () => {
         if (signal && signal.aborted) return text;
+        if (
+          (typeof cacheEpoch === 'number' && cacheEpoch !== reqEpoch) ||
+          activeTranslationProvider !== reqProvider
+        ) {
+          return text;
+        }
         if (memCache.has(clean)) {
           const cached = memCache.get(clean);
           if (!isInvalidCachedOrTranslatedText(cached, clean)) {
@@ -452,8 +469,13 @@
           });
           if (signal && signal.aborted) return text;
           if (restored && restored !== clean && !isInvalidCachedOrTranslatedText(restored, clean)) {
-            memCache.set(clean, restored);
-            scheduleSaveCache();
+            if (
+              (typeof cacheEpoch !== 'number' || cacheEpoch === reqEpoch) &&
+              activeTranslationProvider === reqProvider
+            ) {
+              memCache.set(clean, restored);
+              scheduleSaveCache();
+            }
             return restored;
           }
         } catch (e) {

@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop, 'fix/**', 'feature/**', 'release/**', 'hotfix/**']
     tags: ['v*']
   pull_request:
-    branches: [main]
+    branches: [main, develop, 'fix/**', 'feature/**', 'release/**', 'hotfix/**']
   workflow_dispatch:
 
 jobs:

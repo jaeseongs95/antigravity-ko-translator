@@ -27,10 +27,10 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.30';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.31';"));
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugin.json'), 'utf8'));
-  assert.equal(pkgJson.version, '1.2.35');
+  assert.equal(pkgJson.version, '1.2.36');
   assert.equal(pluginJson.version, pkgJson.version, 'D-0019: plugin.json version must stay synchronized with package.json');
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
@@ -993,7 +993,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.30',
+      __agyKoLocalizerActive: 'v13.31',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1590,8 +1590,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 14. D-0013~D-0019 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, .no-animations Web Animations suppression, 16ms FOUC elimination, worked-for latest turn guard, retranslateVisibleThoughts parent propagation, queued messages card & new strings, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.30') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.30 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v13.31') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.31 and must NOT claim verboseConversationSteps: true is force-enabled'
   );
   const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
   assert.ok(
@@ -2043,8 +2043,8 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
   const readmeKo = fs.readFileSync(readmeKoPath, 'utf8');
   assert.ok(readmeEn.includes('[한국어 문서 (README.ko.md)](./README.ko.md)'), 'D-0022: English README.md must link to README.ko.md at the top');
   assert.ok(readmeKo.includes('[English Documentation (README.md)](./README.md)'), 'D-0022: Korean README.ko.md must link to README.md at the top');
-  assert.ok(readmeEn.includes('v1.2.35') && readmeEn.includes('v13.30'), 'D-0022: README.md must reflect v1.2.35 / v13.30');
-  assert.ok(readmeKo.includes('v1.2.35') && readmeKo.includes('v13.30'), 'D-0022: README.ko.md must reflect v1.2.35 / v13.30');
+  assert.ok(readmeEn.includes('v1.2.36') && readmeEn.includes('v13.31'), 'D-0022: README.md must reflect v1.2.36 / v13.31');
+  assert.ok(readmeKo.includes('v1.2.36') && readmeKo.includes('v13.31'), 'D-0022: README.ko.md must reflect v1.2.36 / v13.31');
 
   // D-0023: Verify segment.isLatest:false overrides isLastContainer:true on Lhc fiber so historical execution segments inside the latest turn container are NEVER force-expanded on session switch
   const activeHelperMatch = mod08.match(
@@ -2581,3 +2581,531 @@ test('D-0024..D-0031 comprehensive audit regressions (v1.2.35 / v13.30 & Antigra
     'D-0031: 06-settings-modal-ui.js must suppress dual nav highlight, bind dynamically rendered nav buttons, and auto-deactivate KoPane when keepMounted backdrop becomes aria-hidden="true"'
   );
 });
+
+test('D-0032: custom translation adapter IDs survive host sync, serialize safely in bundle-injector, and render provider-neutral status copy', () => {
+  const os = require('node:os');
+  const settingsStorage = require(path.join(HOST_DIR, 'settings-storage.js'));
+  const { buildRuntimeConfiguredBundle } = require(BUNDLE_INJECTOR_PATH);
+
+  assert.equal(
+    settingsStorage.normalizeProviderName('DeepL-Pro'),
+    'deepl-pro',
+    'D-0032: normalizeProviderName must preserve valid custom adapter IDs instead of returning null'
+  );
+  assert.equal(
+    settingsStorage.parseProviderCliArg(['--provider=openai_compat']),
+    'openai_compat',
+    'D-0032: parseProviderCliArg must accept custom adapter IDs'
+  );
+  assert.equal(
+    settingsStorage.normalizeProviderName("bad'quote"),
+    null,
+    'D-0032: normalizeProviderName must reject unsafe characters'
+  );
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-d0032-'));
+  try {
+    const cfgPath = path.join(tmpDir, 'config.json');
+    const storagePath = path.join(tmpDir, 'app_storage.json');
+    fs.writeFileSync(
+      storagePath,
+      JSON.stringify({ 'agy-ko-thought-pretranslate': '1', 'agy-ko-thought-provider': 'deepl-pro' }, null, 2),
+      'utf8'
+    );
+    const resolved = settingsStorage.getOrSetTranslatorOptions(null, null, {
+      configPath: cfgPath,
+      appStoragePath: storagePath,
+    });
+    assert.equal(
+      resolved.translationProvider,
+      'deepl-pro',
+      'D-0032: getOrSetTranslatorOptions must preserve custom adapter stored in app_storage.json'
+    );
+    const savedStorage = JSON.parse(fs.readFileSync(storagePath, 'utf8'));
+    assert.equal(
+      savedStorage['agy-ko-thought-provider'],
+      'deepl-pro',
+      'D-0032: app_storage.json custom adapter must not be overwritten with google-translate'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  const configuredBundle = buildRuntimeConfiguredBundle(true, 'deepl-pro');
+  assert.doesNotThrow(() => new vm.Script(configuredBundle), 'D-0032: configured bundle with custom provider must be valid JS');
+  assert.ok(
+    configuredBundle.includes('const DEFAULT_TRANSLATION_PROVIDER = "deepl-pro";') ||
+      configuredBundle.includes("const DEFAULT_TRANSLATION_PROVIDER = 'deepl-pro';"),
+    'D-0032: buildRuntimeConfiguredBundle must embed custom provider ID cleanly'
+  );
+
+  const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
+  assert.ok(
+    !mod06.includes("'○ 로컬 LLM 서버 자동 종료됨 (Google 번역 사용 중 — 메모리/GPU 반환)'"),
+    'D-0032: 06-settings-modal-ui.js must not hardcode "Google 번역 사용 중" when a custom non-LLM adapter is active'
+  );
+});
+
+test('D-0033: clearing cache or switching providers cancels saveCacheTimer, blocks stale in-flight cache writes, and resets pretranslatedRawSet', async () => {
+  const mod01 = fs.readFileSync(path.join(RENDERER_DIR, '01-bootstrap-and-cache.js'), 'utf8');
+  const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
+  const mod04 = fs.readFileSync(path.join(RENDERER_DIR, '04-translation-adapters.js'), 'utf8');
+  const mod05 = fs.readFileSync(path.join(RENDERER_DIR, '05-fiber-pretranslator.js'), 'utf8');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+
+  let resolveSlowFetch;
+  const backingStore = new Map();
+  const scheduledTimers = new Set();
+  let timerSeq = 1;
+  const sandbox = {
+    window: {
+      location: { hostname: '127.0.0.1', protocol: 'https:' },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => {},
+    },
+    document: {
+      documentElement: { setAttribute: () => {}, removeAttribute: () => {} },
+      querySelector: (sel) =>
+        sel.includes('#root')
+          ? {
+              __reactFiber$test: {
+                memoizedProps: { step: { thinking: 'Inspecting hidden collapsed thought segment.' } },
+                child: null,
+                sibling: null,
+              },
+            }
+          : null,
+      querySelectorAll: () => [],
+      getElementById: () => null,
+    },
+    localStorage: {
+      getItem: (k) => (backingStore.has(k) ? backingStore.get(k) : null),
+      setItem: (k, v) => backingStore.set(k, String(v)),
+      removeItem: (k) => backingStore.delete(k),
+    },
+    Node: class FakeNode {},
+    Window: class FakeWindow {},
+    MutationObserver: class {
+      observe() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    },
+    AbortController,
+    fetch: () =>
+      new Promise((res) => {
+        resolveSlowFetch = res;
+      }),
+    setTimeout: (fn, ms) => {
+      const id = timerSeq++;
+      scheduledTimers.add({ id, fn, ms });
+      return id;
+    },
+    clearTimeout: (id) => {
+      for (const item of scheduledTimers) {
+        if (item.id === id) scheduledTimers.delete(item);
+      }
+    },
+    setInterval: () => 999,
+    clearInterval: () => {},
+    refreshTranslatorSettingsUi: () => {},
+    scanThoughtBlocks: () => {},
+  };
+  sandbox.window.localStorage = sandbox.localStorage;
+  sandbox.globalThis = sandbox;
+
+  const retranslateMatch = mod08.match(/function retranslateVisibleThoughts[\s\S]*?window\.__agyRetranslateVisibleThoughts = retranslateVisibleThoughts;/);
+  assert.ok(retranslateMatch, 'retranslateVisibleThoughts must exist');
+
+  vm.runInNewContext(
+    `${mod01}\n${mod03}\n${mod04}\n${mod05}\n${retranslateMatch[0]}\n` +
+      `globalThis.__memCache = memCache;\n` +
+      `globalThis.__scheduleSaveCache = scheduleSaveCache;\n` +
+      `globalThis.__translate = translateThoughtTextEnToKo;\n` +
+      `globalThis.__pretranslatedRawSet = pretranslatedRawSet;\n` +
+      `globalThis.__collectHidden = collectHiddenThinkingStringsFromFiber;\n` +
+      `globalThis.__setPretranslate = (v) => { pretranslateEnabled = v; };`,
+    sandbox
+  );
+
+  sandbox.__setPretranslate(true);
+  sandbox.__pretranslatedRawSet.add('Inspecting hidden collapsed thought segment.');
+  sandbox.__memCache.set('Old key', '이전 번역');
+  sandbox.__scheduleSaveCache();
+  assert.equal(
+    Array.from(scheduledTimers).filter((t) => t.ms === 1000).length,
+    1,
+    'saveCacheTimer (1000ms) should be armed before clearCache'
+  );
+
+  const inflightPromise = sandbox.__translate('Checking stale in-flight translation.');
+  await new Promise((r) => setImmediate(r));
+
+  sandbox.window.__agyRetranslateVisibleThoughts(true);
+  assert.equal(
+    Array.from(scheduledTimers).filter((t) => t.ms === 1000).length,
+    0,
+    'D-0033: clearCache must cancel armed saveCacheTimer'
+  );
+  assert.deepEqual(
+    Array.from(sandbox.__collectHidden()),
+    ['Inspecting hidden collapsed thought segment.'],
+    'D-0033: clearCache must clear pretranslatedRawSet so collapsed thoughts can be re-queued'
+  );
+
+  resolveSlowFetch({
+    ok: true,
+    json: async () => [[['오래된 인플라이트 번역 결과.', 'Checking stale in-flight translation.']]],
+  });
+  await inflightPromise;
+  assert.equal(
+    sandbox.__memCache.has('Checking stale in-flight translation.'),
+    false,
+    'D-0033: stale in-flight translation started before clearCache must NOT repopulate memCache'
+  );
+});
+
+test('D-0034: CDP live target filter skips data:/about:/devtools: pages and bundle survives localStorage SecurityError', () => {
+  const statusbarPatcher = require(path.join(HOST_DIR, 'ensure_statusbar_patch.js'));
+  const { assembleRendererSourceFromModules } = require(BUNDLE_INJECTOR_PATH);
+
+  assert.equal(
+    typeof statusbarPatcher.isInjectablePageTarget,
+    'function',
+    'D-0034: ensure_statusbar_patch.js must export isInjectablePageTarget helper'
+  );
+  assert.equal(
+    statusbarPatcher.isInjectablePageTarget({
+      type: 'page',
+      url: 'https://127.0.0.1:57649/c/abc',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:57647/devtools/page/1',
+    }),
+    true
+  );
+  assert.equal(
+    statusbarPatcher.isInjectablePageTarget({
+      type: 'page',
+      url: 'data:text/html;charset=utf-8,splash',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:57647/devtools/page/2',
+    }),
+    false,
+    'D-0034: data: splash overlay pages in v2.32.1 must be excluded from CDP bundle injection'
+  );
+  assert.equal(
+    statusbarPatcher.isInjectablePageTarget({
+      type: 'page',
+      url: 'about:blank',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:57647/devtools/page/3',
+    }),
+    false
+  );
+
+  const bundleCode = assembleRendererSourceFromModules();
+  const restrictedDoc = {
+    body: { nodeType: 1, getAttribute: () => null, querySelectorAll: () => [] },
+    documentElement: { setAttribute: () => {}, removeAttribute: () => {} },
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    createElement: () => ({
+      style: {},
+      classList: { add: () => {}, remove: () => {}, contains: () => false },
+      setAttribute: () => {},
+      appendChild: () => {},
+    }),
+    head: { appendChild: () => {} },
+    createTreeWalker: () => ({ nextNode: () => null }),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  const restrictedWin = {
+    document: restrictedDoc,
+    location: { hostname: '127.0.0.1', protocol: 'data:' },
+    MutationObserver: class {
+      observe() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    },
+    Node: { TEXT_NODE: 3, ELEMENT_NODE: 1, DOCUMENT_POSITION_FOLLOWING: 4 },
+    NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3 },
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    setInterval: () => 1,
+    clearInterval: () => {},
+  };
+  Object.defineProperty(restrictedWin, 'localStorage', {
+    configurable: true,
+    get() {
+      throw new Error("SecurityError: Failed to read the 'localStorage' property from 'Window'");
+    },
+  });
+
+  assert.doesNotThrow(
+    () => vm.runInNewContext(bundleCode, { window: restrictedWin, document: restrictedDoc, setTimeout: () => 1, clearTimeout: () => {}, setInterval: () => 1, clearInterval: () => {} }),
+    'D-0034: assembled bundle must not crash with SecurityError when window.localStorage throws'
+  );
+  assert.ok(restrictedWin.__agyKoLocalizerActive, 'D-0034: localizer should mount with in-memory fallback storage');
+});
+
+test('D-0035: Antigravity v2.32.1 Side Question body protection, Side Question & Browser Subagent thinking translation, and new UI strings', () => {
+  const mod02 = fs.readFileSync(path.join(RENDERER_DIR, '02-static-ui-dict.js'), 'utf8');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+
+  const dictSandbox = {};
+  vm.runInNewContext(`${mod02}\n;globalThis.__tr = translateStaticUiSync;`, dictSandbox);
+  assert.equal(dictSandbox.__tr('This Conversation'), '이 대화');
+  assert.equal(dictSandbox.__tr('Only this conversation uses this preset.'), '이 대화에서만 이 프리셋을 사용합니다.');
+  assert.equal(
+    dictSandbox.__tr('Inspecting documentation, config, or issues...'),
+    '문서, 설정 또는 이슈 확인 중...'
+  );
+  assert.equal(
+    dictSandbox.__tr('Waiting for tool permission approval \u2014 click Open in full conversation (\u2197) to approve'),
+    '도구 권한 승인 대기 중 \u2014 전체 대화에서 열기(\u2197)를 클릭하여 승인하세요'
+  );
+  assert.equal(dictSandbox.__tr('Open in full conversation'), '전체 대화에서 열기');
+  assert.equal(dictSandbox.__tr('Minimize side question'), '사이드 질문 최소화');
+  assert.equal(dictSandbox.__tr('Delete side question'), '사이드 질문 삭제');
+
+  const locStaticMatch = mod08.match(/const CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR[\s\S]*?function doesWorkedForButtonContainThinking/);
+  const locStaticSource = locStaticMatch[0].replace(/\r?\n\r?\n  function doesWorkedForButtonContainThinking$/, '');
+  const exclSandbox = {
+    NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3 },
+    Node: { TEXT_NODE: 3 },
+    translateStaticUiSync: dictSandbox.__tr,
+    isAlreadyKoreanOrNonEnglish: () => true,
+    translateThoughtTextEnToKo: async (s) => s,
+    observer: { takeRecords: () => [] },
+    document: { createTreeWalker: () => ({ nextNode: () => null }) },
+  };
+  vm.runInNewContext(`${locStaticSource}\n;globalThis.__isExcl = isExcludedFromStaticUiLocalization;`, exclSandbox);
+
+  const followupUserEl = {
+    tagName: 'DIV',
+    textContent: 'General',
+    classList: { contains: () => false },
+    getAttribute: (k) => (k === 'data-testid' ? 'side-question-followup-user' : null),
+    closest: (sel) => (sel.includes('side-question-followup-user') ? {} : null),
+  };
+  assert.equal(
+    exclSandbox.__isExcl(followupUserEl, false),
+    true,
+    'D-0035: user text inside side-question-followup-user must be excluded from static UI replacement'
+  );
+
+  const sqPrefixLabelSpan = {
+    tagName: 'SPAN',
+    textContent: 'Side Question:',
+    classList: { contains: () => false },
+    getAttribute: () => null,
+    closest: (sel) => (sel === '[data-testid="side-question-question"]' ? {} : null),
+  };
+  const sqUserQuestionSpan = {
+    tagName: 'SPAN',
+    textContent: 'View Open',
+    classList: { contains: () => false },
+    getAttribute: () => null,
+    closest: (sel) => (sel === '[data-testid="side-question-question"]' ? {} : null),
+  };
+  const sqAnswerParagraph = {
+    tagName: 'P',
+    textContent: 'General',
+    classList: { contains: () => false },
+    getAttribute: () => null,
+    closest: (sel) => (sel === '[data-testid="side-question-answer"]' ? {} : null),
+  };
+  const sqToolStatusSpan = {
+    tagName: 'SPAN',
+    textContent: 'Inspecting documentation, config, or issues...',
+    classList: { contains: () => false },
+    getAttribute: () => null,
+    closest: (sel) =>
+      sel === '[data-testid="side-question-answer"]' || sel.includes('side-question-tool-status') ? {} : null,
+  };
+  assert.equal(exclSandbox.__isExcl(sqPrefixLabelSpan, false), false, 'D-0035: Side Question: prefix label must localize');
+  assert.equal(exclSandbox.__isExcl(sqUserQuestionSpan, false), true, 'D-0035: Side Question user text must be protected');
+  assert.equal(exclSandbox.__isExcl(sqAnswerParagraph, false), true, 'D-0035: Side Question model markdown must be protected');
+  assert.equal(exclSandbox.__isExcl(sqToolStatusSpan, false), false, 'D-0035: Side Question tool status badge must localize');
+
+  assert.ok(
+    mod08.includes('side-question-tab-conversation'),
+    'D-0035: side-question-tab-conversation must be included in transition freeze and fast conversation scan'
+  );
+  assert.ok(
+    mod08.includes('browser-subagent-thinking'),
+    'D-0035: browser-subagent-thinking live reasoning text must be handled by dynamic thought translation'
+  );
+  assert.ok(
+    mod08.includes('side-question-answer'),
+    'D-0035: Side Question answer markdown body must be protected while its g1 thinking blocks are translated'
+  );
+});
+
+test('D-0036: nested code elements in tokenizeBlockClone preserve exact placeholder indices and multi-backtick markdown spans match', () => {
+  const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
+  const makeTextNode = (txt) => ({
+    nodeType: 3,
+    textContent: txt,
+    cloneNode: () => makeTextNode(txt),
+  });
+  const tokSandbox = {
+    document: {
+      createTextNode: makeTextNode,
+    },
+  };
+  vm.runInNewContext(
+    `${mod03}\n;globalThis.__tokClone = tokenizeBlockClone; globalThis.__normMd = normalizeMarkdownSegmentToTokenizedText;`,
+    tokSandbox
+  );
+
+  const makeEl = (tag, children = []) => {
+    const node = {
+      nodeType: 1,
+      tagName: tag,
+      children: [],
+      parentElement: null,
+      parentNode: null,
+      get textContent() {
+        return this.children.map((c) => c.textContent).join('');
+      },
+      closest(sel) {
+        if (sel === 'code' && this.tagName === 'CODE') return this;
+        return this.parentElement ? this.parentElement.closest(sel) : null;
+      },
+      replaceChild(newChild, oldChild) {
+        const idx = this.children.indexOf(oldChild);
+        if (idx !== -1) {
+          this.children[idx] = newChild;
+          oldChild.parentNode = null;
+          oldChild.parentElement = null;
+        }
+      },
+      querySelectorAll(sel) {
+        const res = [];
+        const walk = (n) => {
+          for (const ch of n.children || []) {
+            if (ch.nodeType === 1) {
+              if (sel === 'code' && ch.tagName === 'CODE') res.push(ch);
+              walk(ch);
+            }
+          }
+        };
+        walk(this);
+        return res;
+      },
+      cloneNode(deep) {
+        const copy = makeEl(this.tagName, deep ? this.children.map((c) => c.cloneNode(true)) : []);
+        return copy;
+      },
+    };
+    for (const ch of children) {
+      if (ch.nodeType === 1) {
+        ch.parentElement = node;
+        ch.parentNode = node;
+      }
+      node.children.push(ch);
+    }
+    return node;
+  };
+  const txt = (s) => tokSandbox.document.createTextNode(s);
+  const para = makeEl('P', [
+    txt('Inspect '),
+    makeEl('CODE', [txt('outer '), makeEl('CODE', [txt('inner')])]),
+    txt(' and '),
+    makeEl('CODE', [txt('second')]),
+  ]);
+
+  const { tokenizedText, savedCodes } = tokSandbox.__tokClone(para);
+  assert.equal(savedCodes.length, 2, 'D-0036: nested inner <code> must not inflate savedCodes length');
+  assert.equal(tokenizedText, 'Inspect ⟦C0⟧ and ⟦C1⟧', 'D-0036: second top-level <code> must be indexed as ⟦C1⟧, not ⟦C2⟧');
+
+  assert.equal(
+    tokSandbox.__normMd('Run ``cmd `arg` here`` and `ok`'),
+    'Run ⟦C0⟧ and ⟦C1⟧',
+    'D-0036: normalizeMarkdownSegmentToTokenizedText must tokenize multi-backtick inline code spans'
+  );
+});
+
+test('D-0037: local-llm-service resolves dynamic probe Origin instead of hardcoded 58033 and avoids duplicate spawn when port is already reachable', async () => {
+  const http = require('node:http');
+  const llmServicePath = path.join(HOST_DIR, 'local-llm-service.js');
+  const llmServiceSource = fs.readFileSync(llmServicePath, 'utf8');
+  assert.ok(
+    !llmServiceSource.includes("'https://127.0.0.1:58033'"),
+    'D-0037: local-llm-service.js must not hardcode stale https://127.0.0.1:58033 Origin header'
+  );
+
+  let observedOrigin = null;
+  const server = http.createServer((req, res) => {
+    observedOrigin = req.headers.origin || null;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ data: [{ id: 'qwen-test' }] }));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    const prevBase = process.env.AGY_LOCAL_LLM_BASE_URL;
+    const prevOrigin = process.env.AGY_FRONTEND_ORIGIN;
+    const prevBin = process.env.AGY_LOCAL_LLM_SERVER_BIN;
+    process.env.AGY_LOCAL_LLM_BASE_URL = `http://127.0.0.1:${port}`;
+    process.env.AGY_FRONTEND_ORIGIN = 'https://127.0.0.1:57649';
+    process.env.AGY_LOCAL_LLM_SERVER_BIN = process.execPath;
+    delete require.cache[require.resolve(path.join(HOST_DIR, 'paths.js'))];
+    delete require.cache[require.resolve(llmServicePath)];
+    const freshLlm = require(llmServicePath);
+
+    let spawnCalled = 0;
+    const probeRes = await freshLlm.ensureLocalLlmServer(true, {
+      spawnFn: () => {
+        spawnCalled++;
+        return { unref() {} };
+      },
+    });
+    assert.equal(observedOrigin, 'https://127.0.0.1:57649', 'D-0037: probe must send configured/resolved frontend Origin');
+    assert.equal(probeRes.reachable, true);
+    assert.equal(probeRes.corsAllowed, false);
+    assert.equal(
+      spawnCalled,
+      0,
+      'D-0037: ensureLocalLlmServer must NOT spawn a duplicate server process when the port is already reachable'
+    );
+
+    if (prevBase === undefined) delete process.env.AGY_LOCAL_LLM_BASE_URL;
+    else process.env.AGY_LOCAL_LLM_BASE_URL = prevBase;
+    if (prevOrigin === undefined) delete process.env.AGY_FRONTEND_ORIGIN;
+    else process.env.AGY_FRONTEND_ORIGIN = prevOrigin;
+    if (prevBin === undefined) delete process.env.AGY_LOCAL_LLM_SERVER_BIN;
+    else process.env.AGY_LOCAL_LLM_SERVER_BIN = prevBin;
+    delete require.cache[require.resolve(path.join(HOST_DIR, 'paths.js'))];
+    delete require.cache[require.resolve(llmServicePath)];
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('D-0038: GitHub Actions CI covers Gitflow branches and standard README/Release Notes templates exist and match docs', () => {
+  const ciYaml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  for (const branchPattern of ['main', 'develop', 'fix/**', 'feature/**', 'release/**', 'hotfix/**']) {
+    assert.ok(
+      ciYaml.includes(branchPattern),
+      `D-0038: .github/workflows/ci.yml must trigger on Gitflow pattern ${branchPattern}`
+    );
+  }
+  const readmeTplPath = path.join(ROOT, 'docs', 'templates', 'README_TEMPLATE.md');
+  const relNotesTplPath = path.join(ROOT, 'docs', 'templates', 'RELEASE_NOTES_TEMPLATE.md');
+  assert.ok(fs.existsSync(readmeTplPath), 'D-0038: docs/templates/README_TEMPLATE.md must exist');
+  assert.ok(fs.existsSync(relNotesTplPath), 'D-0038: docs/templates/RELEASE_NOTES_TEMPLATE.md must exist');
+
+  const readmeEn = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+  const readmeKo = fs.readFileSync(path.join(ROOT, 'README.ko.md'), 'utf8');
+  assert.ok(readmeEn.includes('README.ko.md'), 'D-0038: English README.md must link to Korean README.ko.md');
+  assert.ok(readmeKo.includes('README.md'), 'D-0038: Korean README.ko.md must link to English README.md');
+});
+
