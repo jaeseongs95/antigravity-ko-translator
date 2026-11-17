@@ -5401,21 +5401,8 @@ test(
       } catch (e) {}
     });
 
-    let gitattributesCommitted = false;
-    try {
-      execFileSync('git', ['-C', ROOT, 'ls-files', '--error-unmatch', '.gitattributes'], { stdio: 'pipe' });
-      gitattributesCommitted = true;
-    } catch (e) {
-      gitattributesCommitted = false;
-    }
-
-    if (gitattributesCommitted) {
-      execFileSync('git', ['-c', 'core.autocrlf=true', 'clone', '--quiet', ROOT, tmpClone], { stdio: 'pipe' });
-    } else {
-      execFileSync('git', ['clone', '--no-checkout', '--quiet', ROOT, tmpClone], { stdio: 'pipe' });
-      fs.copyFileSync(gitattributesPath, path.join(tmpClone, '.gitattributes'));
-      execFileSync('git', ['-C', tmpClone, '-c', 'core.autocrlf=true', 'checkout', '--force', 'HEAD'], { stdio: 'pipe' });
-    }
+    execFileSync('git', ['-C', ROOT, 'ls-files', '--error-unmatch', '.gitattributes'], { stdio: 'pipe' });
+    execFileSync('git', ['-c', 'core.autocrlf=true', 'clone', '--quiet', ROOT, tmpClone], { stdio: 'pipe' });
 
     const mirrorRelPaths = [
       path.join('scripts', 'ko_thought_autoinject.js'),
@@ -5431,5 +5418,148 @@ test(
         `D-0040: ${rel} checked out under core.autocrlf=true must contain zero CRLF sequences`
       );
     }
+  });
+
+  await t.test('10. [D-0040] ensure_ko_thought_patch.js --status is strictly read-only (0 disk writes, 0 daemon/LLM spawns, valid JSON when host unpatched)', (subT) => {
+    const osMod = require('os');
+    const { execFileSync, spawnSync } = require('child_process');
+    const entryScriptPath = path.join(ROOT, 'scripts', 'ensure_ko_thought_patch.js');
+    const settingsStoragePath = path.join(HOST_DIR, 'settings-storage.js');
+
+    const cleanupIsolatedHome = (homeDir) => {
+      const pidFile = path.join(homeDir, '.gemini', 'antigravity', 'ko_thought_watcher.pid');
+      if (fs.existsSync(pidFile)) {
+        try {
+          const raw = fs.readFileSync(pidFile, 'utf8').trim();
+          const parts = raw.split(':');
+          const pid = Number(parts[0]);
+          if (parts.length >= 5) {
+            spawnSync(
+              process.execPath,
+              [settingsStoragePath, '--watcher-sentinel-stop', parts[2], parts[3], parts[4]],
+              { stdio: 'ignore', windowsHide: true, timeout: 1500 }
+            );
+          } else if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
+            try {
+              process.kill(pid, 'SIGTERM');
+            } catch (e) {}
+          }
+        } catch (e) {}
+      }
+      try {
+        fs.rmSync(homeDir, { recursive: true, force: true });
+      } catch (e) {}
+    };
+
+    // Case A: Virgin isolated HOME — running `--status` must create 0 files/dirs and spawn 0 daemons
+    const tmpHomeA = fs.mkdtempSync(path.join(osMod.tmpdir(), 'ko-d0040-status-ro-a-'));
+    const tmpHomeB = fs.mkdtempSync(path.join(osMod.tmpdir(), 'ko-d0040-status-ro-b-'));
+    subT.after(() => {
+      cleanupIsolatedHome(tmpHomeA);
+      cleanupIsolatedHome(tmpHomeB);
+    });
+
+    const envA = {
+      ...process.env,
+      USERPROFILE: tmpHomeA,
+      HOME: tmpHomeA,
+      APPDATA: path.join(tmpHomeA, 'AppData', 'Roaming'),
+      LOCALAPPDATA: path.join(tmpHomeA, 'AppData', 'Local'),
+      AGY_KO_LLM_PID_PATH: path.join(tmpHomeA, '.gemini', 'antigravity', 'ko_thought_llm.pid'),
+      AGY_LOCAL_LLM_BASE_URL: 'http://127.0.0.1:1',
+    };
+    const stdoutA = execFileSync(process.execPath, [entryScriptPath, '--status'], {
+      encoding: 'utf8',
+      timeout: 8000,
+      windowsHide: true,
+      env: envA,
+    });
+    const parsedA = JSON.parse(stdoutA);
+    assert.deepEqual(
+      fs.readdirSync(tmpHomeA),
+      [],
+      'D-0040: --status on virgin HOME must write 0 files/directories and spawn 0 watcher/LLM daemons'
+    );
+    assert.equal(parsedA.capabilityRevision, 'AGY_STATUSBAR_PATCHER_V5_R3');
+    assert.equal(parsedA.patchVersion, 'AGY_STATUSBAR_AUTOINJECT_V5');
+    assert.equal(typeof parsedA.isAsarPatched, 'boolean');
+    assert.equal(parsedA.pluginEnabled, true);
+    assert.equal(parsedA.translationProvider, 'google-translate');
+    assert.equal(parsedA.pretranslateEnabled, false);
+
+    // Case B: Out-of-sync config.json (local-llm, pretranslate: true, enabled: false) vs app_storage.json
+    const cfgDirB = path.join(tmpHomeB, '.gemini', 'config');
+    const roamingDirB = path.join(tmpHomeB, 'AppData', 'Roaming', 'Antigravity');
+    fs.mkdirSync(cfgDirB, { recursive: true });
+    fs.mkdirSync(roamingDirB, { recursive: true });
+    const cfgPathB = path.join(cfgDirB, 'config.json');
+    const storagePathB = path.join(roamingDirB, 'app_storage.json');
+    const rawCfgBefore = JSON.stringify(
+      { plugins: { 'ko-thought-translator': { enabled: false, pretranslate: true, provider: 'local-llm' } } },
+      null,
+      2
+    );
+    const rawStorageBefore = JSON.stringify(
+      { 'agy-ko-thought-pretranslate': '0', 'agy-ko-thought-provider': 'google-translate' },
+      null,
+      2
+    );
+    fs.writeFileSync(cfgPathB, rawCfgBefore, 'utf8');
+    fs.writeFileSync(storagePathB, rawStorageBefore, 'utf8');
+
+    const envB = {
+      ...process.env,
+      USERPROFILE: tmpHomeB,
+      HOME: tmpHomeB,
+      APPDATA: path.join(tmpHomeB, 'AppData', 'Roaming'),
+      LOCALAPPDATA: path.join(tmpHomeB, 'AppData', 'Local'),
+      AGY_KO_LLM_PID_PATH: path.join(tmpHomeB, '.gemini', 'antigravity', 'ko_thought_llm.pid'),
+      AGY_LOCAL_LLM_BASE_URL: 'http://127.0.0.1:1',
+    };
+    const stdoutB = execFileSync(process.execPath, [entryScriptPath, '--status'], {
+      encoding: 'utf8',
+      timeout: 8000,
+      windowsHide: true,
+      env: envB,
+    });
+    const parsedB = JSON.parse(stdoutB);
+    assert.equal(parsedB.pluginEnabled, false);
+    assert.equal(parsedB.pretranslateEnabled, true);
+    assert.equal(parsedB.translationProvider, 'local-llm');
+    assert.equal(
+      fs.readFileSync(cfgPathB, 'utf8'),
+      rawCfgBefore,
+      'D-0040: --status must not rewrite config.json'
+    );
+    assert.equal(
+      fs.readFileSync(storagePathB, 'utf8'),
+      rawStorageBefore,
+      'D-0040: --status must not rewrite out-of-sync app_storage.json'
+    );
+    assert.equal(
+      fs.existsSync(path.join(tmpHomeB, '.gemini', 'antigravity')),
+      false,
+      'D-0040: --status must not create .gemini/antigravity, watcher PID, bundle, or LLM PID even when provider=local-llm'
+    );
+
+    // Case C: Missing both host and bundled statusbar patcher scripts still returns valid JSON report
+    const entryMod = require(entryScriptPath);
+    assert.equal(
+      typeof entryMod.buildReadOnlyStatusReport,
+      'function',
+      'D-0040: ensure_ko_thought_patch.js must export buildReadOnlyStatusReport'
+    );
+    const missingPatcherRes = entryMod.buildReadOnlyStatusReport({
+      hostPatcherPath: path.join(tmpHomeB, 'nonexistent-host-patcher.js'),
+      bundledPatcherPath: path.join(tmpHomeB, 'nonexistent-bundled-patcher.js'),
+      pathOverrides: { configPath: cfgPathB, appStoragePath: storagePathB },
+    });
+    assert.equal(missingPatcherRes.exitCode, 0);
+    assert.equal(missingPatcherRes.report.isAsarPatched, false);
+    assert.equal(missingPatcherRes.report.lastStatus, null);
+    assert.equal(missingPatcherRes.report.capabilityRevision, 'AGY_STATUSBAR_PATCHER_V5_R3');
+    assert.equal(missingPatcherRes.report.pluginEnabled, false);
+    assert.equal(missingPatcherRes.report.pretranslateEnabled, true);
+    assert.equal(missingPatcherRes.report.translationProvider, 'local-llm');
   });
 });

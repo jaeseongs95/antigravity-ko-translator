@@ -111,6 +111,51 @@ function writeFileAtomicSync(targetPath, content, options = null) {
   }
 }
 
+function readTranslatorOptions(pathOverrides = null) {
+  const configPath = (pathOverrides && pathOverrides.configPath) || CONFIG_JSON_PATH;
+  const appStoragePath = (pathOverrides && pathOverrides.appStoragePath) || APP_STORAGE_PATH;
+  let pluginEnabled = true;
+  let enabled = false;
+  let provider = 'google-translate';
+  let appStorage = null;
+  try {
+    if (fs.existsSync(appStoragePath)) {
+      appStorage = JSON.parse(fs.readFileSync(appStoragePath, 'utf8'));
+    }
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] app_storage.json read error: ${err.message}\n`);
+  }
+
+  try {
+    let cfg = {};
+    if (fs.existsSync(configPath)) {
+      cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    }
+    const existingEntry = cfg?.plugins?.['ko-thought-translator'] || {};
+    if (existingEntry.enabled === false) {
+      pluginEnabled = false;
+    }
+    const configPre =
+      typeof existingEntry.pretranslate === 'boolean' ? existingEntry.pretranslate : null;
+    const configProv = normalizeProviderName(existingEntry.provider);
+    const storagePre =
+      appStorage && appStorage['agy-ko-thought-pretranslate'] !== undefined
+        ? appStorage['agy-ko-thought-pretranslate'] === '1' || appStorage['agy-ko-thought-pretranslate'] === true
+        : null;
+    const storageProv =
+      appStorage && appStorage['agy-ko-thought-provider']
+        ? normalizeProviderName(appStorage['agy-ko-thought-provider'])
+        : null;
+
+    enabled = configPre !== null ? configPre : storagePre !== null ? storagePre : false;
+    provider = configProv || storageProv || 'google-translate';
+  } catch (err) {
+    process.stderr.write(`[ko-thought-translator] config read error: ${err.message}\n`);
+  }
+
+  return { pluginEnabled, pretranslateEnabled: enabled, translationProvider: provider };
+}
+
 function getOrSetTranslatorOptions(explicitPretranslate = null, explicitProvider = null, pathOverrides = null) {
   const configPath = (pathOverrides && pathOverrides.configPath) || CONFIG_JSON_PATH;
   const appStoragePath = (pathOverrides && pathOverrides.appStoragePath) || APP_STORAGE_PATH;
@@ -1076,6 +1121,7 @@ module.exports = {
   normalizeProviderName,
   parseProviderCliArg,
   writeFileAtomicSync,
+  readTranslatorOptions,
   getOrSetTranslatorOptions,
   isZombieProcStatContent,
   isProcessAlive,

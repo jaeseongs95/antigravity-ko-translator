@@ -15,13 +15,14 @@ const {
   ENSURE_STATUSBAR_PATCH_PATH,
   BUNDLED_ENSURE_STATUSBAR_PATCH_PATH,
 } = require('./host/paths');
-const { PATCHER_CAPABILITY_REVISION } = require('./host/ensure_statusbar_patch');
+const { PATCH_MARKER, PATCHER_CAPABILITY_REVISION } = require('./host/ensure_statusbar_patch');
 const { ensureLocalLlmServer, stopLocalLlmServer } = require('./host/local-llm-service');
 const {
   isPluginEnabled,
   parsePretranslateCliArg,
   parseProviderCliArg,
   writeFileAtomicSync,
+  readTranslatorOptions,
   getOrSetTranslatorOptions,
   ensureStorageWatcher,
   runStorageWatcherLoop,
@@ -75,6 +76,78 @@ function ensureHostStatusbarPatcherInstalled(targetPath = ENSURE_STATUSBAR_PATCH
   }
 }
 
+function resolveStatusbarPatcherPathReadOnly(options = {}) {
+  const hostPath =
+    options && options.hostPatcherPath !== undefined
+      ? options.hostPatcherPath
+      : ENSURE_STATUSBAR_PATCH_PATH;
+  const bundledPath =
+    options && options.bundledPatcherPath !== undefined
+      ? options.bundledPatcherPath
+      : BUNDLED_ENSURE_STATUSBAR_PATCH_PATH;
+  const bundledRev = parsePatcherCapabilityRevision(PATCHER_CAPABILITY_REVISION);
+  if (hostPath && fs.existsSync(hostPath)) {
+    try {
+      const currentContent = fs.readFileSync(hostPath, 'utf8');
+      const currentRev = parsePatcherCapabilityRevision(currentContent);
+      if (
+        (bundledRev && currentRev && isPatcherRevisionAtLeast(currentRev, bundledRev)) ||
+        (!bundledRev && currentContent.includes(PATCHER_CAPABILITY_REVISION)) ||
+        !(bundledPath && fs.existsSync(bundledPath))
+      ) {
+        return hostPath;
+      }
+    } catch {}
+  }
+  return bundledPath && fs.existsSync(bundledPath) ? bundledPath : null;
+}
+
+function buildReadOnlyStatusReport(options = {}) {
+  const { pluginEnabled, pretranslateEnabled, translationProvider } = readTranslatorOptions(
+    options && options.pathOverrides ? options.pathOverrides : null
+  );
+  const baseReport = {
+    isAsarPatched: false,
+    patchVersion: PATCH_MARKER,
+    capabilityRevision: PATCHER_CAPABILITY_REVISION,
+    lastStatus: null,
+    pluginEnabled,
+    translationProvider,
+    pretranslateEnabled,
+  };
+  const patcherPath = resolveStatusbarPatcherPathReadOnly(options);
+  if (!patcherPath) {
+    return { report: baseReport, exitCode: 0 };
+  }
+  const res = spawnSync(process.execPath, [patcherPath, '--status'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 5000,
+    env: (options && options.env) || process.env,
+  });
+  if (res.stdout) {
+    try {
+      const parsed = JSON.parse(res.stdout);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return {
+          report: {
+            ...baseReport,
+            ...parsed,
+            pluginEnabled,
+            translationProvider,
+            pretranslateEnabled,
+          },
+          exitCode: typeof res.status === 'number' ? res.status : 0,
+        };
+      }
+    } catch {}
+  }
+  return {
+    report: baseReport,
+    exitCode: typeof res.status === 'number' ? res.status : 0,
+  };
+}
+
 function resolveStatusbarPatcherPath() {
   ensureHostStatusbarPatcherInstalled(ENSURE_STATUSBAR_PATCH_PATH);
   if (fs.existsSync(ENSURE_STATUSBAR_PATCH_PATH)) {
@@ -109,6 +182,13 @@ function runStatusbarPatchWorker(options = {}) {
 
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes('--status')) {
+    const { report, exitCode } = buildReadOnlyStatusReport();
+    process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+    process.exitCode = exitCode;
+    return;
+  }
+
   if (args.includes('--sync-mirrors')) {
     const syncRes = syncDistributableMirrors();
     process.stdout.write(JSON.stringify(syncRes, null, 2) + '\n');
@@ -156,36 +236,17 @@ async function main() {
 
   const patcherPath = resolveStatusbarPatcherPath();
   if (patcherPath && fs.existsSync(patcherPath)) {
-    if (args.includes('--status')) {
-      const res = spawnSync(process.execPath, [patcherPath, '--status'], {
-        encoding: 'utf8',
-        windowsHide: true,
-        timeout: 5000,
-      });
-      if (res.stdout) {
-        try {
-          const parsed = JSON.parse(res.stdout);
-          parsed.translationProvider = translationProvider;
-          parsed.pretranslateEnabled = pretranslateEnabled;
-          process.stdout.write(JSON.stringify(parsed, null, 2) + '\n');
-        } catch {
-          process.stdout.write(res.stdout);
-        }
-      }
-      process.exit(res.status || 0);
+    // Run `--worker` synchronously with bounded timeout so Windows Job Object cleanup on hook exit
+    // never kills an in-flight `app.asar` patch or Live CDP injection.
+    if (isHook) {
+      runStatusbarPatchWorker({ isHook: true });
     } else {
-      // Run `--worker` synchronously with bounded timeout so Windows Job Object cleanup on hook exit
-      // never kills an in-flight `app.asar` patch or Live CDP injection.
-      if (isHook) {
-        runStatusbarPatchWorker({ isHook: true });
-      } else {
-        runStatusbarPatchWorker();
-      }
-      if ((cliPretranslate !== null || cliProvider !== null) && !isHook) {
-        process.stdout.write(
-          JSON.stringify({ translationProvider, pretranslateEnabled }, null, 2) + '\n'
-        );
-      }
+      runStatusbarPatchWorker();
+    }
+    if ((cliPretranslate !== null || cliProvider !== null) && !isHook) {
+      process.stdout.write(
+        JSON.stringify({ translationProvider, pretranslateEnabled }, null, 2) + '\n'
+      );
     }
   }
 
@@ -202,6 +263,8 @@ module.exports = {
   parsePatcherCapabilityRevision,
   isPatcherRevisionAtLeast,
   ensureHostStatusbarPatcherInstalled,
+  resolveStatusbarPatcherPathReadOnly,
+  buildReadOnlyStatusReport,
   resolveStatusbarPatcherPath,
   applyProviderRuntimePolicy,
   runStatusbarPatchWorker,

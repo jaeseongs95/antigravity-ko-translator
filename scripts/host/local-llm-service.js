@@ -509,11 +509,13 @@ async function ensureLocalLlmServer(pluginEnabled = true, options = {}) {
       ownedChildPid = ownedChildPid || tryReadOwnedChildPid();
       const postProbe = await probeLocalLlmServer(200, options);
       if (postProbe.reachable) {
-        if (!ownedChildPid) {
-          for (let i = 0; i < 6 && !ownedChildPid; i++) {
-            await new Promise((r) => setTimeout(r, 25));
+        while (!ownedChildPid && Date.now() < deadline) {
+          if (sentinel && sentinel.pid && !isProcessAlive(sentinel.pid)) {
             ownedChildPid = tryReadOwnedChildPid();
+            break;
           }
+          await new Promise((r) => setTimeout(r, 20));
+          ownedChildPid = tryReadOwnedChildPid();
         }
         return { ...postProbe, ownedByPlugin: true, pid: ownedChildPid };
       }
@@ -768,7 +770,12 @@ function runLlmSentinelSupervisor() {
       process.platform === 'win32'
         ? `win32-image:${normalizedImage}`
         : `child-pid:${child.pid}`;
-    const identityToken = readProcessIdentityToken(child.pid) || fallbackToken;
+    // Avoid blocking initial atomic PID registration on slow Windows `tasklist.exe` child spawn
+    // when `normalizedImage` already deterministically yields `win32-image:<exe>`.
+    const identityToken =
+      process.platform === 'win32' && normalizedImage
+        ? fallbackToken
+        : readProcessIdentityToken(child.pid) || fallbackToken;
 
     try {
       writeFileAtomicSync(
