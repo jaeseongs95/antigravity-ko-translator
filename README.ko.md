@@ -2,7 +2,7 @@
 
 > 🌐 **Language**: [English Documentation (README.md)](./README.md) | **한국어**
 
-Antigravity 2.0 데스크톱 앱과 **원격 제어(Remote Control) 웹·모바일 브라우저(`https://antigravity.google.com/r/...`)**에서 영어로 스트리밍되는 **Thinking(추론 과정) 본문**(사이드 질문 추론 및 브라우저 서브에이전트 실시간 추론 포함), **작업 단계 요약(`Worked for ...`)**, **앱 전체 정적 UI 메뉴·설정·위젯**을 실시간 한국어로 자동 전환하는 플러그인입니다 (`v1.2.38` / `v13.33`).
+Antigravity 2.0 데스크톱 앱과 **원격 제어(Remote Control) 웹·모바일 브라우저(`https://antigravity.google.com/r/...`)**에서 영어로 스트리밍되는 **Thinking(추론 과정) 본문**(사이드 질문 추론 및 브라우저 서브에이전트 실시간 추론 포함), **작업 단계 요약(`Worked for ...`)**, **앱 전체 정적 UI 메뉴·설정·위젯**을 실시간 한국어로 자동 전환하는 플러그인입니다 (`v1.2.39` / `v13.33`).
 
 ---
 

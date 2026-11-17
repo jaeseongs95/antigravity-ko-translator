@@ -30,7 +30,7 @@ test('modular SOLID structure and bundle assembly verification', () => {
   assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.33';"));
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugin.json'), 'utf8'));
-  assert.equal(pkgJson.version, '1.2.38');
+  assert.equal(pkgJson.version, '1.2.39');
   assert.equal(pluginJson.version, pkgJson.version, 'D-0019: plugin.json version must stay synchronized with package.json');
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
@@ -2043,8 +2043,8 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
   const readmeKo = fs.readFileSync(readmeKoPath, 'utf8');
   assert.ok(readmeEn.includes('[한국어 문서 (README.ko.md)](./README.ko.md)'), 'D-0022: English README.md must link to README.ko.md at the top');
   assert.ok(readmeKo.includes('[English Documentation (README.md)](./README.md)'), 'D-0022: Korean README.ko.md must link to README.md at the top');
-  assert.ok(readmeEn.includes('v1.2.38') && readmeEn.includes('v13.33'), 'D-0022: README.md must reflect v1.2.38 / v13.33');
-  assert.ok(readmeKo.includes('v1.2.38') && readmeKo.includes('v13.33'), 'D-0022: README.ko.md must reflect v1.2.38 / v13.33');
+  assert.ok(readmeEn.includes('v1.2.39') && readmeEn.includes('v13.33'), 'D-0022: README.md must reflect v1.2.39 / v13.33');
+  assert.ok(readmeKo.includes('v1.2.39') && readmeKo.includes('v13.33'), 'D-0022: README.ko.md must reflect v1.2.39 / v13.33');
 
   // D-0023: Verify segment.isLatest:false overrides isLastContainer:true on Lhc fiber so historical execution segments inside the latest turn container are NEVER force-expanded on session switch
   const activeHelperMatch = mod08.match(
@@ -5376,5 +5376,60 @@ test(
     const manualRes = await rcInst.onIframeLoad();
     assert.equal(manualRes, 'ORIG_LOADED', 'subsequent rcInst.onIframeLoad() after promotion success must invoke original method');
     assert.equal(origOnLoadCalls, beforeManualCalls + 1, 'rcInst.onIframeLoad() must not remain permanently suppressed');
+  });
+
+  await t.test('9. [D-0040] .gitattributes enforces LF on Windows core.autocrlf=true checkout & CI runs ubuntu-latest + windows-latest', (subT) => {
+    const osMod = require('os');
+    const { execFileSync } = require('child_process');
+    const gitattributesPath = path.join(ROOT, '.gitattributes');
+    assert.ok(fs.existsSync(gitattributesPath), 'D-0040: .gitattributes must exist at repository root');
+    const gitattributesText = fs.readFileSync(gitattributesPath, 'utf8');
+    assert.match(
+      gitattributesText,
+      /^\*\s+text=auto\s+eol=lf\b/m,
+      'D-0040: .gitattributes must enforce "* text=auto eol=lf" so Windows checkouts preserve canonical LF mirrors'
+    );
+
+    const ciYaml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+    assert.ok(ciYaml.includes('ubuntu-latest'), 'D-0040: CI workflow must test on ubuntu-latest');
+    assert.ok(ciYaml.includes('windows-latest'), 'D-0040: CI workflow must test on windows-latest');
+
+    const tmpClone = fs.mkdtempSync(path.join(osMod.tmpdir(), 'ko-d0040-autocrlf-'));
+    subT.after(() => {
+      try {
+        fs.rmSync(tmpClone, { recursive: true, force: true });
+      } catch (e) {}
+    });
+
+    let gitattributesCommitted = false;
+    try {
+      execFileSync('git', ['-C', ROOT, 'ls-files', '--error-unmatch', '.gitattributes'], { stdio: 'pipe' });
+      gitattributesCommitted = true;
+    } catch (e) {
+      gitattributesCommitted = false;
+    }
+
+    if (gitattributesCommitted) {
+      execFileSync('git', ['-c', 'core.autocrlf=true', 'clone', '--quiet', ROOT, tmpClone], { stdio: 'pipe' });
+    } else {
+      execFileSync('git', ['clone', '--no-checkout', '--quiet', ROOT, tmpClone], { stdio: 'pipe' });
+      fs.copyFileSync(gitattributesPath, path.join(tmpClone, '.gitattributes'));
+      execFileSync('git', ['-C', tmpClone, '-c', 'core.autocrlf=true', 'checkout', '--force', 'HEAD'], { stdio: 'pipe' });
+    }
+
+    const mirrorRelPaths = [
+      path.join('scripts', 'ko_thought_autoinject.js'),
+      path.join('dist', 'ko_thought_autoinject.js'),
+      path.join('plugins', 'ko-thought-translator', 'scripts', 'ko_thought_autoinject.js'),
+      path.join('skills', 'ko-thought-translator', 'scripts', 'ko_thought_inject.js'),
+    ];
+    for (const rel of mirrorRelPaths) {
+      const clonedMirror = fs.readFileSync(path.join(tmpClone, rel), 'utf8');
+      assert.equal(
+        clonedMirror.includes('\r\n'),
+        false,
+        `D-0040: ${rel} checked out under core.autocrlf=true must contain zero CRLF sequences`
+      );
+    }
   });
 });
