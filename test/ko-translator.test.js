@@ -27,10 +27,10 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.31';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.32';"));
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugin.json'), 'utf8'));
-  assert.equal(pkgJson.version, '1.2.36');
+  assert.equal(pkgJson.version, '1.2.37');
   assert.equal(pluginJson.version, pkgJson.version, 'D-0019: plugin.json version must stay synchronized with package.json');
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
@@ -993,7 +993,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.31',
+      __agyKoLocalizerActive: 'v13.32',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1590,8 +1590,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 14. D-0013~D-0019 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, .no-animations Web Animations suppression, 16ms FOUC elimination, worked-for latest turn guard, retranslateVisibleThoughts parent propagation, queued messages card & new strings, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.31') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.31 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v13.32') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v13.32 and must NOT claim verboseConversationSteps: true is force-enabled'
   );
   const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
   assert.ok(
@@ -2043,8 +2043,8 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
   const readmeKo = fs.readFileSync(readmeKoPath, 'utf8');
   assert.ok(readmeEn.includes('[한국어 문서 (README.ko.md)](./README.ko.md)'), 'D-0022: English README.md must link to README.ko.md at the top');
   assert.ok(readmeKo.includes('[English Documentation (README.md)](./README.md)'), 'D-0022: Korean README.ko.md must link to README.md at the top');
-  assert.ok(readmeEn.includes('v1.2.36') && readmeEn.includes('v13.31'), 'D-0022: README.md must reflect v1.2.36 / v13.31');
-  assert.ok(readmeKo.includes('v1.2.36') && readmeKo.includes('v13.31'), 'D-0022: README.ko.md must reflect v1.2.36 / v13.31');
+  assert.ok(readmeEn.includes('v1.2.37') && readmeEn.includes('v13.32'), 'D-0022: README.md must reflect v1.2.37 / v13.32');
+  assert.ok(readmeKo.includes('v1.2.37') && readmeKo.includes('v13.32'), 'D-0022: README.ko.md must reflect v1.2.37 / v13.32');
 
   // D-0023: Verify segment.isLatest:false overrides isLastContainer:true on Lhc fiber so historical execution segments inside the latest turn container are NEVER force-expanded on session switch
   const activeHelperMatch = mod08.match(
@@ -3107,5 +3107,339 @@ test('D-0038: GitHub Actions CI covers Gitflow branches and standard README/Rele
   const readmeKo = fs.readFileSync(path.join(ROOT, 'README.ko.md'), 'utf8');
   assert.ok(readmeEn.includes('README.ko.md'), 'D-0038: English README.md must link to Korean README.ko.md');
   assert.ok(readmeKo.includes('README.md'), 'D-0038: Korean README.ko.md must link to English README.md');
+});
+
+/**
+ * Test Case Specification (Pre-Test Case Definition for D-0039 / KOTRANS-C1 & Runtime Verification):
+ * - TC-D0039-01: WATCHER_PID_PATH writes use atomic temp-file rename (`writeFileAtomicSync`) with zero raw `fs.writeFileSync` to WATCHER_PID_PATH.
+ * - TC-D0039-02: `ensureStorageWatcher` terminates a stale live watcher process and waits until the old OS process exits before spawning the replacement watcher.
+ * - TC-D0039-03: Real child-process `runStorageWatcherLoop` enforces PID ownership fencing (`CONC-FENCE-002`): once a newer watcher claims `WATCHER_PID_PATH`, the displaced watcher executes 0 side effects (`onSettingsChanged` / `onAppRecoveryNeeded`), preserves the new owner's PID file, clears timers, and exits cleanly with code 0.
+ * - TC-RT-01..04: Runtime verification proofs for (1) `asar_unpatched` auto-recovery trigger, (2) `windowsHide: true` (`CREATE_NO_WINDOW`) headless detached spawn, (3) Korean particle post-processing across Hangul/English/digits/DOM `<code>`, and (4) real child HTTP server `stopLocalLlmServer()` port-matched process-tree termination & port release.
+ */
+test('D-0039 (KOTRANS-C1) & runtime verification suite: atomic watcher PID write, old-watcher exit wait, real-process PID ownership fencing, recovery, particle correction, and LLM tree termination', async () => {
+  const os = require('node:os');
+  const http = require('node:http');
+  const { spawn } = require('node:child_process');
+
+  const isPidAlive = (pid) => {
+    if (!pid || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-ko-d0039-'));
+  const agyDir = path.join(tmpRoot, '.gemini', 'antigravity');
+  const cfgDir = path.join(tmpRoot, '.gemini', 'config');
+  const roamingAgyDir = path.join(tmpRoot, 'AppData', 'Roaming', 'Antigravity');
+  fs.mkdirSync(agyDir, { recursive: true });
+  fs.mkdirSync(cfgDir, { recursive: true });
+  fs.mkdirSync(roamingAgyDir, { recursive: true });
+
+  const isolatedPidPath = path.join(agyDir, 'ko_thought_watcher.pid');
+  const isolatedConfigPath = path.join(cfgDir, 'config.json');
+  const isolatedStoragePath = path.join(roamingAgyDir, 'app_storage.json');
+  const sideEffectLogPath = path.join(tmpRoot, 'watcher_side_effects.log');
+  const dummyEntryPath = path.join(tmpRoot, 'dummy_entry.js');
+  fs.writeFileSync(dummyEntryPath, 'setTimeout(() => process.exit(0), 800);\n', 'utf8');
+  fs.writeFileSync(
+    isolatedConfigPath,
+    JSON.stringify({ plugins: { 'ko-thought-translator': { enabled: true, pretranslate: false, provider: 'google-translate' } } }, null, 2),
+    'utf8'
+  );
+  fs.writeFileSync(
+    isolatedStoragePath,
+    JSON.stringify({ 'agy-ko-thought-pretranslate': '0', 'agy-ko-thought-provider': 'google-translate' }, null, 2),
+    'utf8'
+  );
+
+  let staleChild = null;
+  let fencedWatcherChild = null;
+  let spawnedHeadlessPid = null;
+  let llmServerChild = null;
+
+  try {
+    // 1. Real child-process PID ownership fencing check (TC-D0039-03) — runs first to expose live race on unfixed code
+    const watcherRunnerCode = `
+      const fs = require('fs');
+      const settingsStorage = require(${JSON.stringify(path.join(HOST_DIR, 'settings-storage.js'))});
+      settingsStorage.runStorageWatcherLoop({
+        entryScriptPath: ${JSON.stringify(dummyEntryPath)},
+        onSettingsChanged: async (ev) => {
+          fs.appendFileSync(${JSON.stringify(sideEffectLogPath)}, 'SETTINGS:' + JSON.stringify(ev) + '\\n', 'utf8');
+        },
+        onAppRecoveryNeeded: async (ev) => {
+          fs.appendFileSync(${JSON.stringify(sideEffectLogPath)}, 'RECOVERY:' + JSON.stringify(ev) + '\\n', 'utf8');
+        },
+      });
+    `;
+    fencedWatcherChild = spawn(process.execPath, ['-e', watcherRunnerCode], {
+      windowsHide: true,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        USERPROFILE: tmpRoot,
+        HOME: tmpRoot,
+        APPDATA: path.join(tmpRoot, 'AppData', 'Roaming'),
+        LOCALAPPDATA: path.join(tmpRoot, 'AppData', 'Local'),
+      },
+    });
+
+    let fenceChildExitCode = null;
+    const fenceExitPromise = new Promise((resolve) => {
+      fencedWatcherChild.once('exit', (code) => {
+        fenceChildExitCode = code;
+        resolve(code);
+      });
+    });
+
+    // Wait for child watcher #1 to write its own PID to isolatedPidPath
+    const claimDeadline = Date.now() + 2000;
+    while (Date.now() < claimDeadline) {
+      if (fs.existsSync(isolatedPidPath)) {
+        const raw = fs.readFileSync(isolatedPidPath, 'utf8').trim();
+        if (raw.startsWith(`${fencedWatcherChild.pid}:`)) break;
+      }
+      await sleep(25);
+    }
+    assert.ok(
+      fs.existsSync(isolatedPidPath) &&
+        fs.readFileSync(isolatedPidPath, 'utf8').trim().startsWith(`${fencedWatcherChild.pid}:`),
+      'D-0039: child watcher #1 must record its PID at startup'
+    );
+
+    // Reassign ownership of WATCHER_PID_PATH to a newer live owner (process.pid), then mutate app_storage.json
+    fs.writeFileSync(isolatedPidPath, `${process.pid}:999-999-999-999`, 'utf8');
+    await sleep(30);
+    fs.writeFileSync(
+      isolatedStoragePath,
+      JSON.stringify({ 'agy-ko-thought-pretranslate': '1', 'agy-ko-thought-provider': 'local-llm' }, null, 2),
+      'utf8'
+    );
+
+    // Wait up to 900ms (> 2 watcher ticks at 400ms) for displaced watcher #1 to fence & self-exit
+    await Promise.race([fenceExitPromise, sleep(900)]);
+
+    const staleSideEffects = fs.existsSync(sideEffectLogPath)
+      ? fs.readFileSync(sideEffectLogPath, 'utf8').trim()
+      : '';
+    assert.equal(
+      staleSideEffects,
+      '',
+      'D-0039 (CONC-FENCE-002): displaced watcher losing WATCHER_PID_PATH ownership must execute 0 side effects'
+    );
+    assert.equal(
+      isPidAlive(fencedWatcherChild.pid),
+      false,
+      'D-0039 (CONC-FENCE-002 / IMP-004): displaced watcher must clear its interval and self-exit once fenced'
+    );
+    assert.equal(fenceChildExitCode, 0, 'D-0039: fenced watcher child must exit cleanly with code 0');
+    assert.equal(
+      fs.readFileSync(isolatedPidPath, 'utf8').trim(),
+      `${process.pid}:999-999-999-999`,
+      'D-0039: displaced watcher must never overwrite or delete the new owner PID file'
+    );
+
+    // 2. Atomic PID write & old-watcher exit-wait before replacement spawn (TC-D0039-01 & TC-D0039-02 & TC-RT-02)
+    const storageSrc = fs.readFileSync(path.join(HOST_DIR, 'settings-storage.js'), 'utf8');
+    assert.ok(
+      !storageSrc.includes('fs.writeFileSync(WATCHER_PID_PATH') &&
+        !storageSrc.includes('fs.writeFileSync(pidFilePath'),
+      'D-0039: settings-storage.js must use writeFileAtomicSync instead of raw fs.writeFileSync for PID files'
+    );
+
+    staleChild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    assert.equal(isPidAlive(staleChild.pid), true, 'stale watcher fixture must start alive');
+    fs.writeFileSync(isolatedPidPath, `${staleChild.pid}:0-0-0-0`, 'utf8');
+
+    const settingsStorage = require(path.join(HOST_DIR, 'settings-storage.js'));
+    let staleAliveAtSpawnMoment = null;
+    const replacementPid = settingsStorage.ensureStorageWatcher(dummyEntryPath, {
+      watcherPidPath: isolatedPidPath,
+      spawnFn: (scriptPath, pidPath) => {
+        staleAliveAtSpawnMoment = isPidAlive(staleChild.pid);
+        return settingsStorage.spawnDetachedWatcherProcess(scriptPath, pidPath);
+      },
+    });
+    spawnedHeadlessPid = replacementPid;
+    assert.equal(
+      staleAliveAtSpawnMoment,
+      false,
+      'D-0039: ensureStorageWatcher must wait for the old watcher process to exit before spawning the replacement'
+    );
+    assert.ok(replacementPid && replacementPid !== staleChild.pid, 'TC-RT-02: headless replacement watcher must spawn');
+    assert.ok(
+      fs.readFileSync(isolatedPidPath, 'utf8').trim().startsWith(`${replacementPid}:`),
+      'D-0039: replacement watcher PID and signature must be persisted atomically'
+    );
+
+    // 3. Runtime Check 1 (TC-RT-01): App-update `asar_unpatched` auto-recovery callback firing & clean stop()
+    const recoveryReasons = [];
+    const loopCtrl = settingsStorage.runStorageWatcherLoop({
+      entryScriptPath: dummyEntryPath,
+      watcherPidPath: path.join(agyDir, 'recovery_test.pid'),
+      appStoragePath: isolatedStoragePath,
+      configPath: isolatedConfigPath,
+      devtoolsPortFile: path.join(roamingAgyDir, 'DevToolsActivePort'),
+      isAsarPatchedFn: () => recoveryReasons.length > 0,
+      pollIntervalMs: 25,
+      onSettingsChanged: async () => {},
+      onAppRecoveryNeeded: async ({ reason }) => {
+        recoveryReasons.push(reason);
+      },
+    });
+    const recDeadline = Date.now() + 1000;
+    while (recoveryReasons.length === 0 && Date.now() < recDeadline) {
+      await sleep(20);
+    }
+    if (loopCtrl && typeof loopCtrl.stop === 'function') {
+      loopCtrl.stop();
+    }
+    assert.deepEqual(
+      recoveryReasons,
+      ['asar_unpatched'],
+      'TC-RT-01: watcher loop must detect unpatched app.asar on 5th tick and invoke onAppRecoveryNeeded("asar_unpatched")'
+    );
+
+    // 4. Runtime Check 3 (TC-RT-03): Korean particle post-processing across Hangul/English/digits/DOM `<code>`
+    const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
+    const tokBox = {
+      document: {
+        createTextNode: (t) => ({ nodeType: 3, textContent: t, cloneNode: () => tokBox.document.createTextNode(t) }),
+      },
+    };
+    vm.runInNewContext(
+      `${mod03}\n;globalThis.__prot = protectIdentifiersInThoughtText; globalThis.__rest = restoreIdentifiersInThoughtText; globalThis.__buildEl = buildTranslatedElement;`,
+      tokBox
+    );
+    const { protectedText, savedTokens } = tokBox.__prot(
+      'Update settings-storage.js and run npm_test or kubectl_apply for AGS-D-0039 and AGS-D-0038 and AGS-D-0036'
+    );
+    const simulatedKo = protectedText
+      .replace('Update ', '')
+      .replace(' and run ', '을 수정하고 ')
+      .replace(' or ', '로 실행하거나 ')
+      .replace(' for ', '으로 배포하여 ')
+      .replace(' and ', '을 검증하고 ')
+      .replace(' and ', '으로 연결하며 ') + '로 마감합니다.';
+    const restoredKo = tokBox.__rest(simulatedKo, savedTokens);
+    assert.ok(restoredKo.includes('settings-storage.js를'), 'TC-RT-03: vowel-ending .js must correct 을 -> 를');
+    assert.ok(restoredKo.includes('npm_test로'), 'TC-RT-03: t-ending identifier -> 트(jong=0) must keep 로');
+    assert.ok(restoredKo.includes('kubectl_apply로'), 'TC-RT-03: y-ending identifier -> 이(jong=0) must correct 으로 -> 로');
+    assert.ok(restoredKo.includes('AGS-D-0039를'), 'TC-RT-03: digit 9(구, jong=0) must correct 을 -> 를');
+    assert.ok(restoredKo.includes('AGS-D-0038로'), 'TC-RT-03: digit 8(팔, rieul jong=8) must correct 으로 -> 로');
+    assert.ok(restoredKo.includes('AGS-D-0036으로'), 'TC-RT-03: digit 6(육, jong=1) must correct 로 -> 으로');
+
+    const mockOrigP = {
+      cloneNode: () => ({
+        children: [],
+        appendChild(n) {
+          this.children.push(n);
+        },
+        get textContent() {
+          return this.children.map((c) => c.textContent).join('');
+        },
+      }),
+    };
+    const mockCodeNode = {
+      textContent: 'runStorageWatcherLoop',
+      cloneNode() {
+        return { textContent: this.textContent };
+      },
+    };
+    const builtEl = tokBox.__buildEl(mockOrigP, [mockCodeNode], '⟦C0⟧를 호출합니다.');
+    assert.equal(
+      builtEl.textContent,
+      'runStorageWatcherLoop을 호출합니다.',
+      'TC-RT-03: DOM <code> ending in consonant p(jong=1) must correct trailing text node 를 -> 을'
+    );
+
+    // 5. Runtime Check 4 (TC-RT-04): Real child HTTP server `stopLocalLlmServer()` port-matched tree termination & port release
+    const llmScript = `
+      const http = require('http');
+      const srv = http.createServer((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+        res.end(JSON.stringify({ data: [{ id: 'runtime-verify-model' }] }));
+      });
+      srv.listen(0, '127.0.0.1', () => {
+        process.stdout.write('READY:' + srv.address().port + '\\n');
+      });
+      setInterval(() => {}, 1000);
+    `;
+    llmServerChild = spawn(process.execPath, ['-e', llmScript], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const ephemeralPort = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('LLM child server listen timeout')), 3000);
+      let buf = '';
+      llmServerChild.stdout.on('data', (chunk) => {
+        buf += chunk.toString('utf8');
+        const m = buf.match(/READY:(\d+)/);
+        if (m) {
+          clearTimeout(timer);
+          resolve(Number(m[1]));
+        }
+      });
+      llmServerChild.once('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+
+    const prevLlmUrl = process.env.AGY_LOCAL_LLM_BASE_URL;
+    try {
+      process.env.AGY_LOCAL_LLM_BASE_URL = `http://127.0.0.1:${ephemeralPort}`;
+      const pathsModPath = path.join(HOST_DIR, 'paths.js');
+      const llmModPath = path.join(HOST_DIR, 'local-llm-service.js');
+      delete require.cache[require.resolve(pathsModPath)];
+      delete require.cache[require.resolve(llmModPath)];
+      const freshLlm = require(llmModPath);
+
+      const beforeStopProbe = await freshLlm.probeLocalLlmServer(400);
+      assert.equal(beforeStopProbe.reachable, true, 'TC-RT-04: real child HTTP server must be reachable before stopLocalLlmServer');
+      assert.equal(isPidAlive(llmServerChild.pid), true);
+
+      const stopRes = await freshLlm.stopLocalLlmServer(false);
+      assert.ok(stopRes.stoppedCount >= 1, 'TC-RT-04: stopLocalLlmServer must terminate at least 1 listening process on the configured port');
+
+      const stopWaitDeadline = Date.now() + 1500;
+      while (isPidAlive(llmServerChild.pid) && Date.now() < stopWaitDeadline) {
+        await sleep(25);
+      }
+      assert.equal(isPidAlive(llmServerChild.pid), false, 'TC-RT-04: real child LLM server PID must be terminated');
+      const afterStopProbe = await freshLlm.probeLocalLlmServer(250);
+      assert.equal(afterStopProbe.reachable, false, 'TC-RT-04: port must no longer accept connections after stopLocalLlmServer');
+    } finally {
+      if (prevLlmUrl === undefined) delete process.env.AGY_LOCAL_LLM_BASE_URL;
+      else process.env.AGY_LOCAL_LLM_BASE_URL = prevLlmUrl;
+      delete require.cache[require.resolve(path.join(HOST_DIR, 'paths.js'))];
+      delete require.cache[require.resolve(path.join(HOST_DIR, 'local-llm-service.js'))];
+    }
+  } finally {
+    for (const proc of [staleChild, fencedWatcherChild, llmServerChild]) {
+      if (proc && proc.pid && isPidAlive(proc.pid)) {
+        try {
+          process.kill(proc.pid, 'SIGKILL');
+        } catch {}
+      }
+    }
+    if (spawnedHeadlessPid && isPidAlive(spawnedHeadlessPid)) {
+      try {
+        process.kill(spawnedHeadlessPid, 'SIGKILL');
+      } catch {}
+    }
+    await sleep(60);
+    try {
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {}
+  }
 });
 

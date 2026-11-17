@@ -74,7 +74,7 @@ function writeFileAtomicSync(targetPath, content) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
+  const tmpPath = `${targetPath}.tmp.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}`;
   try {
     fs.writeFileSync(tmpPath, content, 'utf8');
     try {
@@ -189,17 +189,78 @@ function isProcessAlive(pid) {
   }
 }
 
+const SYNC_WAIT_INT32 =
+  typeof SharedArrayBuffer === 'function' ? new Int32Array(new SharedArrayBuffer(4)) : null;
+
+function sleepSyncMs(ms) {
+  if (ms <= 0) return;
+  if (SYNC_WAIT_INT32 && typeof Atomics !== 'undefined' && typeof Atomics.wait === 'function') {
+    try {
+      Atomics.wait(SYNC_WAIT_INT32, 0, 0, ms);
+      return;
+    } catch {}
+  }
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    // Fallback short busy wait only when Atomics.wait is unavailable
+  }
+}
+
+function waitForProcessExitSync(pid, timeoutMs = 1500) {
+  if (!isProcessAlive(pid)) return true;
+  const deadline = Date.now() + Math.max(50, timeoutMs);
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    sleepSyncMs(20);
+  }
+  if (isProcessAlive(pid)) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {}
+    const forceDeadline = Date.now() + 300;
+    while (Date.now() < forceDeadline) {
+      if (!isProcessAlive(pid)) return true;
+      sleepSyncMs(20);
+    }
+  }
+  return !isProcessAlive(pid);
+}
+
+function readWatcherPidRecord(pidFilePath) {
+  try {
+    if (!pidFilePath || !fs.existsSync(pidFilePath)) {
+      return { pid: null, sig: '' };
+    }
+    const raw = fs.readFileSync(pidFilePath, 'utf8').trim();
+    if (!raw) return { pid: null, sig: '' };
+    const sepIdx = raw.indexOf(':');
+    const pidStr = sepIdx === -1 ? raw : raw.slice(0, sepIdx);
+    const sig = sepIdx === -1 ? '' : raw.slice(sepIdx + 1);
+    const parsedPid = Number(pidStr);
+    return {
+      pid: Number.isInteger(parsedPid) && parsedPid > 0 ? parsedPid : null,
+      sig,
+    };
+  } catch {
+    return { pid: null, sig: '' };
+  }
+}
+
 /**
  * Spawns the background storage & app-update watcher directly via Node/libuv with
  * `windowsHide: true` (`CREATE_NO_WINDOW = 0x08000000`) and `stdio: 'ignore'`
  * so Windows never allocates a console or triggers Windows Terminal (`DefTerm`).
  */
-function spawnDetachedWatcherProcess(entryScriptPath) {
+function spawnDetachedWatcherProcess(entryScriptPath, pidFilePath = WATCHER_PID_PATH) {
+  const childEnv = { ...process.env };
+  if (pidFilePath && pidFilePath !== WATCHER_PID_PATH) {
+    childEnv.AGY_KO_WATCHER_PID_PATH = pidFilePath;
+  }
   const child = spawn(process.execPath, [entryScriptPath, '--watch-storage'], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
-    env: { ...process.env },
+    env: childEnv,
   });
   child.unref();
   return child.pid || null;
@@ -223,29 +284,36 @@ function computeWatcherSignature(entryScriptPath) {
     .join('-');
 }
 
-function ensureStorageWatcher(entryScriptPath) {
+function ensureStorageWatcher(entryScriptPath, options = {}) {
   try {
+    const pidFilePath =
+      (options && options.watcherPidPath) || process.env.AGY_KO_WATCHER_PID_PATH || WATCHER_PID_PATH;
+    const spawnFn =
+      options && typeof options.spawnFn === 'function' ? options.spawnFn : spawnDetachedWatcherProcess;
+    const exitWaitTimeoutMs =
+      options && typeof options.exitWaitTimeoutMs === 'number' ? options.exitWaitTimeoutMs : 1500;
     const mySig = computeWatcherSignature(entryScriptPath);
-    if (fs.existsSync(WATCHER_PID_PATH)) {
-      const raw = fs.readFileSync(WATCHER_PID_PATH, 'utf8').trim();
-      const [pidStr, sig] = raw.split(':');
-      const existingPid = Number(pidStr);
-      if (isProcessAlive(existingPid)) {
-        if (sig === mySig) {
-          return existingPid;
-        }
-        try {
-          process.kill(existingPid, 'SIGTERM');
-        } catch (killErr) {
-          if (killErr && killErr.code !== 'ESRCH') {
-            process.stderr.write(`[ko-thought-translator] Failed to terminate stale watcher ${existingPid}: ${killErr.message}\n`);
-          }
+
+    const existing = readWatcherPidRecord(pidFilePath);
+    if (existing.pid && isProcessAlive(existing.pid)) {
+      if (existing.sig === mySig) {
+        return existing.pid;
+      }
+      try {
+        process.kill(existing.pid, 'SIGTERM');
+      } catch (killErr) {
+        if (killErr && killErr.code !== 'ESRCH') {
+          process.stderr.write(
+            `[ko-thought-translator] Failed to terminate stale watcher ${existing.pid}: ${killErr.message}\n`
+          );
         }
       }
+      waitForProcessExitSync(existing.pid, exitWaitTimeoutMs);
     }
-    const spawnedPid = spawnDetachedWatcherProcess(entryScriptPath);
+
+    const spawnedPid = spawnFn(entryScriptPath, pidFilePath);
     if (spawnedPid) {
-      fs.writeFileSync(WATCHER_PID_PATH, `${spawnedPid}:${mySig}`, 'utf8');
+      writeFileAtomicSync(pidFilePath, `${spawnedPid}:${mySig}`);
     }
     return spawnedPid;
   } catch (err) {
@@ -254,10 +322,10 @@ function ensureStorageWatcher(entryScriptPath) {
   }
 }
 
-function readCurrentDevToolsPort() {
+function readCurrentDevToolsPort(portFilePath = DEVTOOLS_PORT_FILE) {
   try {
-    if (!fs.existsSync(DEVTOOLS_PORT_FILE)) return null;
-    const lines = fs.readFileSync(DEVTOOLS_PORT_FILE, 'utf8').trim().split(/\r?\n/);
+    if (!portFilePath || !fs.existsSync(portFilePath)) return null;
+    const lines = fs.readFileSync(portFilePath, 'utf8').trim().split(/\r?\n/);
     const port = parseInt(lines[0], 10);
     return port && !Number.isNaN(port) ? port : null;
   } catch {
@@ -281,23 +349,87 @@ function isAsarCurrentlyPatched() {
   }
 }
 
-function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecoveryNeeded }) {
+function runStorageWatcherLoop({
+  entryScriptPath,
+  onSettingsChanged,
+  onAppRecoveryNeeded,
+  watcherPidPath = null,
+  appStoragePath = null,
+  configPath = null,
+  devtoolsPortFile = null,
+  isAsarPatchedFn = null,
+  pollIntervalMs = 400,
+}) {
+  const pidFilePath = watcherPidPath || process.env.AGY_KO_WATCHER_PID_PATH || WATCHER_PID_PATH;
+  const effectiveAppStoragePath = appStoragePath || APP_STORAGE_PATH;
+  const effectiveConfigPath = configPath || CONFIG_JSON_PATH;
+  const effectiveDevtoolsPortFile = devtoolsPortFile || DEVTOOLS_PORT_FILE;
+  const checkAsarPatched = typeof isAsarPatchedFn === 'function' ? isAsarPatchedFn : isAsarCurrentlyPatched;
+  const pathOverrides = {
+    configPath: effectiveConfigPath,
+    appStoragePath: effectiveAppStoragePath,
+  };
+
   try {
+    const existing = readWatcherPidRecord(pidFilePath);
+    if (existing.pid && existing.pid !== process.pid && isProcessAlive(existing.pid)) {
+      return {
+        stop() {},
+        isStopped: () => true,
+      };
+    }
     const mySig = computeWatcherSignature(entryScriptPath);
-    fs.writeFileSync(WATCHER_PID_PATH, `${process.pid}:${mySig}`, 'utf8');
+    writeFileAtomicSync(pidFilePath, `${process.pid}:${mySig}`);
   } catch (err) {
     process.stderr.write(`[ko-thought-translator] watcher pid write error: ${err.message}\n`);
   }
-  const initialCanonical = getOrSetTranslatorOptions(null, null);
+
+  let stopped = false;
+  let intervalHandle = null;
+  const followupTimers = new Set();
+
+  const hasWatcherOwnership = () => !stopped && readWatcherPidRecord(pidFilePath).pid === process.pid;
+
+  const stopWatcherLoop = ({ removeOwnPidFile = false } = {}) => {
+    if (stopped) return;
+    stopped = true;
+    if (intervalHandle) {
+      clearInterval(intervalHandle);
+      intervalHandle = null;
+    }
+    for (const timer of followupTimers) {
+      clearTimeout(timer);
+    }
+    followupTimers.clear();
+    process.removeListener('SIGTERM', onSignalTerminate);
+    process.removeListener('SIGINT', onSignalTerminate);
+    if (removeOwnPidFile && readWatcherPidRecord(pidFilePath).pid === process.pid) {
+      try {
+        fs.unlinkSync(pidFilePath);
+      } catch {}
+    }
+  };
+
+  function onSignalTerminate() {
+    stopWatcherLoop({ removeOwnPidFile: true });
+  }
+  process.on('SIGTERM', onSignalTerminate);
+  process.on('SIGINT', onSignalTerminate);
+
+  const initialCanonical = getOrSetTranslatorOptions(null, null, pathOverrides);
   let lastProvider = initialCanonical.translationProvider;
   let lastPretranslate = initialCanonical.pretranslateEnabled;
-  let lastDevToolsPort = readCurrentDevToolsPort();
+  let lastDevToolsPort = readCurrentDevToolsPort(effectiveDevtoolsPortFile);
   let lastStorageMtimeMs = -1;
   let lastStorageSize = -1;
   let tickCount = 0;
   let busy = false;
 
   const triggerRecovery = async (reason) => {
+    if (!hasWatcherOwnership()) {
+      stopWatcherLoop({ removeOwnPidFile: false });
+      return;
+    }
     if (typeof onAppRecoveryNeeded === 'function') {
       try {
         await onAppRecoveryNeeded({ reason });
@@ -307,18 +439,34 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
     }
   };
 
+  const scheduleFollowupRecovery = (reason, delayMs) => {
+    const t = setTimeout(() => {
+      followupTimers.delete(t);
+      if (!hasWatcherOwnership()) {
+        stopWatcherLoop({ removeOwnPidFile: false });
+        return;
+      }
+      void triggerRecovery(reason);
+    }, delayMs);
+    followupTimers.add(t);
+  };
+
   const checkStorageAndAppHealth = async () => {
+    if (!hasWatcherOwnership()) {
+      stopWatcherLoop({ removeOwnPidFile: false });
+      return;
+    }
     if (busy) return;
     busy = true;
     tickCount++;
     try {
-      // 1. Check Native Settings UI changes in app_storage.json every 400ms (skip readFileSync + JSON.parse when mtimeMs & size are unchanged)
-      if (fs.existsSync(APP_STORAGE_PATH)) {
-        const stat = fs.statSync(APP_STORAGE_PATH);
+      // 1. Check Native Settings UI changes in app_storage.json (skip readFileSync + JSON.parse when mtimeMs & size are unchanged)
+      if (fs.existsSync(effectiveAppStoragePath)) {
+        const stat = fs.statSync(effectiveAppStoragePath);
         if (stat.mtimeMs !== lastStorageMtimeMs || stat.size !== lastStorageSize) {
           lastStorageMtimeMs = stat.mtimeMs;
           lastStorageSize = stat.size;
-          const appStorage = JSON.parse(fs.readFileSync(APP_STORAGE_PATH, 'utf8'));
+          const appStorage = JSON.parse(fs.readFileSync(effectiveAppStoragePath, 'utf8'));
           const curProvider =
             normalizeProviderName(appStorage['agy-ko-thought-provider']) || lastProvider || 'google-translate';
           const curPre =
@@ -328,11 +476,15 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
             lastProvider = curProvider;
             lastPretranslate = curPre;
           } else if (curProvider !== lastProvider || curPre !== lastPretranslate) {
+            if (!hasWatcherOwnership()) {
+              stopWatcherLoop({ removeOwnPidFile: false });
+              return;
+            }
             const prevProvider = lastProvider;
             lastProvider = curProvider;
             lastPretranslate = curPre;
-            const opts = getOrSetTranslatorOptions(curPre, curProvider);
-            if (typeof onSettingsChanged === 'function') {
+            const opts = getOrSetTranslatorOptions(curPre, curProvider, pathOverrides);
+            if (typeof onSettingsChanged === 'function' && hasWatcherOwnership()) {
               await onSettingsChanged({
                 pretranslateEnabled: opts.pretranslateEnabled,
                 translationProvider: opts.translationProvider,
@@ -343,20 +495,24 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
         }
       }
 
-      // 2. Every ~2000ms (5 ticks), verify app.asar patch state & DevToolsActivePort for app update / restart recovery
+      // 2. Every 5 ticks (~2000ms by default), verify app.asar patch state & DevToolsActivePort for app update / restart recovery
       if (tickCount % 5 === 0) {
-        const curPort = readCurrentDevToolsPort();
+        if (!hasWatcherOwnership()) {
+          stopWatcherLoop({ removeOwnPidFile: false });
+          return;
+        }
+        const curPort = readCurrentDevToolsPort(effectiveDevtoolsPortFile);
         const portChanged = curPort !== null && curPort !== lastDevToolsPort;
         if (curPort !== null) {
           lastDevToolsPort = curPort;
         }
-        const asarUnpatched = !isAsarCurrentlyPatched();
+        const asarUnpatched = !checkAsarPatched();
 
         if (asarUnpatched || portChanged) {
           await triggerRecovery(asarUnpatched ? 'asar_unpatched' : 'devtools_port_changed');
-          if (portChanged) {
-            setTimeout(() => void triggerRecovery('devtools_port_followup_2s'), 2000);
-            setTimeout(() => void triggerRecovery('devtools_port_followup_5s'), 5000);
+          if (portChanged && hasWatcherOwnership()) {
+            scheduleFollowupRecovery('devtools_port_followup_2s', 2000);
+            scheduleFollowupRecovery('devtools_port_followup_5s', 5000);
           }
         }
       }
@@ -368,16 +524,23 @@ function runStorageWatcherLoop({ entryScriptPath, onSettingsChanged, onAppRecove
   };
 
   void checkStorageAndAppHealth();
-  setInterval(checkStorageAndAppHealth, 400);
+  intervalHandle = setInterval(checkStorageAndAppHealth, Math.max(15, Number(pollIntervalMs) || 400));
+  return {
+    stop: () => stopWatcherLoop({ removeOwnPidFile: true }),
+    isStopped: () => stopped,
+  };
 }
 
-  module.exports = {
+module.exports = {
   isPluginEnabled,
   parsePretranslateCliArg,
   normalizeProviderName,
   parseProviderCliArg,
   writeFileAtomicSync,
   getOrSetTranslatorOptions,
+  isProcessAlive,
+  waitForProcessExitSync,
+  spawnDetachedWatcherProcess,
   ensureStorageWatcher,
   runStorageWatcherLoop,
   isAsarCurrentlyPatched,
