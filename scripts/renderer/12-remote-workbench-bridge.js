@@ -174,7 +174,1235 @@
     }
   }
 
-  function mountIntoBootedSameOriginChild(cw, cd) {
+  function mapHostPathnameToCdn(pathname, search, hash, basePath, cdnOrigin, cdnBaseUrl, preserveRootRelative) {
+    if (pathname.startsWith('/antigravity/')) {
+      return `https://www.gstatic.com${pathname}${search}${hash}`;
+    }
+    if (basePath && (pathname === basePath || pathname.startsWith(`${basePath}/`))) {
+      return `${cdnBaseUrl}${pathname.slice(basePath.length)}${search}${hash}`;
+    }
+    if (pathname.startsWith('/web/')) {
+      return `${cdnOrigin}${pathname}${search}${hash}`;
+    }
+    if (preserveRootRelative) {
+      return `${cdnBaseUrl}${pathname}${search}${hash}`;
+    }
+    if (!pathname.startsWith('/r/')) {
+      return `${cdnOrigin}${pathname}${search}${hash}`;
+    }
+    return null;
+  }
+
+  function createRemoteAssetUrlHelper(basePath, cdnOrigin, cdnBaseUrl, ttPolicy) {
+    const rewriteChildAssetUrl = (rawInput) => {
+      if (rawInput === null || rawInput === undefined) return '';
+      const isUrlObj =
+        typeof rawInput === 'object' &&
+        rawInput !== null &&
+        typeof rawInput.href === 'string' &&
+        typeof rawInput.protocol === 'string';
+      if (typeof rawInput !== 'string' && !isUrlObj) return rawInput;
+      const trimmed = String(isUrlObj ? rawInput.href : rawInput).trim();
+      if (!trimmed) return trimmed;
+      if (/^(?:blob:|data:|javascript:|mailto:|tel:|about:|#|\?)/i.test(trimmed)) {
+        return trimmed;
+      }
+      if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+        return (
+          mapHostPathnameToCdn(trimmed, '', '', basePath, cdnOrigin, cdnBaseUrl, true) || `${cdnBaseUrl}${trimmed}`
+        );
+      }
+      if (!/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmed) && !trimmed.startsWith('//')) {
+        try {
+          const virtualBase = `${window.location.origin}${basePath}/`;
+          const resolvedRel = new URL(trimmed, virtualBase);
+          if (resolvedRel.origin === window.location.origin) {
+            const mapped = mapHostPathnameToCdn(
+              resolvedRel.pathname,
+              resolvedRel.search,
+              resolvedRel.hash,
+              basePath,
+              cdnOrigin,
+              cdnBaseUrl,
+              false
+            );
+            if (mapped) return mapped;
+          }
+        } catch (e) {}
+        return trimmed;
+      }
+      try {
+        const parsedAsset = new URL(trimmed, window.location.href);
+        if (
+          parsedAsset.origin === window.location.origin ||
+          parsedAsset.hostname === 'antigravity.static.usercontent.goog'
+        ) {
+          const mapped = mapHostPathnameToCdn(
+            parsedAsset.pathname,
+            parsedAsset.search,
+            parsedAsset.hash,
+            basePath,
+            cdnOrigin,
+            cdnBaseUrl,
+            parsedAsset.origin === window.location.origin && !parsedAsset.pathname.startsWith('/r/')
+          );
+          if (mapped) return mapped;
+        }
+      } catch (e) {}
+      return trimmed;
+    };
+
+    const toSafeChildScriptUrl = (rawVal) => {
+      if (rawVal && typeof rawVal === 'object' && typeof rawVal.href !== 'string') {
+        return rawVal;
+      }
+      const nextUrl = rewriteChildAssetUrl(rawVal);
+      if (ttPolicy && typeof nextUrl === 'string' && isTrustedRemoteScriptUrl(nextUrl)) {
+        return ttPolicy.createScriptURL(nextUrl);
+      }
+      return nextUrl;
+    };
+
+    return { rewriteChildAssetUrl, toSafeChildScriptUrl };
+  }
+
+  function resolveChildRemoteCdnContext(iframe, rcInst, cw, cd) {
+    if (iframe && iframe.__agyKoCdnContext) {
+      return iframe.__agyKoCdnContext;
+    }
+    const candidates = [];
+    try {
+      if (rcInst && typeof rcInst.iframeSrc === 'function') {
+        const rcUrl = rcInst.iframeSrc();
+        if (rcUrl) candidates.push(String(rcUrl));
+      }
+    } catch (e) {}
+    try {
+      const attrSrc = iframe && typeof iframe.getAttribute === 'function' ? iframe.getAttribute('src') : '';
+      if (attrSrc) candidates.push(String(attrSrc));
+      if (iframe && iframe.src) candidates.push(String(iframe.src));
+    } catch (e) {}
+    try {
+      if (cd && typeof cd.querySelectorAll === 'function') {
+        const assetEls = cd.querySelectorAll('script[src], link[href]');
+        for (let i = 0; i < assetEls.length; i++) {
+          const val = assetEls[i].src || (typeof assetEls[i].getAttribute === 'function' ? assetEls[i].getAttribute('src') || assetEls[i].getAttribute('href') : '');
+          if (val) candidates.push(String(val));
+        }
+      }
+    } catch (e) {}
+    try {
+      if (cw && cw.location && cw.location.href) {
+        candidates.push(String(cw.location.href));
+      }
+    } catch (e) {}
+
+    for (const rawCandidate of candidates) {
+      const urlText = String(rawCandidate || '').match(/https?:\/\/[^\s"'<>)+]+/)?.[0] || rawCandidate;
+      if (!urlText || urlText === 'about:blank') continue;
+      try {
+        const parsed = new URL(urlText, window.location.href);
+        const cleanPath = parsed.pathname.replace(/^\/antigravity/, '');
+        const webMatch = cleanPath.match(/^(\/web\/[^/]+)/);
+        const basePath = webMatch ? webMatch[1] : cleanPath.replace(/\/+$/, '');
+        if (!basePath || basePath === '/r' || basePath.startsWith('/r/')) continue;
+        const cdnOrigin =
+          parsed.hostname === 'antigravity.static.usercontent.goog' ||
+          parsed.origin === window.location.origin ||
+          parsed.hostname === 'www.gstatic.com'
+            ? 'https://www.gstatic.com/antigravity'
+            : parsed.origin;
+        const cdnBaseUrl = `${cdnOrigin}${basePath}`;
+        if (isTrustedRemoteScriptUrl(`${cdnBaseUrl}/main.js`)) {
+          const ctx = { basePath, cdnOrigin, cdnBaseUrl };
+          if (iframe) {
+            try {
+              iframe.__agyKoCdnContext = ctx;
+            } catch (e) {}
+          }
+          return ctx;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  function compileTrustedEsModuleBody(source, modUrl, resolveDepFn, modExportsVar) {
+    const depMap = new Map();
+    const exportsList = [];
+    const registerDep = (spec) => {
+      const info = resolveDepFn(spec, modUrl);
+      depMap.set(spec, info.id);
+      return info.varExpr;
+    };
+
+    // Mask strings and comments before matching ES module import/export syntax so embedded strings are untouched.
+    const tokens = [];
+    let masked = '';
+    let i = 0;
+    while (i < source.length) {
+      const ch = source[i];
+      const next = source[i + 1];
+      if (ch === '/' && next === '/') {
+        const end = source.indexOf('\n', i + 2);
+        const stop = end === -1 ? source.length : end;
+        const idx = tokens.push(source.slice(i, stop)) - 1;
+        masked += `__AGY_TOK_${idx}__`;
+        i = stop;
+        continue;
+      }
+      if (ch === '/' && next === '*') {
+        const end = source.indexOf('*/', i + 2);
+        const stop = end === -1 ? source.length : end + 2;
+        const idx = tokens.push(source.slice(i, stop)) - 1;
+        masked += `__AGY_TOK_${idx}__`;
+        i = stop;
+        continue;
+      }
+      if (ch === '\'' || ch === '"' || ch === '`') {
+        const quote = ch;
+        let j = i + 1;
+        while (j < source.length) {
+          if (source[j] === '\\') {
+            j += 2;
+            continue;
+          }
+          if (quote === '`' && source[j] === '$' && source[j + 1] === '{') {
+            j += 2;
+            let depth = 1;
+            while (j < source.length && depth > 0) {
+              if (source[j] === '\\') j += 2;
+              else if (source[j] === '{') { depth++; j++; }
+              else if (source[j] === '}') { depth--; j++; }
+              else j++;
+            }
+            continue;
+          }
+          if (source[j] === quote) {
+            j++;
+            break;
+          }
+          j++;
+        }
+        const rawLit = source.slice(i, j);
+        if (quote === '\'' || quote === '"') {
+          const idx = tokens.push(rawLit) - 1;
+          masked += `__AGY_STR_${idx}__`;
+        } else {
+          const idx = tokens.push(rawLit) - 1;
+          masked += `__AGY_TOK_${idx}__`;
+        }
+        i = j;
+        continue;
+      }
+      masked += ch;
+      i++;
+    }
+
+    const unquoteStrTok = (tokName) => {
+      const m = tokName && tokName.match(/^__AGY_STR_(\d+)__$/);
+      if (!m) return '';
+      const lit = tokens[Number(m[1])] || '';
+      return lit.slice(1, -1);
+    };
+
+    // Rewrite import.meta.url and dynamic import(...) inside unmasked code.
+    let transformed = masked.replace(/\bimport\s*\.\s*meta\s*\.\s*url\b/g, JSON.stringify(modUrl));
+    transformed = transformed.replace(
+      /(^|[^\w$.])import\s*\(\s*(__AGY_STR_\d+__)\s*\)/g,
+      (_, prefix, strTok) => {
+        const spec = unquoteStrTok(strTok);
+        const modVar = registerDep(spec);
+        return `${prefix}Promise.resolve(${modVar})`;
+      }
+    );
+
+    // Rewrite static import statements at statement boundaries.
+    transformed = transformed.replace(
+      /(^|[;\n]\s*)import\s+([\s\S]*?)\s+from\s+(__AGY_STR_\d+__)\s*;?/g,
+      (_, prefix, clause, strTok) => {
+        const spec = unquoteStrTok(strTok);
+        const modVar = registerDep(spec);
+        const trimClause = clause.trim();
+        if (trimClause.startsWith('* as ')) {
+          const alias = trimClause.slice(5).trim();
+          return `${prefix}const ${alias} = ${modVar};`;
+        }
+        if (trimClause.startsWith('{')) {
+          const mappedFields = trimClause.slice(1, -1).replace(/\s+as\s+/g, ': ');
+          return `${prefix}const { ${mappedFields} } = ${modVar};`;
+        }
+        const commaIdx = trimClause.indexOf(',');
+        if (commaIdx === -1) {
+          return `${prefix}const ${trimClause} = ${modVar}.default;`;
+        }
+        const defIdent = trimClause.slice(0, commaIdx).trim();
+        const restClause = trimClause.slice(commaIdx + 1).trim();
+        if (restClause.startsWith('* as ')) {
+          const alias = restClause.slice(5).trim();
+          return `${prefix}const ${defIdent} = ${modVar}.default, ${alias} = ${modVar};`;
+        }
+        const mappedFields = restClause.slice(1, -1).replace(/\s+as\s+/g, ': ');
+        return `${prefix}const { default: ${defIdent}, ${mappedFields} } = ${modVar};`;
+      }
+    );
+    transformed = transformed.replace(
+      /(^|[;\n]\s*)import\s+(__AGY_STR_\d+__)\s*;?/g,
+      (_, prefix, strTok) => {
+        const spec = unquoteStrTok(strTok);
+        registerDep(spec);
+        return `${prefix}void 0;`;
+      }
+    );
+
+    // Rewrite re-exports and local exports.
+    transformed = transformed.replace(
+      /(^|[;\n]\s*)export\s+\*\s+from\s+(__AGY_STR_\d+__)\s*;?/g,
+      (_, prefix, strTok) => {
+        const spec = unquoteStrTok(strTok);
+        const modVar = registerDep(spec);
+        return `${prefix}Object.assign(${modExportsVar}, ${modVar});`;
+      }
+    );
+    transformed = transformed.replace(
+      /(^|[;\n]\s*)export\s+\{([^}]*)\}\s+from\s+(__AGY_STR_\d+__)\s*;?/g,
+      (_, prefix, listStr, strTok) => {
+        const spec = unquoteStrTok(strTok);
+        const modVar = registerDep(spec);
+        const assigns = listStr
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean)
+          .map((p) => {
+            const parts = p.split(/\s+as\s+/);
+            const srcName = parts[0].trim();
+            const expName = (parts[1] || parts[0]).trim();
+            return `${modExportsVar}[${JSON.stringify(expName)}] = ${modVar}[${JSON.stringify(srcName)}];`;
+          })
+          .join(' ');
+        return `${prefix}${assigns}`;
+      }
+    );
+    transformed = transformed.replace(
+      /(^|[;\n]\s*)export\s+default\s+/g,
+      (_, prefix) => `${prefix}${modExportsVar}.default = `
+    );
+    transformed = transformed.replace(
+      /(^|[;\n]\s*)export\s+(async\s+function\*?\s+|function\*?\s+|class\s+)([A-Za-z_$][\w$]*)/g,
+      (_, prefix, kw, ident) => {
+        exportsList.push([ident, ident]);
+        return `${prefix}${kw}${ident}`;
+      }
+    );
+    transformed = transformed.replace(
+      /(^|[;\n]\s*)export\s+(const|let|var)\s+([A-Za-z_$][\w$]*)/g,
+      (_, prefix, kw, ident) => {
+        exportsList.push([ident, ident]);
+        return `${prefix}${kw} ${ident}`;
+      }
+    );
+    transformed = transformed.replace(
+      /(^|[;\n]\s*)export\s+\{([^}]*)\}\s*;?/g,
+      (_, prefix, listStr) => {
+        listStr
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean)
+          .forEach((p) => {
+            const parts = p.split(/\s+as\s+/);
+            exportsList.push([parts[0].trim(), (parts[1] || parts[0]).trim()]);
+          });
+        return `${prefix}void 0;`;
+      }
+    );
+
+    const restored = transformed.replace(/__AGY_(?:STR|TOK)_(\d+)__/g, (_, idxStr) => tokens[Number(idxStr)] || '');
+    const exportFooter = exportsList
+      .map(([localName, expName]) => `${modExportsVar}[${JSON.stringify(expName)}] = ${localName};`)
+      .join('\n');
+    const safeJs = exportFooter ? `${restored}\n${exportFooter}` : restored;
+    return {
+      code: safeJs.replace(/<\/(script)/gi, '<\\/$1'),
+      deps: Array.from(depMap.values()),
+    };
+  }
+
+  function installChildWorkbenchRuntimeGuards(cw, cd, assetHelper, nonce, ttPolicy, hostThemeParam) {
+    if (!cw || !cd) return null;
+    const { rewriteChildAssetUrl, toSafeChildScriptUrl } = assetHelper;
+    const scriptProto = cw.HTMLScriptElement && cw.HTMLScriptElement.prototype;
+    const scriptSrcDesc = scriptProto ? Object.getOwnPropertyDescriptor(scriptProto, 'src') : null;
+
+    if (!cw.__agyKoGuardsInstalled) {
+      cw.__agyKoGuardsInstalled = true;
+      try {
+        if (scriptProto && scriptSrcDesc && typeof scriptSrcDesc.set === 'function' && !scriptProto.__agyScriptSrcPatched) {
+          Object.defineProperty(scriptProto, 'src', {
+            configurable: true,
+            enumerable: true,
+            get: scriptSrcDesc.get,
+            set(val) {
+              if (nonce) {
+                try {
+                  this.nonce = nonce;
+                } catch (e) {}
+              }
+              if (typeof val === 'string' || (val && typeof val === 'object' && typeof val.href === 'string')) {
+                return scriptSrcDesc.set.call(this, toSafeChildScriptUrl(val));
+              }
+              return scriptSrcDesc.set.call(this, val);
+            },
+          });
+          scriptProto.__agyScriptSrcPatched = true;
+        }
+
+        const linkProto = cw.HTMLLinkElement && cw.HTMLLinkElement.prototype;
+        const linkHrefDesc = linkProto ? Object.getOwnPropertyDescriptor(linkProto, 'href') : null;
+        if (linkProto && linkHrefDesc && typeof linkHrefDesc.set === 'function' && !linkProto.__agyLinkHrefPatched) {
+          Object.defineProperty(linkProto, 'href', {
+            configurable: true,
+            enumerable: true,
+            get: linkHrefDesc.get,
+            set(val) {
+              if (nonce) {
+                try {
+                  this.nonce = nonce;
+                } catch (e) {}
+              }
+              if (typeof val === 'string' || (val && typeof val === 'object' && typeof val.href === 'string')) {
+                return linkHrefDesc.set.call(this, rewriteChildAssetUrl(val));
+              }
+              return linkHrefDesc.set.call(this, val);
+            },
+          });
+          linkProto.__agyLinkHrefPatched = true;
+        }
+
+        if (typeof cd.createElement === 'function' && !cd.__agyCreateElPatched) {
+          const origCreateEl = cd.createElement.bind(cd);
+          cd.createElement = function (tagName, options) {
+            const el = options !== undefined ? origCreateEl(tagName, options) : origCreateEl(tagName);
+            const upper = typeof tagName === 'string' ? tagName.toUpperCase() : '';
+            if (nonce && el && (upper === 'SCRIPT' || upper === 'STYLE' || upper === 'LINK')) {
+              try {
+                el.nonce = nonce;
+                if (typeof el.setAttribute === 'function') el.setAttribute('nonce', nonce);
+              } catch (e) {}
+            }
+            const isNativeElem = Boolean(cw.Element && el instanceof cw.Element);
+            if (el && !isNativeElem && typeof el.setAttribute === 'function' && !el.__agySyntheticSetAttrPatched) {
+              const origElSetAttr = el.setAttribute.bind(el);
+              el.setAttribute = function (attrName, attrVal) {
+                const attrLower = String(attrName || '').toLowerCase();
+                if (upper === 'SCRIPT' && attrLower === 'src') {
+                  if (nonce) {
+                    try {
+                      el.nonce = nonce;
+                      origElSetAttr('nonce', nonce);
+                    } catch (e) {}
+                  }
+                  const safeVal = toSafeChildScriptUrl(attrVal);
+                  el.src = safeVal;
+                  return origElSetAttr(attrName, safeVal);
+                }
+                if (upper === 'LINK' && attrLower === 'href') {
+                  if (nonce) {
+                    try {
+                      el.nonce = nonce;
+                      origElSetAttr('nonce', nonce);
+                    } catch (e) {}
+                  }
+                  const nextHref =
+                    attrVal && typeof attrVal === 'object' && typeof attrVal.href !== 'string'
+                      ? attrVal
+                      : rewriteChildAssetUrl(attrVal);
+                  el.href = nextHref;
+                  return origElSetAttr(attrName, nextHref);
+                }
+                if (
+                  (upper === 'IMG' || upper === 'SOURCE' || upper === 'AUDIO' || upper === 'VIDEO') &&
+                  attrLower === 'src'
+                ) {
+                  const nextSrc =
+                    attrVal && typeof attrVal === 'object' && typeof attrVal.href !== 'string'
+                      ? attrVal
+                      : rewriteChildAssetUrl(attrVal);
+                  el.src = nextSrc;
+                  return origElSetAttr(attrName, nextSrc);
+                }
+                return origElSetAttr(attrName, attrVal);
+              };
+              el.__agySyntheticSetAttrPatched = true;
+            }
+            return el;
+          };
+          cd.__agyCreateElPatched = true;
+        }
+      } catch (e) {}
+
+      if (cw.customElements && !cw.customElements.__agyGuarded) {
+        try {
+          const origDef = cw.customElements.define.bind(cw.customElements);
+          cw.customElements.define = (name, ctor, opts) => {
+            if (!cw.customElements.get(name)) origDef(name, ctor, opts);
+          };
+          cw.customElements.__agyGuarded = true;
+        } catch (e) {}
+      }
+
+      for (const mediaProto of [
+        cw.HTMLImageElement && cw.HTMLImageElement.prototype,
+        cw.HTMLSourceElement && cw.HTMLSourceElement.prototype,
+      ]) {
+        const mediaSrcDesc = mediaProto ? Object.getOwnPropertyDescriptor(mediaProto, 'src') : null;
+        if (mediaProto && mediaSrcDesc && typeof mediaSrcDesc.set === 'function' && !mediaProto.__agyImgSrcPatched) {
+          try {
+            Object.defineProperty(mediaProto, 'src', {
+              configurable: true,
+              enumerable: true,
+              get: mediaSrcDesc.get,
+              set(val) {
+                if (typeof val === 'string' || (val && typeof val === 'object' && typeof val.href === 'string')) {
+                  val = rewriteChildAssetUrl(val);
+                }
+                return mediaSrcDesc.set.call(this, val);
+              },
+            });
+            mediaProto.__agyImgSrcPatched = true;
+          } catch (e) {}
+        }
+      }
+
+      const elProto = cw.Element && cw.Element.prototype;
+      if (elProto && typeof elProto.setAttribute === 'function' && !elProto.__agySetAttrPatched) {
+        try {
+          const origSetAttr = elProto.setAttribute;
+          elProto.setAttribute = function (name, val) {
+            const attrLower = String(name || '').toLowerCase();
+            const tagUpper = String(this?.tagName || '').toUpperCase();
+            if (tagUpper === 'SCRIPT' && attrLower === 'src') {
+              if (nonce) {
+                try {
+                  this.nonce = nonce;
+                  origSetAttr.call(this, 'nonce', nonce);
+                } catch (e) {}
+              }
+              if (val && typeof val === 'object' && typeof val.href !== 'string') {
+                return origSetAttr.call(this, name, val);
+              }
+              const safeVal = toSafeChildScriptUrl(val);
+              if (scriptSrcDesc && typeof scriptSrcDesc.set === 'function') {
+                scriptSrcDesc.set.call(this, safeVal);
+                return undefined;
+              }
+              return origSetAttr.call(this, name, safeVal);
+            }
+            if (tagUpper === 'LINK' && attrLower === 'href') {
+              if (nonce) {
+                try {
+                  this.nonce = nonce;
+                  origSetAttr.call(this, 'nonce', nonce);
+                } catch (e) {}
+              }
+              const nextHref =
+                val && typeof val === 'object' && typeof val.href !== 'string' ? val : rewriteChildAssetUrl(val);
+              return origSetAttr.call(this, name, nextHref);
+            }
+            if (
+              (tagUpper === 'IMG' || tagUpper === 'SOURCE' || tagUpper === 'AUDIO' || tagUpper === 'VIDEO') &&
+              attrLower === 'src'
+            ) {
+              const nextSrc =
+                val && typeof val === 'object' && typeof val.href !== 'string' ? val : rewriteChildAssetUrl(val);
+              return origSetAttr.call(this, name, nextSrc);
+            }
+            return origSetAttr.call(this, name, val);
+          };
+          elProto.__agySetAttrPatched = true;
+        } catch (e) {}
+      }
+
+      if (hostThemeParam !== null && hostThemeParam !== undefined) {
+        try {
+          cw.document.documentElement.style.colorScheme = hostThemeParam === 'light' ? 'light' : 'dark';
+        } catch (e) {}
+      }
+    }
+
+    const msgListeners = cw.__agyMsgListeners || new Set();
+    cw.__agyMsgListeners = msgListeners;
+    try {
+      if (typeof cw.addEventListener === 'function' && !cw.__agyMsgBufferInstalled) {
+        cw.__agyMsgBufferInstalled = true;
+        const origAddEv = cw.addEventListener.bind(cw);
+        const origRemoveEv = typeof cw.removeEventListener === 'function' ? cw.removeEventListener.bind(cw) : null;
+        origAddEv('message', (ev) => {
+          if (ev && ev.data && ev.data.type === 'INITIAL_CONFIG') {
+            cw.__agyBufferedInitialConfigEvent = ev;
+            if (msgListeners.size > 0) {
+              cw.__initialConfigReceived = true;
+            }
+          }
+        });
+        cw.addEventListener = function (type, listener, options) {
+          if (type === 'message' && typeof listener === 'function') {
+            msgListeners.add(listener);
+            const res = origAddEv(type, listener, options);
+            if (cw.__agyBufferedInitialConfigEvent && !cw.__initialConfigReceived) {
+              const bufferedEv = cw.__agyBufferedInitialConfigEvent;
+              cw.__initialConfigReceived = true;
+              Promise.resolve().then(() => {
+                try {
+                  listener.call(cw, bufferedEv);
+                } catch (e) {}
+              });
+            }
+            return res;
+          }
+          return origAddEv(type, listener, options);
+        };
+        if (origRemoveEv) {
+          cw.removeEventListener = function (type, listener, options) {
+            if (type === 'message' && typeof listener === 'function') {
+              msgListeners.delete(listener);
+            }
+            return origRemoveEv(type, listener, options);
+          };
+        }
+      }
+    } catch (e) {}
+
+    try {
+      if (typeof cw.Worker === 'function' && !cw.Worker.__agyWorkerPatched) {
+        const OrigWorker = cw.Worker;
+        const mountIframeBackedWorker = (targetWorkerUrl, options) => {
+          if (typeof cw.MessageChannel !== 'function' || !cd) return null;
+          const container = cd.body || cd.documentElement;
+          if (!container || typeof container.appendChild !== 'function' || typeof cd.createElement !== 'function') {
+            return null;
+          }
+          let wf = null;
+          try {
+            wf = cd.createElement('iframe');
+            if (!wf) return null;
+            if (typeof wf.setAttribute === 'function') {
+              wf.setAttribute('aria-hidden', 'true');
+              wf.setAttribute('tabindex', '-1');
+              wf.setAttribute('data-agy-ko-worker', '1');
+              wf.setAttribute(
+                'style',
+                'display:none!important;width:0!important;height:0!important;border:0!important;'
+              );
+            }
+            container.appendChild(wf);
+            let wWin = wf.contentWindow;
+            let wDoc = wf.contentDocument;
+            if (!wWin || !wDoc) {
+              if (typeof wf.remove === 'function') wf.remove();
+              else if (wf.parentNode) wf.parentNode.removeChild(wf);
+              return null;
+            }
+            if (wWin.location && wWin.location.href === 'about:blank' && typeof wDoc.open === 'function') {
+              try {
+                wDoc.open();
+                if (typeof wDoc.close === 'function') wDoc.close();
+                wWin = wf.contentWindow || wWin;
+                wDoc = wf.contentDocument || wDoc;
+              } catch (e) {}
+            }
+
+            const mc = new cw.MessageChannel();
+            const hostPort = mc.port1;
+            const workerPort = mc.port2;
+            let terminated = false;
+            const outerListeners = {
+              message: new Set(),
+              error: new Set(),
+              messageerror: new Set(),
+            };
+            let outerOnMessage = null;
+            let outerOnError = null;
+            let outerOnMessageError = null;
+            const workerFacade = Object.create(OrigWorker.prototype);
+            Object.defineProperties(workerFacade, {
+              url: { configurable: true, enumerable: true, value: targetWorkerUrl },
+              onmessage: {
+                configurable: true,
+                enumerable: true,
+                get: () => outerOnMessage,
+                set: (fn) => {
+                  outerOnMessage = typeof fn === 'function' ? fn : null;
+                },
+              },
+              onerror: {
+                configurable: true,
+                enumerable: true,
+                get: () => outerOnError,
+                set: (fn) => {
+                  outerOnError = typeof fn === 'function' ? fn : null;
+                },
+              },
+              onmessageerror: {
+                configurable: true,
+                enumerable: true,
+                get: () => outerOnMessageError,
+                set: (fn) => {
+                  outerOnMessageError = typeof fn === 'function' ? fn : null;
+                },
+              },
+            });
+            workerFacade.addEventListener = function (type, listener) {
+              const set = outerListeners[String(type || '').toLowerCase()];
+              if (set && typeof listener === 'function') set.add(listener);
+            };
+            workerFacade.removeEventListener = function (type, listener) {
+              const set = outerListeners[String(type || '').toLowerCase()];
+              if (set && typeof listener === 'function') set.delete(listener);
+            };
+            workerFacade.dispatchEvent = function (ev) {
+              if (!ev || !ev.type) return false;
+              const typeLower = String(ev.type).toLowerCase();
+              const propHandler = workerFacade[`on${typeLower}`];
+              if (typeof propHandler === 'function') propHandler.call(workerFacade, ev);
+              const set = outerListeners[typeLower];
+              if (set) {
+                for (const fn of Array.from(set)) fn.call(workerFacade, ev);
+              }
+              return true;
+            };
+            workerFacade.postMessage = function (data, transferOrOptions) {
+              if (terminated) return;
+              if (Array.isArray(transferOrOptions)) {
+                hostPort.postMessage(data, transferOrOptions);
+              } else {
+                hostPort.postMessage(data);
+              }
+            };
+            workerFacade.terminate = function () {
+              if (terminated) return;
+              terminated = true;
+              try {
+                hostPort.onmessage = null;
+                workerPort.onmessage = null;
+                if (typeof hostPort.close === 'function') hostPort.close();
+                if (typeof workerPort.close === 'function') workerPort.close();
+              } catch (e) {}
+              try {
+                if (wf && typeof wf.remove === 'function') wf.remove();
+                else if (wf && wf.parentNode) wf.parentNode.removeChild(wf);
+              } catch (e) {}
+            };
+
+            if (typeof disposables !== 'undefined' && disposables && typeof disposables.register === 'function') {
+              disposables.register(() => workerFacade.terminate());
+            }
+
+            const emitOuterError = (errObj) => {
+              if (terminated) return;
+              const EvCtor = cw.ErrorEvent || cw.Event || Event;
+              const message = errObj && errObj.message ? String(errObj.message) : String(errObj || 'Worker error');
+              let errEv;
+              try {
+                errEv = new EvCtor('error', { message, error: errObj });
+              } catch (e) {
+                errEv = { type: 'error', message, error: errObj };
+              }
+              if (typeof workerFacade.onerror === 'function') {
+                try {
+                  workerFacade.onerror.call(workerFacade, errEv);
+                } catch (e) {}
+              }
+              for (const fn of Array.from(outerListeners.error)) {
+                try {
+                  fn.call(workerFacade, errEv);
+                } catch (e) {}
+              }
+            };
+
+            hostPort.onmessage = (ev) => {
+              if (terminated) return;
+              const MsgEvCtor = cw.MessageEvent || MessageEvent;
+              let msgEv;
+              try {
+                msgEv = new MsgEvCtor('message', { data: ev.data });
+              } catch (e) {
+                msgEv = { type: 'message', data: ev.data };
+              }
+              if (typeof workerFacade.onmessage === 'function') {
+                workerFacade.onmessage.call(workerFacade, msgEv);
+              }
+              for (const fn of Array.from(outerListeners.message)) {
+                fn.call(workerFacade, msgEv);
+              }
+            };
+
+            const parsedWorkerUrl = new URL(targetWorkerUrl, window.location.href);
+            const workerLocation = Object.freeze({
+              href: parsedWorkerUrl.href,
+              origin: parsedWorkerUrl.origin,
+              protocol: parsedWorkerUrl.protocol,
+              host: parsedWorkerUrl.host,
+              hostname: parsedWorkerUrl.hostname,
+              port: parsedWorkerUrl.port,
+              pathname: parsedWorkerUrl.pathname,
+              search: parsedWorkerUrl.search,
+              hash: parsedWorkerUrl.hash,
+              toString() {
+                return parsedWorkerUrl.href;
+              },
+            });
+
+            let innerOnMessage = null;
+            const innerMsgListeners = new Set();
+            try {
+              Object.defineProperty(wWin, 'onmessage', {
+                configurable: true,
+                get: () => innerOnMessage,
+                set: (fn) => {
+                  innerOnMessage = typeof fn === 'function' ? fn : null;
+                },
+              });
+            } catch (e) {
+              wWin.onmessage = null;
+            }
+            const origInnerAddEv = typeof wWin.addEventListener === 'function' ? wWin.addEventListener.bind(wWin) : null;
+            const origInnerRemEv =
+              typeof wWin.removeEventListener === 'function' ? wWin.removeEventListener.bind(wWin) : null;
+            const customAddEv = function (type, listener, evOpts) {
+              if (type === 'message' && typeof listener === 'function') {
+                innerMsgListeners.add(listener);
+                return undefined;
+              }
+              return origInnerAddEv ? origInnerAddEv(type, listener, evOpts) : undefined;
+            };
+            const customRemEv = function (type, listener, evOpts) {
+              if (type === 'message' && typeof listener === 'function') {
+                innerMsgListeners.delete(listener);
+                return undefined;
+              }
+              return origInnerRemEv ? origInnerRemEv(type, listener, evOpts) : undefined;
+            };
+            const customPostMsg = function (data, transferOrOptions) {
+              if (terminated) return;
+              if (Array.isArray(transferOrOptions)) {
+                workerPort.postMessage(data, transferOrOptions);
+              } else {
+                workerPort.postMessage(data);
+              }
+            };
+            const customClose = function () {
+              workerFacade.terminate();
+            };
+
+            const executeInlineWorkerScript = (scriptCode, asModule) => {
+              const wScript = wDoc.createElement('script');
+              if (nonce) {
+                wScript.nonce = nonce;
+                if (typeof wScript.setAttribute === 'function') wScript.setAttribute('nonce', nonce);
+              }
+              if (asModule) {
+                wScript.type = 'module';
+              }
+              if (!assignAuthorizedInlineScriptText(wScript, scriptCode)) {
+                return false;
+              }
+              const scriptTarget = wDoc.head || wDoc.body || wDoc.documentElement;
+              scriptTarget.appendChild(wScript);
+              return true;
+            };
+
+            const isModuleWorker = Boolean(options && options.type === 'module');
+            const customImportScripts = function (...urls) {
+              if (isModuleWorker) {
+                throw new TypeError("importScripts is not available in module Workers");
+              }
+              const XhrCtor = wWin.XMLHttpRequest || cw.XMLHttpRequest;
+              if (typeof XhrCtor !== 'function') {
+                throw new Error('XMLHttpRequest unavailable for importScripts');
+              }
+              for (const rawImportArg of urls) {
+                if (terminated) return;
+                const rawImportStr = String(rawImportArg ?? '').trim();
+                if (!rawImportStr) {
+                  throw new TypeError('Empty importScripts URL rejected');
+                }
+                const resolvedAbs = new URL(rawImportStr, parsedWorkerUrl.href).href;
+                const safeImportUrl = rewriteChildAssetUrl(resolvedAbs);
+                if (!safeImportUrl || !isTrustedRemoteScriptUrl(safeImportUrl)) {
+                  throw new TypeError(`Blocked untrusted importScripts URL: ${rawImportStr}`);
+                }
+                const xhr = new XhrCtor();
+                xhr.open('GET', safeImportUrl, false);
+                xhr.send(null);
+                if (!(xhr.status >= 200 && xhr.status < 300) && !(xhr.status === 0 && xhr.responseText)) {
+                  throw new Error(`Failed importScripts HTTP ${xhr.status}: ${safeImportUrl}`);
+                }
+                const impWrapped = `(function(self,postMessage,addEventListener,removeEventListener,close,location,importScripts){\n${xhr.responseText}\n}).call(window.__agyWorkerScope,window.__agyWorkerScope,window.__agyWorkerScope.postMessage,window.__agyWorkerScope.addEventListener,window.__agyWorkerScope.removeEventListener,window.__agyWorkerScope.close,window.__agyWorkerScope.location,window.__agyWorkerScope.importScripts);`;
+                if (!executeInlineWorkerScript(impWrapped, false)) {
+                  throw new Error(`TrustedTypes rejected importScripts inline execution: ${safeImportUrl}`);
+                }
+              }
+            };
+
+            try {
+              Object.defineProperty(wWin, 'addEventListener', { configurable: true, writable: true, value: customAddEv });
+            } catch (e) {
+              wWin.addEventListener = customAddEv;
+            }
+            try {
+              Object.defineProperty(wWin, 'removeEventListener', { configurable: true, writable: true, value: customRemEv });
+            } catch (e) {
+              wWin.removeEventListener = customRemEv;
+            }
+            try {
+              Object.defineProperty(wWin, 'postMessage', { configurable: true, writable: true, value: customPostMsg });
+            } catch (e) {
+              wWin.postMessage = customPostMsg;
+            }
+            try {
+              Object.defineProperty(wWin, 'close', { configurable: true, writable: true, value: customClose });
+            } catch (e) {}
+
+            let workerScope = wWin;
+            if (typeof Proxy === 'function') {
+              try {
+                workerScope = new Proxy(Object.create(null), {
+                  get(_, prop) {
+                    if (prop === 'self' || prop === 'globalThis') return workerScope;
+                    if (prop === 'postMessage') return customPostMsg;
+                    if (prop === 'onmessage') return innerOnMessage;
+                    if (prop === 'addEventListener') return customAddEv;
+                    if (prop === 'removeEventListener') return customRemEv;
+                    if (prop === 'close') return customClose;
+                    if (prop === 'location') return workerLocation;
+                    if (prop === 'importScripts' && !isModuleWorker) return customImportScripts;
+                    const val = wWin[prop];
+                    if (typeof val === 'function') {
+                      const isCtor = Boolean(val.prototype && val.prototype.constructor === val);
+                      return isCtor ? val : val.bind(wWin);
+                    }
+                    return val;
+                  },
+                  set(_, prop, val) {
+                    if (prop === 'onmessage') {
+                      innerOnMessage = typeof val === 'function' ? val : null;
+                      return true;
+                    }
+                    wWin[prop] = val;
+                    return true;
+                  },
+                  has(_, prop) {
+                    return (
+                      prop === 'self' ||
+                      prop === 'globalThis' ||
+                      prop === 'postMessage' ||
+                      prop === 'onmessage' ||
+                      prop === 'addEventListener' ||
+                      prop === 'removeEventListener' ||
+                      prop === 'close' ||
+                      prop === 'location' ||
+                      (prop === 'importScripts' && !isModuleWorker) ||
+                      prop in wWin
+                    );
+                  },
+                });
+                wWin.__agyWorkerScope = workerScope;
+              } catch (e) {
+                workerScope = wWin;
+              }
+            }
+
+            if (origInnerAddEv) {
+              origInnerAddEv('error', (ev) => {
+                emitOuterError(ev?.error || new Error(ev?.message || 'Worker runtime error'));
+              });
+            }
+
+            let scriptEvaluated = false;
+            const preEvalMessageQueue = [];
+            const deliverToWorkerRealm = (ev) => {
+              if (terminated) return;
+              const MsgEvCtor = wWin.MessageEvent || cw.MessageEvent || MessageEvent;
+              let msgEv;
+              try {
+                msgEv = new MsgEvCtor('message', { data: ev.data });
+              } catch (e) {
+                msgEv = { type: 'message', data: ev.data };
+              }
+              const handler = innerOnMessage || wWin.onmessage;
+              if (typeof handler === 'function') {
+                try {
+                  handler.call(workerScope, msgEv);
+                } catch (err) {
+                  emitOuterError(err);
+                }
+              }
+              for (const fn of Array.from(innerMsgListeners)) {
+                try {
+                  fn.call(workerScope, msgEv);
+                } catch (err) {
+                  emitOuterError(err);
+                }
+              }
+            };
+            const flushPreEvalMessages = () => {
+              if (scriptEvaluated) return;
+              scriptEvaluated = true;
+              while (preEvalMessageQueue.length > 0 && !terminated) {
+                deliverToWorkerRealm(preEvalMessageQueue.shift());
+              }
+            };
+
+            workerPort.onmessage = (ev) => {
+              if (terminated) return;
+              if (!scriptEvaluated) {
+                preEvalMessageQueue.push(ev);
+                return;
+              }
+              deliverToWorkerRealm(ev);
+            };
+
+            if (typeof hostPort.start === 'function') hostPort.start();
+            if (typeof workerPort.start === 'function') workerPort.start();
+
+            const loadWorkerViaScriptTag = () => {
+              if (terminated) return;
+              const wScript = wDoc.createElement('script');
+              if (nonce) {
+                wScript.nonce = nonce;
+                if (typeof wScript.setAttribute === 'function') wScript.setAttribute('nonce', nonce);
+              }
+              if (isModuleWorker) {
+                wScript.type = 'module';
+              }
+              wScript.onload = () => {
+                flushPreEvalMessages();
+              };
+              wScript.onerror = () => {
+                preEvalMessageQueue.length = 0;
+                emitOuterError(new Error(`Failed to load Worker script: ${targetWorkerUrl}`));
+              };
+              wScript.src = ttPolicy ? ttPolicy.createScriptURL(targetWorkerUrl) : targetWorkerUrl;
+              const scriptTarget = wDoc.head || wDoc.body || wDoc.documentElement;
+              scriptTarget.appendChild(wScript);
+            };
+
+            const loadAndBundleModuleWorker = async () => {
+              const moduleOrder = [];
+              const moduleByUrl = new Map();
+              let nextModId = 0;
+              const resolveDep = (spec, baseUrl) => {
+                const abs = new URL(spec, baseUrl).href;
+                const safeUrl = rewriteChildAssetUrl(abs);
+                if (!safeUrl || !isTrustedRemoteScriptUrl(safeUrl)) {
+                  throw new TypeError(`Blocked untrusted module Worker import URL: ${spec}`);
+                }
+                let entry = moduleByUrl.get(safeUrl);
+                if (!entry) {
+                  entry = { id: nextModId++, url: safeUrl, code: '' };
+                  moduleByUrl.set(safeUrl, entry);
+                }
+                return { id: entry.id, url: safeUrl, varExpr: `__agyMods[${entry.id}]` };
+              };
+              const visitQueue = [targetWorkerUrl];
+              const visited = new Set();
+              const rootEntry = { id: nextModId++, url: targetWorkerUrl, code: '' };
+              moduleByUrl.set(targetWorkerUrl, rootEntry);
+
+              while (visitQueue.length > 0) {
+                const curUrl = visitQueue.shift();
+                if (visited.has(curUrl)) continue;
+                visited.add(curUrl);
+                const res = await cw.fetch(curUrl);
+                if (!res || !res.ok) {
+                  throw new Error(`Module Worker fetch HTTP ${res ? res.status : 0}: ${curUrl}`);
+                }
+                const rawCode = await res.text();
+                const entry = moduleByUrl.get(curUrl);
+                const compiled = compileTrustedEsModuleBody(
+                  rawCode,
+                  curUrl,
+                  resolveDep,
+                  `__agyMods[${entry.id}]`
+                );
+                entry.code = compiled.code;
+                moduleOrder.push(entry);
+                for (const depId of compiled.deps) {
+                  const depObj = Array.from(moduleByUrl.values()).find((m) => m.id === depId);
+                  if (depObj && !visited.has(depObj.url)) {
+                    visitQueue.push(depObj.url);
+                  }
+                }
+              }
+
+              // Emit dependencies before the entry module so static imports are populated in reverse BFS order.
+              const depsFirst = moduleOrder.slice(1).reverse().concat(moduleOrder.slice(0, 1));
+              const chunks = [
+                'const __agyWS = window.__agyWorkerScope, self = __agyWS, postMessage = __agyWS.postMessage, addEventListener = __agyWS.addEventListener, removeEventListener = __agyWS.removeEventListener, close = __agyWS.close, location = __agyWS.location;',
+                `const __agyMods = Array.from({ length: ${nextModId} }, () => ({}));`,
+              ];
+              for (const modEntry of depsFirst) {
+                chunks.push(`await (async () => {\n${modEntry.code}\n})();`);
+              }
+              chunks.push('if (typeof window.__agyOnWorkerReady === "function") window.__agyOnWorkerReady();');
+              return chunks.join('\n');
+            };
+
+            const canFetchWorkerSource =
+              typeof cw.fetch === 'function' &&
+              workerScope !== wWin &&
+              typeof assignAuthorizedInlineScriptText === 'function';
+            if (canFetchWorkerSource && isModuleWorker) {
+              wWin.__agyOnWorkerReady = () => flushPreEvalMessages();
+              Promise.resolve()
+                .then(() => loadAndBundleModuleWorker())
+                .then((bundledModuleCode) => {
+                  if (terminated) return;
+                  if (!executeInlineWorkerScript(bundledModuleCode, true)) {
+                    loadWorkerViaScriptTag();
+                  }
+                })
+                .catch((err) => {
+                  if (err && err.name === 'TypeError') {
+                    emitOuterError(err);
+                    return;
+                  }
+                  loadWorkerViaScriptTag();
+                });
+            } else if (canFetchWorkerSource) {
+              Promise.resolve()
+                .then(() => cw.fetch(targetWorkerUrl))
+                .then((res) => {
+                  if (!res || !res.ok) {
+                    throw new Error(`Worker fetch HTTP ${res ? res.status : 0}`);
+                  }
+                  return res.text();
+                })
+                .then((workerSource) => {
+                  if (terminated) return;
+                  const wrappedCode = `(function(self,postMessage,addEventListener,removeEventListener,close,location,importScripts){\n${workerSource}\n}).call(window.__agyWorkerScope,window.__agyWorkerScope,window.__agyWorkerScope.postMessage,window.__agyWorkerScope.addEventListener,window.__agyWorkerScope.removeEventListener,window.__agyWorkerScope.close,window.__agyWorkerScope.location,window.__agyWorkerScope.importScripts);`;
+                  if (!executeInlineWorkerScript(wrappedCode, false)) {
+                    loadWorkerViaScriptTag();
+                    return;
+                  }
+                  flushPreEvalMessages();
+                })
+                .catch(() => {
+                  loadWorkerViaScriptTag();
+                });
+            } else {
+              loadWorkerViaScriptTag();
+            }
+            return workerFacade;
+          } catch (err) {
+            try {
+              if (wf && typeof wf.remove === 'function') wf.remove();
+              else if (wf && wf.parentNode) wf.parentNode.removeChild(wf);
+            } catch (e) {}
+            return null;
+          }
+        };
+
+        const PatchedWorker = function (scriptURL, options) {
+          const rawStr = String(
+            scriptURL && typeof scriptURL === 'object' && typeof scriptURL.href === 'string'
+              ? scriptURL.href
+              : scriptURL ?? ''
+          ).trim();
+          if (!rawStr) {
+            throw new TypeError('Empty Worker script URL rejected');
+          }
+          if (/^blob:/i.test(rawStr)) {
+            const hostOrigin =
+              window.location && window.location.origin && window.location.origin !== 'null'
+                ? window.location.origin
+                : '';
+            if (hostOrigin && !rawStr.startsWith(`blob:${hostOrigin}/`)) {
+              throw new TypeError(`Blocked cross-origin blob Worker URL: ${rawStr}`);
+            }
+            if (!isTrustedRemoteScriptUrl(rawStr)) {
+              throw new TypeError(`Blocked unowned blob Worker URL: ${rawStr}`);
+            }
+            const safeBlob = ttPolicy ? ttPolicy.createScriptURL(rawStr) : rawStr;
+            return options !== undefined ? new OrigWorker(safeBlob, options) : new OrigWorker(safeBlob);
+          }
+
+          const targetWorkerUrl = rewriteChildAssetUrl(scriptURL);
+          if (!targetWorkerUrl || !isTrustedRemoteScriptUrl(targetWorkerUrl)) {
+            throw new TypeError(`Blocked untrusted Worker script URL: ${rawStr}`);
+          }
+
+          // Under Remote Control CSP (`worker-src 'self'`), both cross-origin CDN URLs and `blob:` URLs
+          // violate `worker-src 'self'` when passed to native `new Worker(...)`. Execute in an isolated
+          // hidden same-origin iframe realm (`script-src 'nonce-...'` + TrustedScriptURL) bridged by MessageChannel.
+          const iframeWorker = mountIframeBackedWorker(targetWorkerUrl, options);
+          if (iframeWorker) {
+            return iframeWorker;
+          }
+
+          if (typeof cw.Blob === 'function' && cw.URL && typeof cw.URL.createObjectURL === 'function') {
+            const bootCode =
+              options && options.type === 'module'
+                ? `import ${JSON.stringify(targetWorkerUrl)};`
+                : `importScripts(${JSON.stringify(targetWorkerUrl)});`;
+            const blob = new cw.Blob([bootCode], {
+              type: 'application/javascript',
+            });
+            const blobUrl = cw.URL.createObjectURL(blob);
+            if (typeof ownCreatedWorkerBlobUrls !== 'undefined') {
+              ownCreatedWorkerBlobUrls.add(blobUrl);
+            }
+            let revoked = false;
+            const revokeBlobUrl = () => {
+              if (revoked) return;
+              revoked = true;
+              if (typeof ownCreatedWorkerBlobUrls !== 'undefined') {
+                ownCreatedWorkerBlobUrls.delete(blobUrl);
+              }
+              try {
+                if (cw.URL && typeof cw.URL.revokeObjectURL === 'function') {
+                  cw.URL.revokeObjectURL(blobUrl);
+                }
+              } catch (e) {}
+            };
+            try {
+              const safeBlobUrl = ttPolicy ? ttPolicy.createScriptURL(blobUrl) : blobUrl;
+              const worker =
+                options !== undefined ? new OrigWorker(safeBlobUrl, options) : new OrigWorker(safeBlobUrl);
+              if (worker && typeof worker.addEventListener === 'function') {
+                worker.addEventListener('error', revokeBlobUrl, { once: true });
+              }
+              const sched = typeof cw.setTimeout === 'function' ? cw.setTimeout.bind(cw) : setTimeout;
+              sched(revokeBlobUrl, 1500);
+              return worker;
+            } catch (workerErr) {
+              revokeBlobUrl();
+              throw workerErr;
+            }
+          }
+
+          const safeDirectUrl = ttPolicy ? ttPolicy.createScriptURL(targetWorkerUrl) : targetWorkerUrl;
+          return options !== undefined ? new OrigWorker(safeDirectUrl, options) : new OrigWorker(safeDirectUrl);
+        };
+        PatchedWorker.prototype = OrigWorker.prototype;
+        PatchedWorker.__agyWorkerPatched = true;
+        cw.Worker = PatchedWorker;
+      }
+    } catch (e) {}
+    return { msgListeners };
+  }
+
+  function mountIntoBootedSameOriginChild(cw, cd, iframe, rcInst) {
+    if (!cw || !cd) return;
+    if (!cw.__agyKoGuardsInstalled || (typeof cw.Worker === 'function' && !cw.Worker.__agyWorkerPatched)) {
+      const nonce = resolveHostCspNonce(cd) || resolveHostCspNonce(document);
+      const ttPolicy = getTrustedPolicyForRemote();
+      const cdnCtx = resolveChildRemoteCdnContext(iframe, rcInst, cw, cd);
+      if (cdnCtx) {
+        const assetHelper = createRemoteAssetUrlHelper(cdnCtx.basePath, cdnCtx.cdnOrigin, cdnCtx.cdnBaseUrl, ttPolicy);
+        installChildWorkbenchRuntimeGuards(cw, cd, assetHelper, nonce, ttPolicy, null);
+      }
+    }
     if (cw.__agyKoLocalizerActive !== KO_LOCALIZER_VERSION) {
       window.__agyMountKoThoughtLocalizer(cw, cd);
     }
@@ -212,6 +1440,7 @@
     if (!iframe) return;
 
     const session = getOrCreateBridgeSession(iframe);
+    const rcInst = getRemoteControlComponentInstance(rcEl);
 
     // 1. Mid-flight FSM guard: never interfere with or reset an in-progress promotion!
     if (
@@ -244,7 +1473,7 @@
             isExternallyPromotedIframe(iframe) ? REMOTE_BRIDGE_STATES.EXTERNAL_PROMOTED : REMOTE_BRIDGE_STATES.READY
           );
         }
-        mountIntoBootedSameOriginChild(cw, cd);
+        mountIntoBootedSameOriginChild(cw, cd, iframe, rcInst);
         return;
       }
       if (
@@ -261,16 +1490,22 @@
       }
     }
 
-    // 3. Multi-plugin coexistence: if a peer plugin (statusbar / mcp-manager) owns promotion, passively attach without re-promoting
+    // 3. Multi-plugin coexistence: if a peer plugin (statusbar / mcp-manager) owns promotion, passively attach & fortify without re-promoting
     if (isExternallyPromotedIframe(iframe)) {
       transitionBridgeSession(session, REMOTE_BRIDGE_STATES.EXTERNAL_PROMOTED);
+      try {
+        const cw = iframe.contentWindow;
+        const cd = iframe.contentDocument;
+        if (cw && cd && cw.location && cw.location.origin === window.location.origin) {
+          mountIntoBootedSameOriginChild(cw, cd, iframe, rcInst);
+        }
+      } catch (e) {}
       return;
     }
     if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION && session.state === REMOTE_BRIDGE_STATES.READY) {
       return;
     }
 
-    const rcInst = getRemoteControlComponentInstance(rcEl);
     if (!rcInst) return;
 
     const rawCandidate =
@@ -433,77 +1668,8 @@
           return;
         }
 
-        const rewriteChildAssetUrl = (rawInput) => {
-          if (rawInput === null || rawInput === undefined) return '';
-          const isUrlObj =
-            typeof rawInput === 'object' &&
-            rawInput !== null &&
-            typeof rawInput.href === 'string' &&
-            typeof rawInput.protocol === 'string';
-          if (typeof rawInput !== 'string' && !isUrlObj) return rawInput;
-          const trimmed = String(isUrlObj ? rawInput.href : rawInput).trim();
-          if (!trimmed) return trimmed;
-          if (/^(?:blob:|data:|javascript:|mailto:|tel:|about:|#|\?)/i.test(trimmed)) {
-            return trimmed;
-          }
-          if (trimmed.startsWith('/antigravity/')) {
-            return `https://www.gstatic.com${trimmed}`;
-          }
-          if (basePath && (trimmed === basePath || trimmed.startsWith(`${basePath}/`))) {
-            return `${cdnBaseUrl}${trimmed.slice(basePath.length)}`;
-          }
-          if (trimmed.startsWith('/web/')) {
-            return `${cdnOrigin}${trimmed}`;
-          }
-          if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
-            return `${cdnBaseUrl}${trimmed}`;
-          }
-          if (!/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmed) && !trimmed.startsWith('//')) {
-            try {
-              const virtualBase = `${window.location.origin}${basePath}/`;
-              const resolvedRel = new URL(trimmed, virtualBase);
-              if (
-                resolvedRel.origin === window.location.origin &&
-                resolvedRel.pathname.startsWith(`${basePath}/`)
-              ) {
-                return `${cdnBaseUrl}${resolvedRel.pathname.slice(basePath.length)}${resolvedRel.search}${resolvedRel.hash}`;
-              }
-            } catch (e) {}
-            return trimmed;
-          }
-          try {
-            const parsedAsset = new URL(trimmed, window.location.href);
-            if (
-              parsedAsset.origin === window.location.origin ||
-              parsedAsset.hostname === 'antigravity.static.usercontent.goog'
-            ) {
-              if (parsedAsset.pathname.startsWith('/antigravity/')) {
-                return `https://www.gstatic.com${parsedAsset.pathname}${parsedAsset.search}${parsedAsset.hash}`;
-              }
-              if (basePath && (parsedAsset.pathname === basePath || parsedAsset.pathname.startsWith(`${basePath}/`))) {
-                return `${cdnBaseUrl}${parsedAsset.pathname.slice(basePath.length)}${parsedAsset.search}${parsedAsset.hash}`;
-              }
-              if (parsedAsset.pathname.startsWith('/web/')) {
-                return `${cdnOrigin}${parsedAsset.pathname}${parsedAsset.search}${parsedAsset.hash}`;
-              }
-              if (parsedAsset.origin === window.location.origin && !parsedAsset.pathname.startsWith('/r/')) {
-                return `${cdnBaseUrl}${parsedAsset.pathname}${parsedAsset.search}${parsedAsset.hash}`;
-              }
-            }
-          } catch (e) {}
-          return trimmed;
-        };
-
-        const toSafeChildScriptUrl = (rawVal) => {
-          if (rawVal && typeof rawVal === 'object' && typeof rawVal.href !== 'string') {
-            return rawVal;
-          }
-          const nextUrl = rewriteChildAssetUrl(rawVal);
-          if (ttPolicy && typeof nextUrl === 'string' && isTrustedRemoteScriptUrl(nextUrl)) {
-            return ttPolicy.createScriptURL(nextUrl);
-          }
-          return nextUrl;
-        };
+        iframe.__agyKoCdnContext = { basePath, cdnOrigin, cdnBaseUrl };
+        const assetHelper = createRemoteAssetUrlHelper(basePath, cdnOrigin, cdnBaseUrl, ttPolicy);
 
         if (cd.documentElement && typeof cd.documentElement.setAttribute === 'function') {
           cd.documentElement.setAttribute('lang', 'en');
@@ -521,112 +1687,8 @@
         headEl.textContent = '';
         bodyEl.textContent = '';
 
-        const scriptProto = cw.HTMLScriptElement && cw.HTMLScriptElement.prototype;
-        const scriptSrcDesc = scriptProto ? Object.getOwnPropertyDescriptor(scriptProto, 'src') : null;
-        try {
-          if (scriptProto && scriptSrcDesc && typeof scriptSrcDesc.set === 'function' && !scriptProto.__agyScriptSrcPatched) {
-            Object.defineProperty(scriptProto, 'src', {
-              configurable: true,
-              enumerable: true,
-              get: scriptSrcDesc.get,
-              set(val) {
-                if (nonce) {
-                  try {
-                    this.nonce = nonce;
-                  } catch (e) {}
-                }
-                if (typeof val === 'string' || (val && typeof val === 'object' && typeof val.href === 'string')) {
-                  return scriptSrcDesc.set.call(this, toSafeChildScriptUrl(val));
-                }
-                return scriptSrcDesc.set.call(this, val);
-              },
-            });
-            scriptProto.__agyScriptSrcPatched = true;
-          }
-
-          const linkProto = cw.HTMLLinkElement && cw.HTMLLinkElement.prototype;
-          const linkHrefDesc = linkProto ? Object.getOwnPropertyDescriptor(linkProto, 'href') : null;
-          if (linkProto && linkHrefDesc && typeof linkHrefDesc.set === 'function' && !linkProto.__agyLinkHrefPatched) {
-            Object.defineProperty(linkProto, 'href', {
-              configurable: true,
-              enumerable: true,
-              get: linkHrefDesc.get,
-              set(val) {
-                if (nonce) {
-                  try {
-                    this.nonce = nonce;
-                  } catch (e) {}
-                }
-                if (typeof val === 'string' || (val && typeof val === 'object' && typeof val.href === 'string')) {
-                  return linkHrefDesc.set.call(this, rewriteChildAssetUrl(val));
-                }
-                return linkHrefDesc.set.call(this, val);
-              },
-            });
-            linkProto.__agyLinkHrefPatched = true;
-          }
-
-          if (typeof cd.createElement === 'function' && !cd.__agyCreateElPatched) {
-            const origCreateEl = cd.createElement.bind(cd);
-            cd.createElement = function (tagName, options) {
-              const el = options !== undefined ? origCreateEl(tagName, options) : origCreateEl(tagName);
-              const upper = typeof tagName === 'string' ? tagName.toUpperCase() : '';
-              if (nonce && el && (upper === 'SCRIPT' || upper === 'STYLE' || upper === 'LINK')) {
-                try {
-                  el.nonce = nonce;
-                  if (typeof el.setAttribute === 'function') el.setAttribute('nonce', nonce);
-                } catch (e) {}
-              }
-              const isNativeElem = Boolean(cw.Element && el instanceof cw.Element);
-              if (el && !isNativeElem && typeof el.setAttribute === 'function' && !el.__agySyntheticSetAttrPatched) {
-                const origElSetAttr = el.setAttribute.bind(el);
-                el.setAttribute = function (attrName, attrVal) {
-                  const attrLower = String(attrName || '').toLowerCase();
-                  if (upper === 'SCRIPT' && attrLower === 'src') {
-                    if (nonce) {
-                      try {
-                        el.nonce = nonce;
-                        origElSetAttr('nonce', nonce);
-                      } catch (e) {}
-                    }
-                    const safeVal = toSafeChildScriptUrl(attrVal);
-                    el.src = safeVal;
-                    return origElSetAttr(attrName, safeVal);
-                  }
-                  if (upper === 'LINK' && attrLower === 'href') {
-                    if (nonce) {
-                      try {
-                        el.nonce = nonce;
-                        origElSetAttr('nonce', nonce);
-                      } catch (e) {}
-                    }
-                    const nextHref =
-                      attrVal && typeof attrVal === 'object' && typeof attrVal.href !== 'string'
-                        ? attrVal
-                        : rewriteChildAssetUrl(attrVal);
-                    el.href = nextHref;
-                    return origElSetAttr(attrName, nextHref);
-                  }
-                  if (
-                    (upper === 'IMG' || upper === 'SOURCE' || upper === 'AUDIO' || upper === 'VIDEO') &&
-                    attrLower === 'src'
-                  ) {
-                    const nextSrc =
-                      attrVal && typeof attrVal === 'object' && typeof attrVal.href !== 'string'
-                        ? attrVal
-                        : rewriteChildAssetUrl(attrVal);
-                    el.src = nextSrc;
-                    return origElSetAttr(attrName, nextSrc);
-                  }
-                  return origElSetAttr(attrName, attrVal);
-                };
-                el.__agySyntheticSetAttrPatched = true;
-              }
-              return el;
-            };
-            cd.__agyCreateElPatched = true;
-          }
-        } catch (e) {}
+        const guardResult = installChildWorkbenchRuntimeGuards(cw, cd, assetHelper, nonce, ttPolicy, hostThemeParam);
+        const msgListeners = (guardResult && guardResult.msgListeners) || cw.__agyMsgListeners || new Set();
 
         const metaCharset = cd.createElement('meta');
         metaCharset.setAttribute('charset', 'UTF-8');
@@ -720,597 +1782,6 @@
         if (cw.AudioWorklet && cw.AudioWorklet.prototype) {
           cw.AudioWorklet.prototype.addModule = () => Promise.resolve();
         }
-        if (cw.customElements && !cw.customElements.__agyGuarded) {
-          const origDef = cw.customElements.define.bind(cw.customElements);
-          cw.customElements.define = (name, ctor, opts) => {
-            if (!cw.customElements.get(name)) origDef(name, ctor, opts);
-          };
-          cw.customElements.__agyGuarded = true;
-        }
-        for (const mediaProto of [
-          cw.HTMLImageElement && cw.HTMLImageElement.prototype,
-          cw.HTMLSourceElement && cw.HTMLSourceElement.prototype,
-        ]) {
-          const mediaSrcDesc = mediaProto ? Object.getOwnPropertyDescriptor(mediaProto, 'src') : null;
-          if (mediaProto && mediaSrcDesc && typeof mediaSrcDesc.set === 'function' && !mediaProto.__agyImgSrcPatched) {
-            Object.defineProperty(mediaProto, 'src', {
-              configurable: true,
-              enumerable: true,
-              get: mediaSrcDesc.get,
-              set(val) {
-                if (typeof val === 'string' || (val && typeof val === 'object' && typeof val.href === 'string')) {
-                  val = rewriteChildAssetUrl(val);
-                }
-                return mediaSrcDesc.set.call(this, val);
-              },
-            });
-            mediaProto.__agyImgSrcPatched = true;
-          }
-        }
-        const elProto = cw.Element && cw.Element.prototype;
-        if (elProto && typeof elProto.setAttribute === 'function' && !elProto.__agySetAttrPatched) {
-          const origSetAttr = elProto.setAttribute;
-          elProto.setAttribute = function (name, val) {
-            const attrLower = String(name || '').toLowerCase();
-            const tagUpper = String(this?.tagName || '').toUpperCase();
-            if (tagUpper === 'SCRIPT' && attrLower === 'src') {
-              if (nonce) {
-                try {
-                  this.nonce = nonce;
-                  origSetAttr.call(this, 'nonce', nonce);
-                } catch (e) {}
-              }
-              if (val && typeof val === 'object' && typeof val.href !== 'string') {
-                return origSetAttr.call(this, name, val);
-              }
-              const safeVal = toSafeChildScriptUrl(val);
-              if (scriptSrcDesc && typeof scriptSrcDesc.set === 'function') {
-                scriptSrcDesc.set.call(this, safeVal);
-                return undefined;
-              }
-              return origSetAttr.call(this, name, safeVal);
-            }
-            if (tagUpper === 'LINK' && attrLower === 'href') {
-              if (nonce) {
-                try {
-                  this.nonce = nonce;
-                  origSetAttr.call(this, 'nonce', nonce);
-                } catch (e) {}
-              }
-              const nextHref =
-                val && typeof val === 'object' && typeof val.href !== 'string' ? val : rewriteChildAssetUrl(val);
-              return origSetAttr.call(this, name, nextHref);
-            }
-            if (
-              (tagUpper === 'IMG' || tagUpper === 'SOURCE' || tagUpper === 'AUDIO' || tagUpper === 'VIDEO') &&
-              attrLower === 'src'
-            ) {
-              const nextSrc =
-                val && typeof val === 'object' && typeof val.href !== 'string' ? val : rewriteChildAssetUrl(val);
-              return origSetAttr.call(this, name, nextSrc);
-            }
-            return origSetAttr.call(this, name, val);
-          };
-          elProto.__agySetAttrPatched = true;
-        }
-        try {
-          cw.document.documentElement.style.colorScheme = hostThemeParam === 'light' ? 'light' : 'dark';
-        } catch (e) {}
-
-        const msgListeners = new Set();
-        try {
-          if (typeof cw.addEventListener === 'function' && !cw.__agyMsgBufferInstalled) {
-            cw.__agyMsgBufferInstalled = true;
-            const origAddEv = cw.addEventListener.bind(cw);
-            const origRemoveEv = typeof cw.removeEventListener === 'function' ? cw.removeEventListener.bind(cw) : null;
-            origAddEv('message', (ev) => {
-              if (ev && ev.data && ev.data.type === 'INITIAL_CONFIG') {
-                cw.__agyBufferedInitialConfigEvent = ev;
-                if (msgListeners.size > 0) {
-                  cw.__initialConfigReceived = true;
-                }
-              }
-            });
-            cw.addEventListener = function (type, listener, options) {
-              if (type === 'message' && typeof listener === 'function') {
-                msgListeners.add(listener);
-                const res = origAddEv(type, listener, options);
-                if (cw.__agyBufferedInitialConfigEvent && !cw.__initialConfigReceived) {
-                  const bufferedEv = cw.__agyBufferedInitialConfigEvent;
-                  cw.__initialConfigReceived = true;
-                  Promise.resolve().then(() => {
-                    try {
-                      listener.call(cw, bufferedEv);
-                    } catch (e) {}
-                  });
-                }
-                return res;
-              }
-              return origAddEv(type, listener, options);
-            };
-            if (origRemoveEv) {
-              cw.removeEventListener = function (type, listener, options) {
-                if (type === 'message' && typeof listener === 'function') {
-                  msgListeners.delete(listener);
-                }
-                return origRemoveEv(type, listener, options);
-              };
-            }
-          }
-        } catch (e) {}
-
-        try {
-          if (typeof cw.Worker === 'function' && !cw.Worker.__agyWorkerPatched) {
-            const OrigWorker = cw.Worker;
-            const mountIframeBackedWorker = (targetWorkerUrl, options) => {
-              if (typeof cw.MessageChannel !== 'function' || !cd) return null;
-              const container = cd.body || cd.documentElement;
-              if (!container || typeof container.appendChild !== 'function' || typeof cd.createElement !== 'function') {
-                return null;
-              }
-              let wf = null;
-              try {
-                wf = cd.createElement('iframe');
-                if (!wf) return null;
-                if (typeof wf.setAttribute === 'function') {
-                  wf.setAttribute('aria-hidden', 'true');
-                  wf.setAttribute('tabindex', '-1');
-                  wf.setAttribute('data-agy-ko-worker', '1');
-                  wf.setAttribute(
-                    'style',
-                    'display:none!important;width:0!important;height:0!important;border:0!important;'
-                  );
-                }
-                container.appendChild(wf);
-                let wWin = wf.contentWindow;
-                let wDoc = wf.contentDocument;
-                if (!wWin || !wDoc) {
-                  if (typeof wf.remove === 'function') wf.remove();
-                  else if (wf.parentNode) wf.parentNode.removeChild(wf);
-                  return null;
-                }
-                if (wWin.location && wWin.location.href === 'about:blank' && typeof wDoc.open === 'function') {
-                  try {
-                    wDoc.open();
-                    if (typeof wDoc.close === 'function') wDoc.close();
-                    wWin = wf.contentWindow || wWin;
-                    wDoc = wf.contentDocument || wDoc;
-                  } catch (e) {}
-                }
-
-                const mc = new cw.MessageChannel();
-                const hostPort = mc.port1;
-                const workerPort = mc.port2;
-                let terminated = false;
-                const outerListeners = {
-                  message: new Set(),
-                  error: new Set(),
-                  messageerror: new Set(),
-                };
-                let outerOnMessage = null;
-                let outerOnError = null;
-                let outerOnMessageError = null;
-                const workerFacade = Object.create(OrigWorker.prototype);
-                Object.defineProperties(workerFacade, {
-                  url: { configurable: true, enumerable: true, value: targetWorkerUrl },
-                  onmessage: {
-                    configurable: true,
-                    enumerable: true,
-                    get: () => outerOnMessage,
-                    set: (fn) => {
-                      outerOnMessage = typeof fn === 'function' ? fn : null;
-                    },
-                  },
-                  onerror: {
-                    configurable: true,
-                    enumerable: true,
-                    get: () => outerOnError,
-                    set: (fn) => {
-                      outerOnError = typeof fn === 'function' ? fn : null;
-                    },
-                  },
-                  onmessageerror: {
-                    configurable: true,
-                    enumerable: true,
-                    get: () => outerOnMessageError,
-                    set: (fn) => {
-                      outerOnMessageError = typeof fn === 'function' ? fn : null;
-                    },
-                  },
-                });
-                workerFacade.addEventListener = function (type, listener) {
-                  const set = outerListeners[String(type || '').toLowerCase()];
-                  if (set && typeof listener === 'function') set.add(listener);
-                };
-                workerFacade.removeEventListener = function (type, listener) {
-                  const set = outerListeners[String(type || '').toLowerCase()];
-                  if (set && typeof listener === 'function') set.delete(listener);
-                };
-                workerFacade.dispatchEvent = function (ev) {
-                  if (!ev || !ev.type) return false;
-                  const typeLower = String(ev.type).toLowerCase();
-                  const propHandler = workerFacade[`on${typeLower}`];
-                  if (typeof propHandler === 'function') propHandler.call(workerFacade, ev);
-                  const set = outerListeners[typeLower];
-                  if (set) {
-                    for (const fn of Array.from(set)) fn.call(workerFacade, ev);
-                  }
-                  return true;
-                };
-                workerFacade.postMessage = function (data, transferOrOptions) {
-                  if (terminated) return;
-                  if (Array.isArray(transferOrOptions)) {
-                    hostPort.postMessage(data, transferOrOptions);
-                  } else {
-                    hostPort.postMessage(data);
-                  }
-                };
-                workerFacade.terminate = function () {
-                  if (terminated) return;
-                  terminated = true;
-                  try {
-                    hostPort.onmessage = null;
-                    workerPort.onmessage = null;
-                    if (typeof hostPort.close === 'function') hostPort.close();
-                    if (typeof workerPort.close === 'function') workerPort.close();
-                  } catch (e) {}
-                  try {
-                    if (wf && typeof wf.remove === 'function') wf.remove();
-                    else if (wf && wf.parentNode) wf.parentNode.removeChild(wf);
-                  } catch (e) {}
-                };
-
-                if (typeof disposables !== 'undefined' && disposables && typeof disposables.register === 'function') {
-                  disposables.register(() => workerFacade.terminate());
-                }
-
-                const emitOuterError = (errObj) => {
-                  if (terminated) return;
-                  const EvCtor = cw.ErrorEvent || cw.Event || Event;
-                  const message = errObj && errObj.message ? String(errObj.message) : String(errObj || 'Worker error');
-                  let errEv;
-                  try {
-                    errEv = new EvCtor('error', { message, error: errObj });
-                  } catch (e) {
-                    errEv = { type: 'error', message, error: errObj };
-                  }
-                  if (typeof workerFacade.onerror === 'function') {
-                    try {
-                      workerFacade.onerror.call(workerFacade, errEv);
-                    } catch (e) {}
-                  }
-                  for (const fn of Array.from(outerListeners.error)) {
-                    try {
-                      fn.call(workerFacade, errEv);
-                    } catch (e) {}
-                  }
-                };
-
-                hostPort.onmessage = (ev) => {
-                  if (terminated) return;
-                  const MsgEvCtor = cw.MessageEvent || MessageEvent;
-                  let msgEv;
-                  try {
-                    msgEv = new MsgEvCtor('message', { data: ev.data });
-                  } catch (e) {
-                    msgEv = { type: 'message', data: ev.data };
-                  }
-                  if (typeof workerFacade.onmessage === 'function') {
-                    workerFacade.onmessage.call(workerFacade, msgEv);
-                  }
-                  for (const fn of Array.from(outerListeners.message)) {
-                    fn.call(workerFacade, msgEv);
-                  }
-                };
-
-                let innerOnMessage = null;
-                const innerMsgListeners = new Set();
-                try {
-                  Object.defineProperty(wWin, 'onmessage', {
-                    configurable: true,
-                    get: () => innerOnMessage,
-                    set: (fn) => {
-                      innerOnMessage = typeof fn === 'function' ? fn : null;
-                    },
-                  });
-                } catch (e) {
-                  wWin.onmessage = null;
-                }
-                const origInnerAddEv = typeof wWin.addEventListener === 'function' ? wWin.addEventListener.bind(wWin) : null;
-                const origInnerRemEv =
-                  typeof wWin.removeEventListener === 'function' ? wWin.removeEventListener.bind(wWin) : null;
-                const customAddEv = function (type, listener, evOpts) {
-                  if (type === 'message' && typeof listener === 'function') {
-                    innerMsgListeners.add(listener);
-                    return undefined;
-                  }
-                  return origInnerAddEv ? origInnerAddEv(type, listener, evOpts) : undefined;
-                };
-                const customRemEv = function (type, listener, evOpts) {
-                  if (type === 'message' && typeof listener === 'function') {
-                    innerMsgListeners.delete(listener);
-                    return undefined;
-                  }
-                  return origInnerRemEv ? origInnerRemEv(type, listener, evOpts) : undefined;
-                };
-                const customPostMsg = function (data, transferOrOptions) {
-                  if (terminated) return;
-                  if (Array.isArray(transferOrOptions)) {
-                    workerPort.postMessage(data, transferOrOptions);
-                  } else {
-                    workerPort.postMessage(data);
-                  }
-                };
-                const customClose = function () {
-                  workerFacade.terminate();
-                };
-                try {
-                  Object.defineProperty(wWin, 'addEventListener', { configurable: true, writable: true, value: customAddEv });
-                } catch (e) {
-                  wWin.addEventListener = customAddEv;
-                }
-                try {
-                  Object.defineProperty(wWin, 'removeEventListener', { configurable: true, writable: true, value: customRemEv });
-                } catch (e) {
-                  wWin.removeEventListener = customRemEv;
-                }
-                try {
-                  Object.defineProperty(wWin, 'postMessage', { configurable: true, writable: true, value: customPostMsg });
-                } catch (e) {
-                  wWin.postMessage = customPostMsg;
-                }
-                try {
-                  Object.defineProperty(wWin, 'close', { configurable: true, writable: true, value: customClose });
-                } catch (e) {}
-
-                let workerScope = wWin;
-                if (typeof Proxy === 'function') {
-                  try {
-                    workerScope = new Proxy(Object.create(null), {
-                      get(_, prop) {
-                        if (prop === 'self' || prop === 'globalThis') return workerScope;
-                        if (prop === 'postMessage') return customPostMsg;
-                        if (prop === 'onmessage') return innerOnMessage;
-                        if (prop === 'addEventListener') return customAddEv;
-                        if (prop === 'removeEventListener') return customRemEv;
-                        if (prop === 'close') return customClose;
-                        const val = wWin[prop];
-                        if (typeof val === 'function') {
-                          const isCtor = Boolean(val.prototype && val.prototype.constructor === val);
-                          return isCtor ? val : val.bind(wWin);
-                        }
-                        return val;
-                      },
-                      set(_, prop, val) {
-                        if (prop === 'onmessage') {
-                          innerOnMessage = typeof val === 'function' ? val : null;
-                          return true;
-                        }
-                        wWin[prop] = val;
-                        return true;
-                      },
-                      has(_, prop) {
-                        return (
-                          prop === 'self' ||
-                          prop === 'globalThis' ||
-                          prop === 'postMessage' ||
-                          prop === 'onmessage' ||
-                          prop === 'addEventListener' ||
-                          prop === 'removeEventListener' ||
-                          prop === 'close' ||
-                          prop in wWin
-                        );
-                      },
-                    });
-                    wWin.__agyWorkerScope = workerScope;
-                  } catch (e) {
-                    workerScope = wWin;
-                  }
-                }
-
-                if (origInnerAddEv) {
-                  origInnerAddEv('error', (ev) => {
-                    emitOuterError(ev?.error || new Error(ev?.message || 'Worker runtime error'));
-                  });
-                }
-
-                let scriptEvaluated = false;
-                const preEvalMessageQueue = [];
-                const deliverToWorkerRealm = (ev) => {
-                  if (terminated) return;
-                  const MsgEvCtor = wWin.MessageEvent || cw.MessageEvent || MessageEvent;
-                  let msgEv;
-                  try {
-                    msgEv = new MsgEvCtor('message', { data: ev.data });
-                  } catch (e) {
-                    msgEv = { type: 'message', data: ev.data };
-                  }
-                  const handler = innerOnMessage || wWin.onmessage;
-                  if (typeof handler === 'function') {
-                    try {
-                      handler.call(workerScope, msgEv);
-                    } catch (err) {
-                      emitOuterError(err);
-                    }
-                  }
-                  for (const fn of Array.from(innerMsgListeners)) {
-                    try {
-                      fn.call(workerScope, msgEv);
-                    } catch (err) {
-                      emitOuterError(err);
-                    }
-                  }
-                };
-                const flushPreEvalMessages = () => {
-                  if (scriptEvaluated) return;
-                  scriptEvaluated = true;
-                  while (preEvalMessageQueue.length > 0 && !terminated) {
-                    deliverToWorkerRealm(preEvalMessageQueue.shift());
-                  }
-                };
-
-                workerPort.onmessage = (ev) => {
-                  if (terminated) return;
-                  if (!scriptEvaluated) {
-                    preEvalMessageQueue.push(ev);
-                    return;
-                  }
-                  deliverToWorkerRealm(ev);
-                };
-
-                if (typeof hostPort.start === 'function') hostPort.start();
-                if (typeof workerPort.start === 'function') workerPort.start();
-
-                const loadWorkerViaScriptTag = () => {
-                  if (terminated) return;
-                  const wScript = wDoc.createElement('script');
-                  if (nonce) {
-                    wScript.nonce = nonce;
-                    if (typeof wScript.setAttribute === 'function') wScript.setAttribute('nonce', nonce);
-                  }
-                  if (options && options.type === 'module') {
-                    wScript.type = 'module';
-                  }
-                  wScript.onload = () => {
-                    flushPreEvalMessages();
-                  };
-                  wScript.onerror = () => {
-                    preEvalMessageQueue.length = 0;
-                    emitOuterError(new Error(`Failed to load Worker script: ${targetWorkerUrl}`));
-                  };
-                  wScript.src = ttPolicy ? ttPolicy.createScriptURL(targetWorkerUrl) : targetWorkerUrl;
-                  const scriptTarget = wDoc.head || wDoc.body || wDoc.documentElement;
-                  scriptTarget.appendChild(wScript);
-                };
-
-                const canFetchWorkerSource =
-                  !(options && options.type === 'module') &&
-                  typeof cw.fetch === 'function' &&
-                  workerScope !== wWin &&
-                  typeof assignAuthorizedInlineScriptText === 'function';
-                if (canFetchWorkerSource) {
-                  Promise.resolve()
-                    .then(() => cw.fetch(targetWorkerUrl))
-                    .then((res) => {
-                      if (!res || !res.ok) {
-                        throw new Error(`Worker fetch HTTP ${res ? res.status : 0}`);
-                      }
-                      return res.text();
-                    })
-                    .then((workerSource) => {
-                      if (terminated) return;
-                      const wrappedCode = `(function(self,postMessage,addEventListener,removeEventListener,close){\n${workerSource}\n}).call(window.__agyWorkerScope,window.__agyWorkerScope,window.__agyWorkerScope.postMessage,window.__agyWorkerScope.addEventListener,window.__agyWorkerScope.removeEventListener,window.__agyWorkerScope.close);`;
-                      const wScript = wDoc.createElement('script');
-                      if (nonce) {
-                        wScript.nonce = nonce;
-                        if (typeof wScript.setAttribute === 'function') wScript.setAttribute('nonce', nonce);
-                      }
-                      if (!assignAuthorizedInlineScriptText(wScript, wrappedCode)) {
-                        loadWorkerViaScriptTag();
-                        return;
-                      }
-                      const scriptTarget = wDoc.head || wDoc.body || wDoc.documentElement;
-                      scriptTarget.appendChild(wScript);
-                      flushPreEvalMessages();
-                    })
-                    .catch(() => {
-                      loadWorkerViaScriptTag();
-                    });
-                } else {
-                  loadWorkerViaScriptTag();
-                }
-                return workerFacade;
-              } catch (err) {
-                try {
-                  if (wf && typeof wf.remove === 'function') wf.remove();
-                  else if (wf && wf.parentNode) wf.parentNode.removeChild(wf);
-                } catch (e) {}
-                return null;
-              }
-            };
-
-            const PatchedWorker = function (scriptURL, options) {
-              const rawStr = String(
-                scriptURL && typeof scriptURL === 'object' && typeof scriptURL.href === 'string'
-                  ? scriptURL.href
-                  : scriptURL ?? ''
-              ).trim();
-              if (!rawStr) {
-                throw new TypeError('Empty Worker script URL rejected');
-              }
-              if (/^blob:/i.test(rawStr)) {
-                const hostOrigin =
-                  window.location && window.location.origin && window.location.origin !== 'null'
-                    ? window.location.origin
-                    : '';
-                if (hostOrigin && !rawStr.startsWith(`blob:${hostOrigin}/`)) {
-                  throw new TypeError(`Blocked cross-origin blob Worker URL: ${rawStr}`);
-                }
-                if (!isTrustedRemoteScriptUrl(rawStr)) {
-                  throw new TypeError(`Blocked unowned blob Worker URL: ${rawStr}`);
-                }
-                const safeBlob = ttPolicy ? ttPolicy.createScriptURL(rawStr) : rawStr;
-                return options !== undefined ? new OrigWorker(safeBlob, options) : new OrigWorker(safeBlob);
-              }
-
-              const targetWorkerUrl = rewriteChildAssetUrl(scriptURL);
-              if (!targetWorkerUrl || !isTrustedRemoteScriptUrl(targetWorkerUrl)) {
-                throw new TypeError(`Blocked untrusted Worker script URL: ${rawStr}`);
-              }
-
-              // Under Remote Control CSP (`worker-src 'self'`), both cross-origin CDN URLs and `blob:` URLs
-              // violate `worker-src 'self'` when passed to native `new Worker(...)`. Execute in an isolated
-              // hidden same-origin iframe realm (`script-src 'nonce-...'` + TrustedScriptURL) bridged by MessageChannel.
-              const iframeWorker = mountIframeBackedWorker(targetWorkerUrl, options);
-              if (iframeWorker) {
-                return iframeWorker;
-              }
-
-              if (typeof cw.Blob === 'function' && cw.URL && typeof cw.URL.createObjectURL === 'function') {
-                const bootCode =
-                  options && options.type === 'module'
-                    ? `import ${JSON.stringify(targetWorkerUrl)};`
-                    : `importScripts(${JSON.stringify(targetWorkerUrl)});`;
-                const blob = new cw.Blob([bootCode], {
-                  type: 'application/javascript',
-                });
-                const blobUrl = cw.URL.createObjectURL(blob);
-                ownCreatedWorkerBlobUrls.add(blobUrl);
-                let revoked = false;
-                const revokeBlobUrl = () => {
-                  if (revoked) return;
-                  revoked = true;
-                  ownCreatedWorkerBlobUrls.delete(blobUrl);
-                  try {
-                    if (cw.URL && typeof cw.URL.revokeObjectURL === 'function') {
-                      cw.URL.revokeObjectURL(blobUrl);
-                    }
-                  } catch (e) {}
-                };
-                try {
-                  const safeBlobUrl = ttPolicy ? ttPolicy.createScriptURL(blobUrl) : blobUrl;
-                  const worker =
-                    options !== undefined ? new OrigWorker(safeBlobUrl, options) : new OrigWorker(safeBlobUrl);
-                  if (worker && typeof worker.addEventListener === 'function') {
-                    worker.addEventListener('error', revokeBlobUrl, { once: true });
-                  }
-                  const sched = typeof cw.setTimeout === 'function' ? cw.setTimeout.bind(cw) : setTimeout;
-                  sched(revokeBlobUrl, 1500);
-                  return worker;
-                } catch (workerErr) {
-                  revokeBlobUrl();
-                  throw workerErr;
-                }
-              }
-
-              const safeDirectUrl = ttPolicy ? ttPolicy.createScriptURL(targetWorkerUrl) : targetWorkerUrl;
-              return options !== undefined ? new OrigWorker(safeDirectUrl, options) : new OrigWorker(safeDirectUrl);
-            };
-            PatchedWorker.prototype = OrigWorker.prototype;
-            PatchedWorker.__agyWorkerPatched = true;
-            cw.Worker = PatchedWorker;
-          }
-        } catch (e) {}
 
         const prismScript = cd.createElement('script');
         if (nonce) prismScript.nonce = nonce;
@@ -1381,7 +1852,7 @@
               rcInst.iframeUiReady?.set?.(true);
             }
           } catch (e) {}
-          mountIntoBootedSameOriginChild(cw, cd);
+          mountIntoBootedSameOriginChild(cw, cd, iframe, rcInst);
         };
         mainScript.onerror = () => {
           rollbackIframePromotion();

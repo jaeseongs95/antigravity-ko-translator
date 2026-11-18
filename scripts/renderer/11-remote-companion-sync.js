@@ -802,15 +802,18 @@
           if (sbSyncDone && mcpSyncDone) {
             window.__agyKoCompanionsSynced = true;
           }
-        } else {
-          Promise.all([sbAsyncPromise || Promise.resolve(sbSyncDone), mcpAsyncPromise || Promise.resolve(mcpSyncDone)])
-            .then(([sbOk, mcpOk]) => {
-              if (sbOk && mcpOk) {
-                window.__agyKoCompanionsSynced = true;
-              }
-            })
-            .catch(() => {});
+          return null;
         }
+        return Promise.all([
+          sbAsyncPromise || Promise.resolve(sbSyncDone),
+          mcpAsyncPromise || Promise.resolve(mcpSyncDone),
+        ])
+          .then(([sbOk, mcpOk]) => {
+            if (sbOk && mcpOk) {
+              window.__agyKoCompanionsSynced = true;
+            }
+          })
+          .catch(() => {});
       })
       .catch(() => {})
       .finally(() => {

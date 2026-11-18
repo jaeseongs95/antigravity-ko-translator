@@ -6372,6 +6372,15 @@ test(
     dynImg.setAttribute('src', './icons/logo.svg');
     assert.equal(dynImg.getAttribute('src'), 'https://www.gstatic.com/antigravity/web/2.33.0/icons/logo.svg', 'BLOCKING-3: img.setAttribute("src", "./...") must rewrite to CDN');
 
+    // BLOCKING-C: Parent-relative '../shared/...' URL must rewrite against cdnOrigin rather than falling back to host origin
+    const dynParentChunk = childDoc.createElement('script');
+    dynParentChunk.setAttribute('src', '../shared/vendor-chunk.js');
+    assert.equal(
+      dynParentChunk.src,
+      'https://www.gstatic.com/antigravity/web/shared/vendor-chunk.js',
+      'BLOCKING-C: parent-relative "../shared/..." must rewrite onto CDN /web/shared/...'
+    );
+
     // BLOCKING-2: MessageChannel + hidden iframe Worker round-trip for /web/2.33.0/..., URL object, https://www.gstatic.com/..., and untrusted TypeError
     const testWorkerRoundTrip = (arg, msg) =>
       new Promise((resolve, reject) => {
@@ -6413,5 +6422,145 @@ test(
     hostWin.__agyKoThoughtCleanup(false);
     assert.equal(coexistRcInst.__agySuppressAutoIframeLoadCount, 1, 'BLOCKING-1: __agyKoThoughtCleanup(false) must preserve peer __agySuppressAutoIframeLoadCount');
     assert.equal(coexistRcInst.__agySuppressAutoIframeLoad, true, 'BLOCKING-1: __agyKoThoughtCleanup(false) must preserve peer __agySuppressAutoIframeLoad');
+
+    // (D) BLOCKING-B & BLOCKING-D:
+    //  - EXTERNAL_PROMOTED (peer mcp-manager promoted child frame with broken peer Worker) receives KO's CSP-safe Worker & style nonce guard
+    //  - syncRemoteCompanionPlugins keeps __agyKoSyncingCompanions locked while async fetch is pending (0 duplicate RPCs across rescans)
+    let resolveDelayedFetch;
+    let delayedRpcGetPluginsCalls = 0;
+    let delayedFetchCalls = 0;
+    const extChildHead = makeDomNode('HEAD');
+    const extChildBody = makeDomNode('BODY');
+    extChildBody.appendChild(makeDomNode('DIV'));
+    const extChildDoc = {
+      head: extChildHead,
+      body: extChildBody,
+      documentElement: makeDomNode('HTML'),
+      readyState: 'complete',
+      getElementById: (id) => (id === 'root' ? { childElementCount: 1, querySelectorAll: () => [], querySelector: () => null } : extChildHead.children.find((c) => c.id === id) || null),
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      createTreeWalker: () => ({ nextNode: () => null }),
+      createElement: (t) => makeDomNode(t),
+    };
+    function PeerBrokenBlobWorker() {}
+    const extChildWin = {
+      location: { href: 'https://antigravity.google.com/web/2.33.0/?iframe=true', origin: 'https://antigravity.google.com', pathname: '/web/2.33.0/', search: '' },
+      document: extChildDoc,
+      Worker: PeerBrokenBlobWorker,
+      MessageChannel: NodeMessageChannel,
+      URL,
+      Element: FakeChildElement,
+      HTMLScriptElement: FakeChildScript,
+      HTMLLinkElement: FakeChildLink,
+      HTMLImageElement: FakeChildImg,
+      MutationObserver: class { observe() {} disconnect() {} },
+      NodeFilter: { SHOW_TEXT: 4 },
+      addEventListener() {},
+      removeEventListener() {},
+      setTimeout,
+      clearTimeout,
+    };
+    extChildWin.window = extChildWin;
+    const extIframe = {
+      tagName: 'IFRAME',
+      __agyMcpPromoted: true,
+      __agyRemotePromotionOwner: 'mcp-manager',
+      __agyRemotePromotionState: 'ready',
+      contentWindow: extChildWin,
+      contentDocument: extChildDoc,
+      getAttribute: () => 'https://antigravity.google.com/web/2.33.0/?iframe=true',
+    };
+    const lockTestHead = makeDomNode('HEAD');
+    const lockTestDoc = {
+      head: lockTestHead,
+      body: makeDomNode('BODY'),
+      documentElement: makeDomNode('HTML'),
+      getElementById: (id) => lockTestHead.children.find((c) => c.id === id) || null,
+      querySelectorAll: (sel) =>
+        String(sel || '').includes('script')
+          ? [{ nonce: 'host-nonce-lock', getAttribute: () => 'host-nonce-lock', querySelector: () => null }]
+          : [],
+      querySelector: (sel) => (sel === 'ga-remote-control' ? { querySelector: (s) => (s === 'iframe' ? extIframe : null) } : null),
+      createElement: (t) => makeDomNode(t),
+      createTreeWalker: () => ({ nextNode: () => null }),
+    };
+    const lockTestWin = {
+      location: { origin: 'https://antigravity.google.com', hostname: 'antigravity.google.com', href: 'https://antigravity.google.com/r/lock-test', search: '' },
+      localStorage: { getItem: () => null, setItem() {} },
+      trustedTypes: {
+        createPolicy: (name, spec) => ({
+          name,
+          createScript: (s) => spec.createScript(s),
+          createScriptURL: (u) => spec.createScriptURL(u),
+        }),
+      },
+      __agyRemoteControlInstance: {
+        iframeSrc: () => 'https://antigravity.static.usercontent.goog/web/2.33.0/?iframe=true',
+        proxyCommand: async (rpcPath) => {
+          if (String(rpcPath).endsWith('/GetAllPlugins')) {
+            delayedRpcGetPluginsCalls += 1;
+            return {
+              payload: new TextEncoder().encode(JSON.stringify({
+                plugins: [{ id: 'antigravity-statusbar', installPath: 'C:/Users/Test/.gemini/config/plugins/antigravity-statusbar' }],
+              })),
+            };
+          }
+          return { payload: new TextEncoder().encode('{}') };
+        },
+      },
+      MutationObserver: class { observe() {} disconnect() {} },
+      NodeFilter: { SHOW_TEXT: 4 },
+      TextEncoder,
+      TextDecoder,
+      fetch: () => {
+        delayedFetchCalls += 1;
+        return new Promise((resolve) => {
+          resolveDelayedFetch = () => resolve({ ok: true, text: async () => 'window.agyStatusBar = { registerAdapter() {} };' });
+        });
+      },
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    };
+    lockTestWin.window = lockTestWin;
+    lockTestWin.document = lockTestDoc;
+    extChildWin.parent = lockTestWin;
+
+    vm.runInNewContext(bundleCode, {
+      window: lockTestWin,
+      document: lockTestDoc,
+      URL,
+      URLSearchParams,
+      TextEncoder,
+      TextDecoder,
+      fetch: lockTestWin.fetch,
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(delayedFetchCalls, 1, 'BLOCKING-D: initial companion async fetch started once');
+    assert.equal(lockTestWin.__agyKoSyncingCompanions, true, 'BLOCKING-D: __agyKoSyncingCompanions MUST remain true while async companion fetch is still pending');
+
+    // Trigger additional rescans WHILE async fetch is still pending -> MUST NOT fire duplicate RPC calls!
+    lockTestWin.__agyForceRescanAll();
+    lockTestWin.__agyForceRescanAll();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(delayedRpcGetPluginsCalls, 1, 'BLOCKING-D: pending async companion fetch lock must block duplicate GetAllPlugins RPCs across rescans');
+
+    resolveDelayedFetch();
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(lockTestWin.__agyKoSyncingCompanions, false, 'BLOCKING-D: __agyKoSyncingCompanions must unlock after async companion fetch resolves');
+    assert.equal(lockTestWin.__agyKoCompanionsSynced, true, 'BLOCKING-D: __agyKoCompanionsSynced must be marked true after async companion fetch resolves');
+
+    // Verify BLOCKING-B: EXTERNAL_PROMOTED child iframe now has KO CSP-safe PatchedWorker & nonce on child style
+    assert.equal(extChildWin.Worker.__agyWorkerPatched, true, 'BLOCKING-B: EXTERNAL_PROMOTED child frame must upgrade peer Worker to KO CSP-safe PatchedWorker');
+    assert.notEqual(extChildWin.Worker, PeerBrokenBlobWorker, 'BLOCKING-B: peer blob Worker must be replaced by KO PatchedWorker');
+    const extChildStyle = extChildHead.children.find((c) => c.id === 'agy-ko-thought-style');
+    assert.ok(extChildStyle && extChildStyle.nonce === 'host-nonce-lock', 'BLOCKING-B: EXTERNAL_PROMOTED child style must inherit parent CSP nonce');
   });
 });

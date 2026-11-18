@@ -97,19 +97,35 @@
     return null;
   }
 
-  function resolveHostCspNonce(doc) {
-    if (!doc) return '';
+  function readCspNonceFromDocument(targetDoc) {
+    if (!targetDoc) return '';
     try {
-      const candidates = typeof doc.querySelectorAll === 'function' ? doc.querySelectorAll('script, style, link') : [];
+      const candidates =
+        typeof targetDoc.querySelectorAll === 'function' ? targetDoc.querySelectorAll('script, style, link') : [];
       for (let i = 0; i < candidates.length; i++) {
         const el = candidates[i];
         const val = (el && (el.nonce || (typeof el.getAttribute === 'function' ? el.getAttribute('nonce') : ''))) || '';
         if (val) return String(val);
       }
-      const single = typeof doc.querySelector === 'function' ? doc.querySelector('script[nonce]') : null;
+      const single =
+        typeof targetDoc.querySelector === 'function' ? targetDoc.querySelector('script[nonce]') : null;
       const fallbackVal =
         (single && (single.nonce || (typeof single.getAttribute === 'function' ? single.getAttribute('nonce') : ''))) || '';
       if (fallbackVal) return String(fallbackVal);
+    } catch (e) {}
+    return '';
+  }
+
+  function resolveHostCspNonce(doc) {
+    const direct = readCspNonceFromDocument(doc);
+    if (direct) return direct;
+    try {
+      const view = doc && doc.defaultView ? doc.defaultView : typeof window !== 'undefined' ? window : null;
+      const parentDoc = view && view.parent && view.parent !== view ? view.parent.document : null;
+      if (parentDoc && parentDoc !== doc) {
+        const inherited = readCspNonceFromDocument(parentDoc);
+        if (inherited) return inherited;
+      }
     } catch (e) {}
     return '';
   }

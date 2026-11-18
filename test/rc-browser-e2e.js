@@ -795,9 +795,22 @@ async function runScenario(browserBin, scenario) {
           return;
         }
 
+        if (reqUrl.startsWith('https://www.gstatic.com/antigravity/web/2.33.0/__e2e_worker_helper.js')) {
+          await fetchClient.send('Fetch.fulfillRequest', {
+            requestId,
+            responseCode: 200,
+            responseHeaders: [
+              { name: 'Content-Type', value: 'application/javascript; charset=utf-8' },
+              { name: 'Access-Control-Allow-Origin', value: '*' },
+            ],
+            body: Buffer.from("self.__agyHelperTag = 'HELPER_IMPORTED';", 'utf8').toString('base64'),
+          }, sessionId);
+          return;
+        }
+
         if (reqUrl.startsWith('https://www.gstatic.com/antigravity/web/2.33.0/__e2e_worker.js')) {
           const workerCode =
-            "self.addEventListener('message', function(ev) { self.postMessage({ echoed: ev.data, origin: String((self.location && self.location.origin) || '') }); });";
+            "importScripts('./__e2e_worker_helper.js');\nself.addEventListener('message', function(ev) { self.postMessage({ echoed: ev.data, origin: String((self.location && self.location.origin) || ''), href: String((self.location && self.location.href) || ''), helper: self.__agyHelperTag || '' }); });";
           await fetchClient.send('Fetch.fulfillRequest', {
             requestId,
             responseCode: 200,
@@ -806,6 +819,62 @@ async function runScenario(browserBin, scenario) {
               { name: 'Access-Control-Allow-Origin', value: '*' },
             ],
             body: Buffer.from(workerCode, 'utf8').toString('base64'),
+          }, sessionId);
+          return;
+        }
+
+        if (reqUrl.startsWith('https://www.gstatic.com/antigravity/web/2.33.0/__e2e_mod_dep.js')) {
+          await fetchClient.send('Fetch.fulfillRequest', {
+            requestId,
+            responseCode: 200,
+            responseHeaders: [
+              { name: 'Content-Type', value: 'application/javascript; charset=utf-8' },
+              { name: 'Access-Control-Allow-Origin', value: '*' },
+            ],
+            body: Buffer.from("export const modDepTag = 'ESM_DEP_OK';\n", 'utf8').toString('base64'),
+          }, sessionId);
+          return;
+        }
+
+        if (reqUrl.startsWith('https://www.gstatic.com/antigravity/web/2.33.0/__e2e_mod_worker.js')) {
+          const modWorkerCode =
+            "import { modDepTag } from './__e2e_mod_dep.js';\nself.addEventListener('message', function(ev) { self.postMessage({ echoed: ev.data, modDepTag, href: String((self.location && self.location.href) || '') }); });";
+          await fetchClient.send('Fetch.fulfillRequest', {
+            requestId,
+            responseCode: 200,
+            responseHeaders: [
+              { name: 'Content-Type', value: 'application/javascript; charset=utf-8' },
+              { name: 'Access-Control-Allow-Origin', value: '*' },
+            ],
+            body: Buffer.from(modWorkerCode, 'utf8').toString('base64'),
+          }, sessionId);
+          return;
+        }
+
+        if (reqUrl.startsWith('https://www.gstatic.com/antigravity/web/shared/__e2e_parent_worker.js')) {
+          const parentWorkerCode =
+            "self.addEventListener('message', function(ev) { self.postMessage({ echoed: ev.data, href: String((self.location && self.location.href) || '') }); });";
+          await fetchClient.send('Fetch.fulfillRequest', {
+            requestId,
+            responseCode: 200,
+            responseHeaders: [
+              { name: 'Content-Type', value: 'application/javascript; charset=utf-8' },
+              { name: 'Access-Control-Allow-Origin', value: '*' },
+            ],
+            body: Buffer.from(parentWorkerCode, 'utf8').toString('base64'),
+          }, sessionId);
+          return;
+        }
+
+        if (reqUrl.startsWith('https://www.gstatic.com/antigravity/web/shared/__e2e_parent_chunk.js')) {
+          await fetchClient.send('Fetch.fulfillRequest', {
+            requestId,
+            responseCode: 200,
+            responseHeaders: [
+              { name: 'Content-Type', value: 'application/javascript; charset=utf-8' },
+              { name: 'Access-Control-Allow-Origin', value: '*' },
+            ],
+            body: Buffer.from('window.__agyE2eParentRelChunkLoaded = true;', 'utf8').toString('base64'),
           }, sessionId);
           return;
         }
@@ -1139,10 +1208,10 @@ async function runScenario(browserBin, scenario) {
               const f = document.querySelector('ga-remote-control iframe');
               const cw = f.contentWindow;
               const cd = f.contentDocument;
-              const roundTripWorker = (arg, payload) => new Promise((resolve, reject) => {
+              const roundTripWorker = (arg, payload, opts) => new Promise((resolve, reject) => {
                 const timer = setTimeout(() => reject(new Error('Worker timeout for ' + payload)), 4000);
                 try {
-                  const w = new cw.Worker(arg);
+                  const w = opts !== undefined ? new cw.Worker(arg, opts) : new cw.Worker(arg);
                   w.onerror = (err) => { clearTimeout(timer); w.terminate(); reject(new Error(err?.message || 'worker error')); };
                   w.addEventListener('message', (ev) => {
                     clearTimeout(timer);
@@ -1189,10 +1258,13 @@ async function runScenario(browserBin, scenario) {
                 roundTripWorker(new cw.URL('/web/2.33.0/__e2e_worker.js', cw.location.href), 'ping-url'),
                 roundTripWorker('https://www.gstatic.com/antigravity/web/2.33.0/__e2e_worker.js', 'ping-abs'),
                 roundTripWorker('./__e2e_worker.js', 'ping-rel'),
+                roundTripWorker('/web/2.33.0/__e2e_mod_worker.js', 'ping-mod', { type: 'module' }),
+                roundTripWorker('../shared/__e2e_parent_worker.js', 'ping-parent-rel'),
                 loadDynScript('/web/2.33.0/__e2e_chunk.js', '__agyE2eSetAttrChunkLoaded'),
                 loadDynScript('./__e2e_rel_chunk.js', '__agyE2eRelChunkLoaded'),
+                loadDynScript('../shared/__e2e_parent_chunk.js', '__agyE2eParentRelChunkLoaded'),
                 loadDynCss(),
-              ]).then(([wPath, wUrl, wAbs, wRel, chunkAbsOk, chunkRelOk, cssOk]) => {
+              ]).then(([wPath, wUrl, wAbs, wRel, wMod, wParentRel, chunkAbsOk, chunkRelOk, chunkParentRelOk, cssOk]) => {
                 const hostStyle = document.getElementById('agy-ko-thought-style');
                 const childStyle = cd.getElementById('agy-ko-thought-style');
                 return {
@@ -1200,9 +1272,16 @@ async function runScenario(browserBin, scenario) {
                   wUrlEcho: wUrl?.echoed || '',
                   wAbsEcho: wAbs?.echoed || '',
                   wRelEcho: wRel?.echoed || '',
+                  wHref: wPath?.href || '',
+                  wHelper: wPath?.helper || '',
+                  wModEcho: wMod?.echoed || '',
+                  wModTag: wMod?.modDepTag || '',
+                  wModHref: wMod?.href || '',
+                  wParentRelEcho: wParentRel?.echoed || '',
                   untrustedRejected,
                   chunkAbsOk,
                   chunkRelOk,
+                  chunkParentRelOk,
                   cssOk,
                   styleNoncePresent: Boolean((hostStyle && hostStyle.nonce) || (childStyle && childStyle.nonce)),
                 };
@@ -1345,6 +1424,7 @@ async function runAllBrowserE2E(options = {}) {
       injectEmptyNonceScriptBeforeBookmarklet: false,
       companionInstalled: true,
       companionFirst: true,
+      verifyWorkerAndDynamicDom: true,
       verifyPeerLockOnHotReload: true,
     },
   ];
@@ -1380,9 +1460,16 @@ async function runAllBrowserE2E(options = {}) {
           dc.wUrlEcho !== 'ping-url' ||
           dc.wAbsEcho !== 'ping-abs' ||
           dc.wRelEcho !== 'ping-rel' ||
+          dc.wHref !== 'https://www.gstatic.com/antigravity/web/2.33.0/__e2e_worker.js' ||
+          dc.wHelper !== 'HELPER_IMPORTED' ||
+          dc.wModEcho !== 'ping-mod' ||
+          dc.wModTag !== 'ESM_DEP_OK' ||
+          dc.wModHref !== 'https://www.gstatic.com/antigravity/web/2.33.0/__e2e_mod_worker.js' ||
+          dc.wParentRelEcho !== 'ping-parent-rel' ||
           !dc.untrustedRejected ||
           !dc.chunkAbsOk ||
           !dc.chunkRelOk ||
+          !dc.chunkParentRelOk ||
           !dc.cssOk ||
           !dc.styleNoncePresent
         ) {
