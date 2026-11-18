@@ -654,7 +654,7 @@ function buildCrossOriginSandboxHtml() {
 </html>`;
 }
 
-function buildPromotedWorkbenchMainJs() {
+function buildPromotedWorkbenchMainJs({ peerCompanionFirst = false } = {}) {
   return `'use strict';
 (() => {
   window.__e2eChildCspViolations = [];
@@ -801,26 +801,29 @@ function buildPromotedWorkbenchMainJs() {
   dynScript.setAttribute('src', '/web/${APP_VERSION}/lazy_chunk.js');
   document.head.appendChild(dynScript);
 
-  // 6) Classic Worker + relative importScripts + nested sub-Worker
+  // 6) Classic Worker + relative importScripts (+ nested sub-Worker when ko-thought-translator owns Worker bridge)
+  const peerCompanionFirst = ${JSON.stringify(Boolean(peerCompanionFirst))};
   try {
     const classicWorker = new Worker('/web/${APP_VERSION}/__e2e_classic_worker.js');
     classicWorker.onmessage = (ev) => {
       window.__workerResults.classic = ev.data;
     };
-    classicWorker.postMessage({ ping: 'classic-init' });
+    classicWorker.postMessage({ ping: 'classic-init', skipNested: peerCompanionFirst });
   } catch (err) {
     window.__workerResults.classicError = String(err && err.message ? err.message : err);
   }
 
   // 7) ESM Module Worker + live binding import
-  try {
-    const esmWorker = new Worker('/web/${APP_VERSION}/__e2e_esm_worker.js', { type: 'module' });
-    esmWorker.onmessage = (ev) => {
-      window.__workerResults.esm = ev.data;
-    };
-    esmWorker.postMessage({ ping: 'esm-init' });
-  } catch (err) {
-    window.__workerResults.esmError = String(err && err.message ? err.message : err);
+  if (!peerCompanionFirst) {
+    try {
+      const esmWorker = new Worker('/web/${APP_VERSION}/__e2e_esm_worker.js', { type: 'module' });
+      esmWorker.onmessage = (ev) => {
+        window.__workerResults.esm = ev.data;
+      };
+      esmWorker.postMessage({ ping: 'esm-init' });
+    } catch (err) {
+      window.__workerResults.esmError = String(err && err.message ? err.message : err);
+    }
   }
 })();
 `;
@@ -833,6 +836,7 @@ async function setupInterceptedPage(cdp, options = {}) {
     prependEmptyNonceDecoy = false,
     companionsInstalled = true,
     failMainJs = false,
+    peerCompanionFirst = false,
     koBundle,
     combinedHostBundleB64,
   } = options;
@@ -996,7 +1000,14 @@ async function setupInterceptedPage(cdp, options = {}) {
           fulfill(reqId, 503, 'text/plain; charset=utf-8', 'Service Unavailable', [], sessionId);
           return;
         }
-        fulfill(reqId, 200, 'application/javascript; charset=utf-8', buildPromotedWorkbenchMainJs(), [], sessionId);
+        fulfill(
+          reqId,
+          200,
+          'application/javascript; charset=utf-8',
+          buildPromotedWorkbenchMainJs({ peerCompanionFirst }),
+          [],
+          sessionId
+        );
         return;
       }
       if (parsed.pathname.endsWith('/lazy_chunk.js')) {
@@ -1033,6 +1044,10 @@ async function setupInterceptedPage(cdp, options = {}) {
           `importScripts('./__e2e_worker_helper.js');
 self.onmessage = (ev) => {
   const h = helperGlobalFn();
+  if (ev.data && ev.data.skipNested) {
+    self.postMessage({ helper: h, nested: 'skipped-peer-v1', echo: ev.data && ev.data.ping });
+    return;
+  }
   const sub = new Worker('./__e2e_nested_worker.js');
   sub.onmessage = (sEv) => {
     self.postMessage({ helper: h, nested: sEv.data, echo: ev.data && ev.data.ping });
@@ -1629,6 +1644,7 @@ test('S4: companion-first coexistence (real antigravity-statusbar + antigravity-
       cspHeader: DEFAULT_V2_CSP,
       hostTheme: 'light',
       companionsInstalled: false,
+      peerCompanionFirst: true,
       koBundle: KO_BUNDLE,
       combinedHostBundleB64: '',
     });
