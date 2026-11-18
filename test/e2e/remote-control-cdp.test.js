@@ -1703,7 +1703,7 @@ test('S4: companion-first coexistence (real antigravity-statusbar + antigravity-
     );
 
     // Wait until mcp-manager promotes the workbench iframe (`__agyMcpPromoted === true`, `cw.Worker.__agyWorkerAdapted === true`)
-    await waitForCondition(
+    const step1 = await waitForCondition(
       session.cdp,
       `(() => {
         try {
@@ -1719,8 +1719,17 @@ test('S4: companion-first coexistence (real antigravity-statusbar + antigravity-
             cw.Worker &&
             cw.Worker.__agyWorkerAdapted === true
           );
+          let peerWorkerIsLegacyV1 = false;
+          if (done) {
+            const fnSource = Function.prototype.toString.call(cw.Worker);
+            peerWorkerIsLegacyV1 =
+              cw.Worker.__agyWorkerBridgeV2 !== true &&
+              !fnSource.includes('bridgeDepth') &&
+              !fnSource.includes('esmModuleBootstrap');
+          }
           return {
             done,
+            peerWorkerIsLegacyV1,
             mcpPromoted: Boolean(ifr.__agyMcpPromoted),
             owner: ifr.__agyRemotePromotionOwner || null,
             state: ifr.__agyRemotePromotionState || null,
@@ -1796,12 +1805,14 @@ test('S4: companion-first coexistence (real antigravity-statusbar + antigravity-
       diag
     );
 
-    const mcpIsLegacyV1 =
-      MCP_BUNDLE.includes('isNativeTrustedUrlObject') && !MCP_BUNDLE.includes('bridgeDepth');
     assert.equal(coexisted.promotionOwner, 'mcp-manager', 'Must attach as EXTERNAL_PROMOTED without stealing peer ownership');
     assert.equal(coexisted.mcpPromoted, true);
-    assert.equal(coexisted.cwWorkerPatched, mcpIsLegacyV1, 'Preserves v2 peer AdaptedWorker untouched; upgrades legacy v1 peer Worker');
-    if (!mcpIsLegacyV1) {
+    assert.equal(
+      coexisted.cwWorkerPatched,
+      step1.peerWorkerIsLegacyV1,
+      'Preserves v2 peer AdaptedWorker untouched; upgrades legacy v1 peer Worker'
+    );
+    if (!step1.peerWorkerIsLegacyV1) {
       assert.equal(coexisted.cwWorkerAdapted, true);
     }
     assert.equal(coexisted.codeMonoText, 'import org.pgledger.application.history.Change;');

@@ -14364,8 +14364,8 @@ function installWorkerBridge({
   if (remoteHostPort && typeof remoteHostPort.markWorkerPatched === 'function') {
     unmarkPatched = remoteHostPort.markWorkerPatched(cw.Worker);
     if (disposables && typeof disposables.register === 'function') {
-      disposables.register((fullRestore) => {
-        if (fullRestore) unmarkPatched();
+      disposables.register(() => {
+        unmarkPatched();
       });
     }
   }

@@ -258,6 +258,8 @@ test('WorkerBridge: preserves v2 peer-adapted Worker (`isWorkerAlreadyAdapted`) 
 
   envLegacy.disposables.disposeAll(false);
   assert.equal(envLegacy.cw.Worker, LegacyV1AdaptedWorker, 'Disposing v2 bridge must restore peer Worker');
+  assert.equal(Boolean(envLegacy.cw.Worker.__agyWorkerPatched), false, 'Hot-swap disposeAll(false) must unmark __agyWorkerPatched on restored peer Worker');
+  assert.equal(Boolean(envLegacy.cw.Worker.__agyWorkerBridgeV2), false, 'Hot-swap disposeAll(false) must unmark __agyWorkerBridgeV2 on restored peer Worker');
 });
 
 test('WorkerBridge: hidden iframe 0-arg open()/close(), classic importScripts sync rethrow, ESM Worker, and cascading child termination', async () => {
