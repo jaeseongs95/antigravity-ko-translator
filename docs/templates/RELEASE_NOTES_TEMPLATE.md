@@ -1,4 +1,4 @@
-# Release `vX.Y.Z` (`KO_LOCALIZER_VERSION vM.N`)
+# Release `v2.0.0` (`KO_LOCALIZER_VERSION v2.0.0`)
 
 ## English
 
@@ -12,14 +12,14 @@ Concise overview of compatibility updates, defect resolutions, security hardenin
 
 ### Compatibility & Verification
 
-- **Target Runtime**: Antigravity `v2.x` Desktop (`app.asar` + Live CDP) and Remote Control Web (`https://antigravity.google.com/r/...`)
-- **Automated Verification**: `npm test` (`node --test test/ko-translator.test.js`) and GitHub Actions CI (`ubuntu-latest`, Node.js 22)
+- **Target Runtime**: Antigravity `v2.x` Desktop (`app.asar` `AGY_STATUSBAR_AUTOINJECT_V6` + Live CDP) and Remote Control Web (`https://antigravity.google.com/r/...`)
+- **Automated Verification**: `npm test` (`scripts/build.js --check`, `test/unit/*.test.js`, `test/e2e/remote-control-cdp.test.js`) and GitHub Actions CI (`ubuntu-latest` + `windows-latest`, Node.js 22)
 
 ### Upgrade Instructions
 
 ```powershell
 git -C "$HOME\.gemini\config\plugins\ko-thought-translator" pull --ff-only
-node "$HOME\.gemini\config\plugins\ko-thought-translator\scripts\ensure_ko_thought_patch.js"
+node "$HOME\.gemini\config\plugins\ko-thought-translator\scripts\ensure_ko_thought_patch.js" --worker
 ```
 
 ---
@@ -36,12 +36,12 @@ node "$HOME\.gemini\config\plugins\ko-thought-translator\scripts\ensure_ko_thoug
 
 ### 호환성 및 검증
 
-- **지원 런타임**: Antigravity `v2.x` 데스크톱(`app.asar` + Live CDP) 및 Remote Control 웹(`https://antigravity.google.com/r/...`)
-- **자동화 검증**: `npm test` (`node --test test/ko-translator.test.js`) 및 GitHub Actions CI (`ubuntu-latest`, Node.js 22)
+- **지원 런타임**: Antigravity `v2.x` 데스크톱(`app.asar` `AGY_STATUSBAR_AUTOINJECT_V6` + Live CDP) 및 Remote Control 웹(`https://antigravity.google.com/r/...`)
+- **자동화 검증**: `npm test` (`scripts/build.js --check`, `test/unit/*.test.js`, `test/e2e/remote-control-cdp.test.js`) 및 GitHub Actions CI (`ubuntu-latest` + `windows-latest`, Node.js 22)
 
 ### 업그레이드 안내
 
 ```powershell
 git -C "$HOME\.gemini\config\plugins\ko-thought-translator" pull --ff-only
-node "$HOME\.gemini\config\plugins\ko-thought-translator\scripts\ensure_ko_thought_patch.js"
+node "$HOME\.gemini\config\plugins\ko-thought-translator\scripts\ensure_ko_thought_patch.js" --worker
 ```

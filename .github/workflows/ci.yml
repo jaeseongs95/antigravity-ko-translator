@@ -36,6 +36,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Run unit, contract, and real companion browser E2E tests
+      - name: Verify deterministic bundle parity and run unit & real Chromium CDP E2E suites
         working-directory: ko-thought-translator
         run: npm test
