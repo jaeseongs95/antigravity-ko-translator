@@ -655,7 +655,7 @@ function buildCrossOriginSandboxHtml() {
 </html>`;
 }
 
-function buildPromotedWorkbenchMainJs({ peerCompanionFirst = false } = {}) {
+function buildPromotedWorkbenchMainJs({ deferWorkerSuiteUntilAttached = false } = {}) {
   return `'use strict';
 (() => {
   window.__e2eChildCspViolations = [];
@@ -777,6 +777,34 @@ function buildPromotedWorkbenchMainJs({ peerCompanionFirst = false } = {}) {
   codeLineAttr.appendChild(ls3);
   shell.appendChild(codeLineAttr);
 
+  const codeDiffBlock = document.createElement('div');
+  codeDiffBlock.id = 'e2e-code-diff-viewer';
+  codeDiffBlock.className = 'code-block';
+  const codeDiffLine = document.createElement('div');
+  codeDiffLine.className = 'code-line';
+  codeDiffLine.setAttribute('data-diff-type', 'added');
+  codeDiffLine.setAttribute('data-file-uri', 'file:///d:/repo/Change.java');
+  codeDiffLine.setAttribute('data-line-start', '14');
+  const lineContent = document.createElement('span');
+  lineContent.className = 'line-content';
+  const tkKw = document.createElement('span');
+  tkKw.className = 'token keyword';
+  tkKw.textContent = 'import ';
+  const tkNs = document.createElement('span');
+  tkNs.className = 'token namespace';
+  tkNs.textContent = 'org.pgledger.application.history.';
+  const tkCls = document.createElement('span');
+  tkCls.id = 'e2e-diff-token-change';
+  tkCls.className = 'token class-name';
+  tkCls.textContent = 'Change';
+  const tkSemi = document.createElement('span');
+  tkSemi.className = 'token punctuation';
+  tkSemi.textContent = ';';
+  lineContent.append(tkKw, tkNs, tkCls, tkSemi);
+  codeDiffLine.appendChild(lineContent);
+  codeDiffBlock.appendChild(codeDiffLine);
+  shell.appendChild(codeDiffBlock);
+
   // 4) Statusbar host footer
   const statusFooter = document.createElement('footer');
   statusFooter.id = 'workbench.parts.statusbar';
@@ -802,20 +830,19 @@ function buildPromotedWorkbenchMainJs({ peerCompanionFirst = false } = {}) {
   dynScript.setAttribute('src', '/web/${APP_VERSION}/lazy_chunk.js');
   document.head.appendChild(dynScript);
 
-  // 6) Classic Worker + relative importScripts (+ nested sub-Worker when ko-thought-translator owns Worker bridge)
-  const peerCompanionFirst = ${JSON.stringify(Boolean(peerCompanionFirst))};
-  try {
-    const classicWorker = new Worker('/web/${APP_VERSION}/__e2e_classic_worker.js');
-    classicWorker.onmessage = (ev) => {
-      window.__workerResults.classic = ev.data;
-    };
-    classicWorker.postMessage({ ping: 'classic-init', skipNested: peerCompanionFirst });
-  } catch (err) {
-    window.__workerResults.classicError = String(err && err.message ? err.message : err);
-  }
+  // 6) Full Classic + relative importScripts + nested sub-Worker AND ESM Module Worker suite (ZERO skipNested / ZERO ESM bypass!)
+  window.__runWorkbenchWorkerSuite = () => {
+    window.__workerResults = { classic: null, esm: null };
+    try {
+      const classicWorker = new Worker('/web/${APP_VERSION}/__e2e_classic_worker.js');
+      classicWorker.onmessage = (ev) => {
+        window.__workerResults.classic = ev.data;
+      };
+      classicWorker.postMessage({ ping: 'classic-init' });
+    } catch (err) {
+      window.__workerResults.classicError = String(err && err.message ? err.message : err);
+    }
 
-  // 7) ESM Module Worker + live binding import
-  if (!peerCompanionFirst) {
     try {
       const esmWorker = new Worker('/web/${APP_VERSION}/__e2e_esm_worker.js', { type: 'module' });
       esmWorker.onmessage = (ev) => {
@@ -825,6 +852,10 @@ function buildPromotedWorkbenchMainJs({ peerCompanionFirst = false } = {}) {
     } catch (err) {
       window.__workerResults.esmError = String(err && err.message ? err.message : err);
     }
+  };
+
+  if (!${JSON.stringify(Boolean(deferWorkerSuiteUntilAttached))}) {
+    window.__runWorkbenchWorkerSuite();
   }
 })();
 `;
@@ -837,7 +868,7 @@ async function setupInterceptedPage(cdp, options = {}) {
     prependEmptyNonceDecoy = false,
     companionsInstalled = true,
     failMainJs = false,
-    peerCompanionFirst = false,
+    deferWorkerSuiteUntilAttached = false,
     koBundle,
     combinedHostBundleB64,
   } = options;
@@ -1005,7 +1036,7 @@ async function setupInterceptedPage(cdp, options = {}) {
           reqId,
           200,
           'application/javascript; charset=utf-8',
-          buildPromotedWorkbenchMainJs({ peerCompanionFirst }),
+          buildPromotedWorkbenchMainJs({ deferWorkerSuiteUntilAttached }),
           [],
           sessionId
         );
@@ -1045,10 +1076,6 @@ async function setupInterceptedPage(cdp, options = {}) {
           `importScripts('./__e2e_worker_helper.js');
 self.onmessage = (ev) => {
   const h = helperGlobalFn();
-  if (ev.data && ev.data.skipNested) {
-    self.postMessage({ helper: h, nested: 'skipped-peer-v1', echo: ev.data && ev.data.ping });
-    return;
-  }
   const sub = new Worker('./__e2e_nested_worker.js');
   sub.onmessage = (sEv) => {
     self.postMessage({ helper: h, nested: sEv.data, echo: ev.data && ev.data.ping });
@@ -1250,6 +1277,8 @@ test('S0 (S0a + S0b): default live -v2 CSP promotion, 0-arg cd.open/close, Messa
               lexicalEditable: cd.getElementById('e2e-lexical-editable').textContent,
               codeMonoText: cd.getElementById('e2e-code-mono').textContent,
               codeDataLineText: cd.getElementById('e2e-code-data-line').textContent,
+              codeDiffViewerText: cd.getElementById('e2e-code-diff-viewer').textContent,
+              codeDiffTokenChange: cd.getElementById('e2e-diff-token-change').textContent,
               classicWorker: wr.classic,
               esmWorker: wr.esm,
               parentViolations: window.__e2eCspViolations,
@@ -1288,6 +1317,8 @@ test('S0 (S0a + S0b): default live -v2 CSP promotion, 0-arg cd.open/close, Messa
       assert.equal(state.lexicalEditable, 'Change');
       assert.equal(state.codeMonoText, 'import org.pgledger.application.history.Change;');
       assert.equal(state.codeDataLineText, 'import org.pgledger.application.history.Change;');
+      assert.equal(state.codeDiffViewerText, 'import org.pgledger.application.history.Change;');
+      assert.equal(state.codeDiffTokenChange, 'Change');
       assert.deepEqual(state.classicWorker, { helper: 'helper-ok', nested: 'nested:sub-ok', echo: 'classic-init' });
       assert.deepEqual(state.esmWorker, { before: 10, after: 15, liveRead: 15, tagged: 'esm:esm-init:15' });
       assert.equal(state.hasKoModalAndStatusbar, true);
@@ -1645,7 +1676,7 @@ test('S4: companion-first coexistence (real antigravity-statusbar + antigravity-
       cspHeader: DEFAULT_V2_CSP,
       hostTheme: 'light',
       companionsInstalled: false,
-      peerCompanionFirst: true,
+      deferWorkerSuiteUntilAttached: true,
       koBundle: KO_BUNDLE,
       combinedHostBundleB64: '',
     });
@@ -1733,6 +1764,8 @@ test('S4: companion-first coexistence (real antigravity-statusbar + antigravity-
                 cwWorkerAdapted: Boolean(cw.Worker && cw.Worker.__agyWorkerAdapted),
                 cwWorkerPatched: Boolean(cw.Worker && cw.Worker.__agyWorkerPatched),
                 codeMonoText: cd.getElementById('e2e-code-mono').textContent,
+                codeDiffViewerText: cd.getElementById('e2e-code-diff-viewer').textContent,
+                codeDiffTokenChange: cd.getElementById('e2e-diff-token-change').textContent,
               }
             : { done: false };
         } catch (_e) {
@@ -1741,22 +1774,59 @@ test('S4: companion-first coexistence (real antigravity-statusbar + antigravity-
       })()`
     );
 
-    assert.equal(coexisted.promotionOwner, 'mcp-manager', 'Must attach as EXTERNAL_PROMOTED without stealing peer ownership');
-    assert.equal(coexisted.mcpPromoted, true);
-    assert.equal(coexisted.cwWorkerAdapted, true);
-    assert.equal(coexisted.cwWorkerPatched, false, 'Must preserve peer AdaptedWorker without double-wrapping');
-    assert.equal(coexisted.codeMonoText, 'import org.pgledger.application.history.Change;');
-    assert.equal(diag.requestCounts.mainJsFetches, 1, 'Must NOT re-promote or re-boot main.js');
-
-    // Verify hot-swap cleanup (`__agyKoThoughtCleanup(false)`) preserves peer's suppression refcount!
-    const peerSuppressionAfterCleanup = await evalInPage(
+    // Step 3: Execute FULL classic + relative importScripts + nested sub-Worker AND ESM module Worker suite in companion-first frame!
+    await evalInPage(
       session.cdp,
       `(() => {
-        window.__agyKoThoughtCleanup(false);
-        return window.__e2eRcInst.__agySuppressAutoIframeLoadCount;
+        const ifr = document.getElementById('rc-workbench-iframe');
+        ifr.contentWindow.__runWorkbenchWorkerSuite();
       })()`
     );
-    assert.equal(peerSuppressionAfterCleanup, 1, 'Must preserve peer __agySuppressAutoIframeLoadCount on cleanup');
+    const s4Workers = await waitForCondition(
+      session.cdp,
+      `(() => {
+        const ifr = document.getElementById('rc-workbench-iframe');
+        const cw = ifr && ifr.contentWindow;
+        const wr = cw && cw.__workerResults;
+        if (!wr || !wr.classic || !wr.esm) return { done: false, wr };
+        return { done: true, classic: wr.classic, esm: wr.esm };
+      })()`,
+      10000,
+      80,
+      diag
+    );
+
+    const mcpIsLegacyV1 =
+      MCP_BUNDLE.includes('isNativeTrustedUrlObject') && !MCP_BUNDLE.includes('bridgeDepth');
+    assert.equal(coexisted.promotionOwner, 'mcp-manager', 'Must attach as EXTERNAL_PROMOTED without stealing peer ownership');
+    assert.equal(coexisted.mcpPromoted, true);
+    assert.equal(coexisted.cwWorkerPatched, mcpIsLegacyV1, 'Preserves v2 peer AdaptedWorker untouched; upgrades legacy v1 peer Worker');
+    if (!mcpIsLegacyV1) {
+      assert.equal(coexisted.cwWorkerAdapted, true);
+    }
+    assert.equal(coexisted.codeMonoText, 'import org.pgledger.application.history.Change;');
+    assert.equal(coexisted.codeDiffViewerText, 'import org.pgledger.application.history.Change;');
+    assert.equal(coexisted.codeDiffTokenChange, 'Change');
+    assert.deepEqual(s4Workers.classic, { helper: 'helper-ok', nested: 'nested:sub-ok', echo: 'classic-init' });
+    assert.deepEqual(s4Workers.esm, { before: 10, after: 15, liveRead: 15, tagged: 'esm:esm-init:15' });
+    assert.equal(diag.requestCounts.mainJsFetches, 1, 'Must NOT re-promote or re-boot main.js');
+
+    // Verify hot-swap cleanup (`__agyKoThoughtCleanup(false)`) preserves peer's suppression refcount and peer Worker!
+    const peerAfterCleanup = await evalInPage(
+      session.cdp,
+      `(() => {
+        const ifr = document.getElementById('rc-workbench-iframe');
+        window.__agyKoThoughtCleanup(false);
+        return {
+          suppressionCount: window.__e2eRcInst.__agySuppressAutoIframeLoadCount,
+          peerWorkerAdapted: Boolean(ifr.contentWindow.Worker && ifr.contentWindow.Worker.__agyWorkerAdapted),
+          koWorkerPatched: Boolean(ifr.contentWindow.Worker && ifr.contentWindow.Worker.__agyWorkerPatched),
+        };
+      })()`
+    );
+    assert.equal(peerAfterCleanup.suppressionCount, 1, 'Must preserve peer __agySuppressAutoIframeLoadCount on cleanup');
+    assert.equal(peerAfterCleanup.peerWorkerAdapted, true, 'Must preserve/restore peer AdaptedWorker on cleanup');
+    assert.equal(peerAfterCleanup.koWorkerPatched, false);
     assert.deepEqual(diag.exceptions, []);
     assert.deepEqual(diag.securityLogs, []);
   } finally {

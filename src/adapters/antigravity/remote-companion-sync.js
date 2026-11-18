@@ -578,27 +578,44 @@ function createAntigravityRemoteCompanionSync({
   }
 
   function isWorkerAlreadyAdapted(workerCtor) {
-    return Boolean(workerCtor && (workerCtor.__agyWorkerAdapted || workerCtor.__agyWorkerPatched));
+    if (!workerCtor) return false;
+    if (workerCtor.__agyWorkerPatched || workerCtor.__agyWorkerBridgeV2) return true;
+    if (workerCtor.__agyWorkerAdapted) {
+      try {
+        const fnSrc = Function.prototype.toString.call(workerCtor);
+        // Upgrade legacy v1.x companion AdaptedWorker (lacks nested wfw.Worker & ESM module compilation)
+        // while preserving v2.0.0 companion AdaptedWorker (`bridgeDepth`) and synthetic unit-test mocks.
+        if (fnSrc.includes('isNativeTrustedUrlObject') && !fnSrc.includes('bridgeDepth')) {
+          return false;
+        }
+      } catch (_err) {}
+      return true;
+    }
+    return false;
   }
 
   function markWorkerPatched(workerCtor) {
     if (!workerCtor || (typeof workerCtor !== 'function' && typeof workerCtor !== 'object')) {
       return () => {};
     }
-    try {
-      Object.defineProperty(workerCtor, '__agyWorkerPatched', {
-        configurable: true,
-        enumerable: false,
-        writable: true,
-        value: true,
-      });
-    } catch (_err) {
-      workerCtor.__agyWorkerPatched = true;
+    for (const flag of ['__agyWorkerPatched', '__agyWorkerBridgeV2']) {
+      try {
+        Object.defineProperty(workerCtor, flag, {
+          configurable: true,
+          enumerable: false,
+          writable: true,
+          value: true,
+        });
+      } catch (_err) {
+        workerCtor[flag] = true;
+      }
     }
     return () => {
-      try {
-        delete workerCtor.__agyWorkerPatched;
-      } catch (_err) {}
+      for (const flag of ['__agyWorkerPatched', '__agyWorkerBridgeV2']) {
+        try {
+          delete workerCtor[flag];
+        } catch (_err) {}
+      }
     };
   }
 

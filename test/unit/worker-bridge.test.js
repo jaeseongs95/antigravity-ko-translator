@@ -232,15 +232,32 @@ function buildIframeBackedWorkerEnv(scriptMap) {
   };
 }
 
-test('WorkerBridge: preserves peer-adapted Worker (`isWorkerAlreadyAdapted`) without double-patching', () => {
+test('WorkerBridge: preserves v2 peer-adapted Worker (`isWorkerAlreadyAdapted`) while upgrading legacy v1 peer Worker with clean restore', () => {
   const env = buildIframeBackedWorkerEnv({});
-  function PeerAdaptedWorker() {}
-  PeerAdaptedWorker.__agyWorkerAdapted = true;
-  env.cw.Worker = PeerAdaptedWorker;
+  function PeerAdaptedWorkerV2() {
+    return 'bridgeDepth';
+  }
+  PeerAdaptedWorkerV2.__agyWorkerAdapted = true;
+  env.cw.Worker = PeerAdaptedWorkerV2;
 
   installWorkerBridge(env);
-  assert.equal(env.cw.Worker, PeerAdaptedWorker, 'Peer AdaptedWorker must remain untouched');
+  assert.equal(env.cw.Worker, PeerAdaptedWorkerV2, 'v2 Peer AdaptedWorker must remain untouched');
   assert.equal(Boolean(env.cw.Worker.__agyWorkerPatched), false);
+
+  const envLegacy = buildIframeBackedWorkerEnv({});
+  function LegacyV1AdaptedWorker(scriptURL) {
+    return { isNativeTrustedUrlObject: Boolean(scriptURL) };
+  }
+  LegacyV1AdaptedWorker.__agyWorkerAdapted = true;
+  envLegacy.cw.Worker = LegacyV1AdaptedWorker;
+
+  installWorkerBridge(envLegacy);
+  assert.notEqual(envLegacy.cw.Worker, LegacyV1AdaptedWorker, 'Legacy v1 AdaptedWorker must be upgraded to v2 bridge');
+  assert.equal(Boolean(envLegacy.cw.Worker.__agyWorkerPatched), true);
+  assert.equal(Boolean(envLegacy.cw.Worker.__agyWorkerBridgeV2), true);
+
+  envLegacy.disposables.disposeAll(false);
+  assert.equal(envLegacy.cw.Worker, LegacyV1AdaptedWorker, 'Disposing v2 bridge must restore peer Worker');
 });
 
 test('WorkerBridge: hidden iframe 0-arg open()/close(), classic importScripts sync rethrow, ESM Worker, and cascading child termination', async () => {
