@@ -2,6 +2,7 @@
 // Responsibility: Remote Control origin/script allowlist, owned Worker Blob URL registry, CSP nonce resolution, and one-time gated TrustedTypes policy port.
   const ownCreatedWorkerBlobUrls = new Set();
   let cachedRemoteTrustedPolicy = null;
+  let cachedRemoteTrustedPolicyAttempted = false;
   let pendingCompanionInlineAuth = null;
 
   function isTrustedRemoteOriginUrlObject(parsed) {
@@ -48,8 +49,14 @@
     if (typeof cachedRemoteTrustedPolicy !== 'undefined' && cachedRemoteTrustedPolicy) {
       return cachedRemoteTrustedPolicy;
     }
+    if (typeof cachedRemoteTrustedPolicyAttempted !== 'undefined' && cachedRemoteTrustedPolicyAttempted) {
+      return null;
+    }
     if (window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function') {
-      const names = ['agy-ko-translator', 'agy-ko-translator-rc', `agy-ko-translator-${Date.now().toString(36)}`];
+      if (typeof cachedRemoteTrustedPolicyAttempted !== 'undefined') {
+        cachedRemoteTrustedPolicyAttempted = true;
+      }
+      const names = ['agy-ko-translator', 'agy-ko-translator-rc'];
       for (const name of names) {
         try {
           const p = window.trustedTypes.createPolicy(name, {
@@ -78,10 +85,12 @@
               return s;
             },
           });
-          if (typeof cachedRemoteTrustedPolicy !== 'undefined') {
-            cachedRemoteTrustedPolicy = p;
+          if (p) {
+            if (typeof cachedRemoteTrustedPolicy !== 'undefined') {
+              cachedRemoteTrustedPolicy = p;
+            }
+            return p;
           }
-          return p;
         } catch (e) {}
       }
     }
@@ -107,7 +116,9 @@
 
   function canPromoteRemoteScriptUrl(probeUrl) {
     if (!isTrustedRemoteScriptUrl(probeUrl)) return false;
+    const ttSupported = Boolean(window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function');
     const preflightPolicy = getTrustedPolicyForRemote();
+    if (ttSupported && !preflightPolicy) return false;
     try {
       const probeScript = document.createElement('script');
       probeScript.src = preflightPolicy ? preflightPolicy.createScriptURL(probeUrl) : probeUrl;
@@ -117,41 +128,29 @@
     }
   }
 
-  function injectRemoteCompanionScript(code, onDone, companionId = '') {
-    if (!code || !document) return;
-    if (companionId && typeof document.querySelector === 'function') {
-      const existing = document.querySelector(`script[data-agy-companion="${companionId}"]`);
-      if (existing) {
-        if (typeof onDone === 'function') onDone();
-        return;
-      }
+  function assignAuthorizedInlineScriptText(scriptEl, codeStr) {
+    if (!scriptEl) return false;
+    const ttSupported = Boolean(window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function');
+    const p = getTrustedPolicyForRemote();
+    if (ttSupported && (!p || typeof p.createScript !== 'function')) {
+      return false;
     }
-    const codeStr = String(code);
     let authTicket = null;
     try {
-      const s = document.createElement('script');
-      const nonce = resolveHostCspNonce(document);
-      const p = getTrustedPolicyForRemote();
-      if (companionId && typeof s.setAttribute === 'function') {
-        s.setAttribute('data-agy-companion', companionId);
-      }
-      if (nonce) {
-        s.nonce = nonce;
-        if (typeof s.setAttribute === 'function') s.setAttribute('nonce', nonce);
-      }
+      const normalizedCode = String(codeStr ?? '');
       if (p && typeof p.createScript === 'function') {
         const randPart =
           typeof crypto !== 'undefined' && crypto && typeof crypto.getRandomValues === 'function'
             ? Array.from(crypto.getRandomValues(new Uint32Array(2)), (n) => n.toString(16)).join('')
             : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
         const inlineToken = `/*__agy_ko_inline_${randPart}__*/`;
-        const taggedScript = `${inlineToken}${codeStr}`;
+        const taggedScript = `${inlineToken}${normalizedCode}`;
         authTicket = { token: inlineToken, expectedScript: taggedScript, consumed: false };
         if (typeof pendingCompanionInlineAuth !== 'undefined') {
           pendingCompanionInlineAuth = authTicket;
         }
         try {
-          s.text = p.createScript(taggedScript);
+          scriptEl.text = p.createScript(taggedScript);
         } finally {
           authTicket.consumed = true;
           if (typeof pendingCompanionInlineAuth !== 'undefined' && pendingCompanionInlineAuth === authTicket) {
@@ -159,15 +158,45 @@
           }
         }
       } else {
-        s.text = codeStr;
+        scriptEl.text = normalizedCode;
       }
-      (document.head || document.documentElement).appendChild(s);
-      if (typeof onDone === 'function') onDone();
+      return true;
     } catch (e) {
       if (authTicket) authTicket.consumed = true;
       if (typeof pendingCompanionInlineAuth !== 'undefined' && pendingCompanionInlineAuth === authTicket) {
         pendingCompanionInlineAuth = null;
       }
+      return false;
+    }
+  }
+
+  function injectRemoteCompanionScript(code, onDone, companionId = '') {
+    if (!code || !document) return false;
+    if (companionId && typeof document.querySelector === 'function') {
+      const existing = document.querySelector(`script[data-agy-companion="${companionId}"]`);
+      if (existing) {
+        if (typeof onDone === 'function') onDone();
+        return true;
+      }
+    }
+    try {
+      const s = document.createElement('script');
+      const nonce = resolveHostCspNonce(document);
+      if (companionId && typeof s.setAttribute === 'function') {
+        s.setAttribute('data-agy-companion', companionId);
+      }
+      if (nonce) {
+        s.nonce = nonce;
+        if (typeof s.setAttribute === 'function') s.setAttribute('nonce', nonce);
+      }
+      if (!assignAuthorizedInlineScriptText(s, String(code))) {
+        return false;
+      }
+      (document.head || document.documentElement).appendChild(s);
+      if (typeof onDone === 'function') onDone();
+      return true;
+    } catch (e) {
+      return false;
     }
   }
 
@@ -175,6 +204,7 @@
     disposables.register(() => {
       ownCreatedWorkerBlobUrls.clear();
       cachedRemoteTrustedPolicy = null;
+      cachedRemoteTrustedPolicyAttempted = false;
       pendingCompanionInlineAuth = null;
     });
   }

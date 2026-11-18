@@ -466,13 +466,38 @@
 
   function ensureStyle() {
     let st = document.getElementById(STYLE_ID);
+    let nonce = '';
+    if (typeof resolveHostCspNonce === 'function') {
+      nonce = resolveHostCspNonce(document);
+    } else if (document && typeof document.querySelectorAll === 'function') {
+      try {
+        const els = document.querySelectorAll('script, style, link');
+        for (let i = 0; i < els.length; i++) {
+          const v = (els[i] && (els[i].nonce || (typeof els[i].getAttribute === 'function' ? els[i].getAttribute('nonce') : ''))) || '';
+          if (v) {
+            nonce = String(v);
+            break;
+          }
+        }
+      } catch (e) {}
+    }
     if (!st) {
       st = document.createElement('style');
       st.id = STYLE_ID;
+      if (nonce) {
+        st.nonce = nonce;
+        if (typeof st.setAttribute === 'function') st.setAttribute('nonce', nonce);
+      }
       st.textContent = STYLE_CSS;
       (document.head || document.documentElement).appendChild(st);
-    } else if (st.textContent !== STYLE_CSS) {
-      st.textContent = STYLE_CSS;
+    } else {
+      if (nonce && !st.nonce) {
+        st.nonce = nonce;
+        if (typeof st.setAttribute === 'function') st.setAttribute('nonce', nonce);
+      }
+      if (st.textContent !== STYLE_CSS) {
+        st.textContent = STYLE_CSS;
+      }
     }
   }
 

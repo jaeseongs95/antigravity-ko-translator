@@ -5860,4 +5860,558 @@ test(
     assert.equal(blankAssignCount, 1, 'D-0041: EXTERNAL_PROMOTED must never re-assign iframe.src to about:blank');
     assert.ok(frameWin.__agyKoLocalizerActive === 'v14.0', 'D-0041: EXTERNAL_PROMOTED must passively inject localizer into peer-promoted child frame');
   });
+
+  await t.test('14. [BLOCKING-1..5] Audit regressions: single prototype hook + peer suppression preservation, Worker URL & MessageChannel iframe realm, setAttribute/link/relative URLs, fail-closed TrustedTypes & manifest sync', async () => {
+    const { assembleRendererSourceFromModules } = require(BUNDLE_INJECTOR_PATH);
+    const bundleCode = assembleRendererSourceFromModules();
+    const readmeEn = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+    const readmeKo = fs.readFileSync(path.join(ROOT, 'README.ko.md'), 'utf8');
+    const bmMatchEn = readmeEn.match(/javascript:(\(\(\)=>\{[^\r\n]+\}\)\(\);?)/);
+    const bmMatchKo = readmeKo.match(/javascript:(\(\(\)=>\{[^\r\n]+\}\)\(\);?)/);
+    assert.ok(bmMatchEn && bmMatchKo, 'Both README.md and README.ko.md must define single-line bookmarklets');
+    assert.equal(bmMatchEn[1], bmMatchKo[1], 'README.md and README.ko.md bookmarklet code must be identical');
+
+    // (A) BLOCKING-5: README bookmarklet must fail closed (0 script append, 0 plaintext s.text) when trustedTypes.createPolicy returns null/throws
+    let bmAppendedScripts = 0;
+    let bmPlaintextAssigned = false;
+    await new Promise((resolve) => {
+      const bmDoc = {
+        querySelectorAll: () => [{ nonce: 'bm-nonce-1', getAttribute: () => 'bm-nonce-1' }],
+        createElement: () => {
+          const el = { setAttribute() {} };
+          Object.defineProperty(el, 'text', {
+            set() {
+              bmPlaintextAssigned = true;
+            },
+          });
+          return el;
+        },
+        head: {
+          appendChild: () => {
+            bmAppendedScripts += 1;
+          },
+        },
+      };
+      const bmWin = {
+        trustedTypes: {
+          createPolicy: () => {
+            throw new TypeError('Policy disallowed by trusted-types directive');
+          },
+        },
+      };
+      vm.runInNewContext(bmMatchEn[1], {
+        window: bmWin,
+        document: bmDoc,
+        Date,
+        TypeError,
+        fetch: () =>
+          Promise.resolve({
+            ok: true,
+            text: () => Promise.resolve('window.__shouldNotRun = 1;'),
+          }),
+      });
+      setTimeout(resolve, 30);
+    });
+    assert.equal(bmPlaintextAssigned, false, 'BLOCKING-5: bookmarklet must never assign plaintext s.text when createPolicy fails');
+    assert.equal(bmAppendedScripts, 0, 'BLOCKING-5: bookmarklet must not append <script> when createPolicy fails');
+
+    // (B) BLOCKING-5: Disallowed TrustedTypes negative cache + fail-closed injectRemoteCompanionScript + failed fetch retry unlock
+    let policyCreateAttempts = 0;
+    let companionPlaintextTextAssigned = false;
+    let fetchCalls = 0;
+    const strictDoc = {
+      head: { children: [], appendChild(c) { this.children.push(c); } },
+      body: { children: [], appendChild(c) { this.children.push(c); } },
+      documentElement: { setAttribute() {}, style: {} },
+      getElementById: () => null,
+      querySelectorAll: (sel) =>
+        String(sel || '').includes('script')
+          ? [{ nonce: 'strict-nonce-77', getAttribute: () => 'strict-nonce-77', querySelector: () => null }]
+          : [],
+      querySelector: (sel) => (sel === 'ga-remote-control' ? strictRcEl : null),
+      createElement: (tag) => {
+        const el = { tagName: String(tag).toUpperCase(), attributes: {}, setAttribute(k, v) { this.attributes[k] = v; } };
+        if (el.tagName === 'SCRIPT') {
+          Object.defineProperty(el, 'text', {
+            set() {
+              companionPlaintextTextAssigned = true;
+            },
+          });
+          Object.defineProperty(el, 'src', {
+            set() {
+              throw new TypeError('TrustedScriptURL required');
+            },
+          });
+        }
+        return el;
+      },
+      createTreeWalker: () => ({ nextNode: () => null }),
+    };
+    const strictIframe = {
+      tagName: 'IFRAME',
+      getAttribute: (k) => (k === 'src' ? 'https://antigravity.static.usercontent.goog/web/2.33.0/?iframe=true' : null),
+      setAttribute() {},
+      addEventListener() {},
+      contentWindow: null,
+      contentDocument: null,
+    };
+    const strictRcEl = {
+      querySelector: (sel) => (sel === 'iframe' ? strictIframe : null),
+    };
+    const strictWin = {
+      location: { origin: 'https://antigravity.google.com', hostname: 'antigravity.google.com', href: 'https://antigravity.google.com/r/strict-v2', search: '' },
+      localStorage: { getItem: () => null, setItem() {} },
+      trustedTypes: {
+        createPolicy: () => {
+          policyCreateAttempts += 1;
+          throw new TypeError('Disallowed policy');
+        },
+      },
+      __agyHostInstalledPlugins: {
+        resolved: true,
+        hasStatusbar: true,
+        hasMcpManager: false,
+      },
+      __agyRemoteControlInstance: {
+        onIframeLoad: () => 'NATIVE',
+        proxyCommand: async () => ({}),
+      },
+      MutationObserver: class { observe() {} disconnect() {} },
+      NodeFilter: { SHOW_TEXT: 4 },
+      fetch: async () => {
+        fetchCalls += 1;
+        return { ok: false, text: async () => '' };
+      },
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    };
+    strictWin.window = strictWin;
+    strictWin.document = strictDoc;
+
+    vm.runInNewContext(bundleCode, {
+      window: strictWin,
+      document: strictDoc,
+      URL,
+      URLSearchParams,
+      fetch: strictWin.fetch,
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    });
+    await new Promise((r) => setTimeout(r, 25));
+    // Negative cache: ['agy-ko-translator', 'agy-ko-translator-rc'] attempted at most once even across multiple rescans!
+    strictWin.__agyForceRescanAll();
+    await new Promise((r) => setTimeout(r, 25));
+    assert.equal(policyCreateAttempts, 2, 'BLOCKING-5: disallowed createPolicy must be negative-cached after initial 2 candidate names');
+    assert.equal(companionPlaintextTextAssigned, false, 'BLOCKING-5: injectRemoteCompanionScript must fail closed without plaintext s.text');
+    assert.equal(strictWin.__agyKoFetchingStatusBar, undefined, 'BLOCKING-5: __agyKoFetchingStatusBar must be cleared in finally after failed fetch');
+    assert.equal(strictWin.__agyKoCompanionsSynced, undefined, 'BLOCKING-5: __agyKoCompanionsSynced must remain unset when companion fetch fails so retries stay unlocked');
+    assert.ok(fetchCalls >= 2, 'BLOCKING-5: second rescan must retry companion fetch after initial HTTP failure');
+
+    // (C) BLOCKING-1, BLOCKING-2, BLOCKING-3, BLOCKING-5 (RPC manifest write-back, peer wrapper coexistence, MessageChannel Worker, setAttribute/link)
+    const makeDomNode = (tag, ownerDoc) => {
+      const node = {
+        tagName: String(tag || 'DIV').toUpperCase(),
+        attributes: {},
+        children: [],
+        style: {},
+        textContent: '',
+        nonce: '',
+        parentNode: null,
+        setAttribute(k, v) {
+          this.attributes[k] = String(v);
+        },
+        getAttribute(k) {
+          return Object.prototype.hasOwnProperty.call(this.attributes, k) ? this.attributes[k] : null;
+        },
+        appendChild(child) {
+          if (child) {
+            child.parentNode = this;
+            this.children.push(child);
+            if (child.tagName === 'IFRAME' && child.attributes['data-agy-ko-worker'] === '1' && !child.contentWindow) {
+              // Real-DOM-like hidden Worker iframe realm
+              const wHead = makeDomNode('HEAD', null);
+              const wBody = makeDomNode('BODY', null);
+              const wDoc = {
+                head: wHead,
+                body: wBody,
+                documentElement: makeDomNode('HTML', null),
+                open() { wWin.location.href = 'https://antigravity.google.com/r/coexist-v2'; },
+                close() {},
+                createElement: (t) => {
+                  const el = makeDomNode(t, wDoc);
+                  if (el.tagName === 'SCRIPT') {
+                    Object.defineProperty(el, 'src', {
+                      configurable: true,
+                      get() { return this._src || ''; },
+                      set(v) {
+                        this._src = String(v);
+                        workerLoadedScriptUrls.push(this._src);
+                        Promise.resolve().then(() => {
+                          wWin.addEventListener('message', (ev) => {
+                            wWin.postMessage({ echoed: ev.data, url: this._src });
+                          });
+                          if (typeof el.onload === 'function') el.onload();
+                        });
+                      },
+                    });
+                  }
+                  return el;
+                },
+              };
+              const wWin = {
+                location: { href: 'about:blank', origin: 'https://antigravity.google.com' },
+                document: wDoc,
+                MessageEvent: class { constructor(type, init) { this.type = type; this.data = init?.data; } },
+                addEventListener() {},
+                removeEventListener() {},
+                postMessage() {},
+              };
+              wWin.self = wWin;
+              child.contentWindow = wWin;
+              child.contentDocument = wDoc;
+            }
+          }
+          return child;
+        },
+        removeChild(child) {
+          const idx = this.children.indexOf(child);
+          if (idx >= 0) this.children.splice(idx, 1);
+          if (child) child.parentNode = null;
+        },
+        remove() {
+          if (this.parentNode && typeof this.parentNode.removeChild === 'function') {
+            this.parentNode.removeChild(this);
+          }
+        },
+        querySelector: () => null,
+        querySelectorAll: () => [],
+      };
+      return node;
+    };
+
+    const workerLoadedScriptUrls = [];
+    let realAngularOnIframeLoadCalls = 0;
+    class FakeRcProtoClass {
+      async onIframeLoad() {
+        realAngularOnIframeLoadCalls += 1;
+        return 'ANGULAR_INITIAL_CONFIG_SENT';
+      }
+      async proxyCommand(rpcPath) {
+        const encode = (obj) => new TextEncoder().encode(JSON.stringify(obj));
+        if (String(rpcPath).endsWith('/GetLocalUserInfo')) {
+          return { payload: encode({ homeDirUri: 'file:///C:/Users/Test' }) };
+        }
+        if (String(rpcPath).endsWith('/ReadFile')) {
+          const rawCombined = [
+            '/* === BEGIN_AGY_STATUSBAR === */',
+            'window.agyStatusBar = { registerAdapter() {} };',
+            '/* === END_AGY_STATUSBAR === */',
+            '// === BEGIN_AGY_MCP_MANAGER_V1 ===',
+            'window.agyMcpManager = { active: true };',
+            '// === END_AGY_MCP_MANAGER_V1 ===',
+            '// === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
+            'window.__koMarkerSample = 1;',
+            '// === END_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
+          ].join('\n');
+          return { payload: encode({ content: rawCombined }) };
+        }
+        if (String(rpcPath).endsWith('/GetAllPlugins')) {
+          return {
+            payload: encode({
+              plugins: [
+                { id: 'antigravity-statusbar', installPath: 'C:/Users/Test/.gemini/config/plugins/antigravity-statusbar' },
+                { id: 'antigravity-mcp-manager', installPath: 'C:/Users/Test/.gemini/config/plugins/antigravity-mcp-manager' },
+                { id: 'ko-thought-translator', installPath: 'C:/Users/Test/.gemini/config/plugins/ko-thought-translator' },
+              ],
+            }),
+          };
+        }
+        return { payload: encode({}) };
+      }
+    }
+
+    // Simulate statusbar/mcp-manager wrapping FakeRcProtoClass.prototype.onIframeLoad BEFORE ko-thought-translator loads!
+    const origProtoLoad = FakeRcProtoClass.prototype.onIframeLoad;
+    FakeRcProtoClass.prototype.onIframeLoad = function () {
+      if (this.__agySuppressAutoIframeLoad || (typeof this.__agySuppressAutoIframeLoadCount === 'number' && this.__agySuppressAutoIframeLoadCount > 0)) {
+        return Promise.resolve('SUPPRESSED_BY_PEER_WRAPPER');
+      }
+      return origProtoLoad.apply(this, arguments);
+    };
+
+    const coexistRcInst = new FakeRcProtoClass();
+    // Simulate a concurrent peer holding __agySuppressAutoIframeLoadCount = 1 BEFORE KO starts!
+    coexistRcInst.__agySuppressAutoIframeLoad = true;
+    coexistRcInst.__agySuppressAutoIframeLoadCount = 1;
+
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(coexistRcInst, 'onIframeLoad'),
+      false,
+      'precondition: rcInst inherits onIframeLoad from prototype without own property'
+    );
+
+    class FakeChildElement {
+      constructor(tag) {
+        this.tagName = String(tag).toUpperCase();
+        this.attributes = {};
+        this.children = [];
+        this.style = {};
+        this.nonce = '';
+      }
+      setAttribute(k, v) {
+        this.attributes[k] = String(v);
+      }
+      getAttribute(k) {
+        return this.attributes[k] ?? null;
+      }
+      appendChild(c) {
+        this.children.push(c);
+        return c;
+      }
+    }
+    class FakeChildScript extends FakeChildElement {
+      constructor() {
+        super('SCRIPT');
+        this._src = '';
+      }
+    }
+    Object.defineProperty(FakeChildScript.prototype, 'src', {
+      configurable: true,
+      enumerable: true,
+      get() { return this._src; },
+      set(v) { this._src = String(v); },
+    });
+    class FakeChildLink extends FakeChildElement {
+      constructor() {
+        super('LINK');
+        this._href = '';
+      }
+    }
+    Object.defineProperty(FakeChildLink.prototype, 'href', {
+      configurable: true,
+      enumerable: true,
+      get() { return this._href; },
+      set(v) { this._href = String(v); },
+    });
+    class FakeChildImg extends FakeChildElement {
+      constructor() {
+        super('IMG');
+        this._src = '';
+      }
+    }
+    Object.defineProperty(FakeChildImg.prototype, 'src', {
+      configurable: true,
+      enumerable: true,
+      get() { return this._src; },
+      set(v) { this._src = String(v); },
+    });
+
+    const childHead = makeDomNode('HEAD');
+    const childBody = makeDomNode('BODY');
+    const childDoc = {
+      head: childHead,
+      body: childBody,
+      documentElement: makeDomNode('HTML'),
+      readyState: 'complete',
+      open() { childWin.location.href = 'https://antigravity.google.com/r/coexist-v2'; },
+      close() {},
+      getElementById: (id) => (id === 'root' ? childBody.children.find((c) => c.id === 'root') || null : null),
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      createTreeWalker: () => ({ nextNode: () => null }),
+      createElement: (tag) => {
+        const upper = String(tag).toUpperCase();
+        if (upper === 'SCRIPT') return new FakeChildScript();
+        if (upper === 'LINK') return new FakeChildLink();
+        if (upper === 'IMG') return new FakeChildImg();
+        return makeDomNode(upper);
+      },
+    };
+
+    const { MessageChannel: NodeMessageChannel } = require('worker_threads');
+    const childWin = {
+      location: { href: 'about:blank', origin: 'https://antigravity.google.com', hostname: 'antigravity.google.com', search: '' },
+      document: childDoc,
+      history: { replaceState() {}, pushState() {} },
+      navigator: { userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      Element: FakeChildElement,
+      HTMLScriptElement: FakeChildScript,
+      HTMLLinkElement: FakeChildLink,
+      HTMLImageElement: FakeChildImg,
+      MessageChannel: NodeMessageChannel,
+      MessageEvent: class { constructor(type, init) { this.type = type; this.data = init?.data; } },
+      URL,
+      Worker: function NativeWorkerShouldNeverBeCalled() {
+        throw new Error('Native Worker should not be called when MessageChannel iframe worker is available');
+      },
+      MutationObserver: class { observe() {} disconnect() {} },
+      NodeFilter: { SHOW_TEXT: 4 },
+      addEventListener() {},
+      removeEventListener() {},
+      setTimeout,
+      clearTimeout,
+      setInterval: () => 1,
+      clearInterval: () => {},
+    };
+    childWin.window = childWin;
+
+    let iframeRawSrc = 'https://antigravity.static.usercontent.goog/web/2.33.0/?iframe=true';
+    class FakeHostIframe {
+      constructor() {
+        this._listeners = [];
+        this.contentWindow = childWin;
+        this.contentDocument = childDoc;
+      }
+      getAttribute(k) { return k === 'src' ? iframeRawSrc : null; }
+      setAttribute(k, v) { if (k === 'src') iframeRawSrc = String(v); }
+      addEventListener(type, fn) { this._listeners.push({ type, fn }); }
+    }
+    Object.defineProperty(FakeHostIframe.prototype, 'src', {
+      configurable: true,
+      get() { return iframeRawSrc; },
+      set(v) { iframeRawSrc = String(v); },
+    });
+
+    const hostIframe = new FakeHostIframe();
+    const hostHead = makeDomNode('HEAD');
+    const hostDoc = {
+      head: hostHead,
+      body: makeDomNode('BODY'),
+      documentElement: makeDomNode('HTML'),
+      getElementById: (id) => hostHead.children.find((c) => c.id === id) || null,
+      querySelectorAll: (sel) =>
+        String(sel || '').includes('script')
+          ? [{ nonce: 'host-csp-nonce-999', getAttribute: () => 'host-csp-nonce-999', querySelector: () => null }]
+          : [],
+      querySelector: (sel) => (sel === 'ga-remote-control' ? { querySelector: (s) => (s === 'iframe' ? hostIframe : null) } : null),
+      createElement: (t) => makeDomNode(t),
+      createTreeWalker: () => ({ nextNode: () => null }),
+    };
+    const hostWin = {
+      location: { origin: 'https://antigravity.google.com', hostname: 'antigravity.google.com', href: 'https://antigravity.google.com/r/coexist-v2', search: '' },
+      localStorage: { getItem: () => null, setItem() {} },
+      trustedTypes: {
+        createPolicy: (name, spec) => ({
+          name,
+          createScript: (s) => spec.createScript(s),
+          createScriptURL: (u) => spec.createScriptURL(u),
+        }),
+      },
+      __agyRemoteControlInstance: coexistRcInst,
+      MutationObserver: class { observe() {} disconnect() {} },
+      NodeFilter: { SHOW_TEXT: 4 },
+      TextEncoder,
+      TextDecoder,
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    };
+    hostWin.window = hostWin;
+    hostWin.document = hostDoc;
+
+    vm.runInNewContext(bundleCode, {
+      window: hostWin,
+      document: hostDoc,
+      URL,
+      URLSearchParams,
+      TextEncoder,
+      TextDecoder,
+      HTMLIFrameElement: FakeHostIframe,
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Verify BLOCKING-5: ensureStyle() propagated CSP nonce onto #agy-ko-thought-style
+    const hostStyleEl = hostHead.children.find((c) => c.id === 'agy-ko-thought-style');
+    assert.ok(hostStyleEl, 'BLOCKING-5: #agy-ko-thought-style must be mounted');
+    assert.equal(hostStyleEl.nonce, 'host-csp-nonce-999', 'BLOCKING-5: ensureStyle() must set st.nonce from host CSP nonce');
+    assert.equal(hostStyleEl.getAttribute('nonce'), 'host-csp-nonce-999', 'BLOCKING-5: ensureStyle() must set nonce attribute');
+
+    // Verify BLOCKING-5: RPC discovery wrote shared manifest to window.__agyHostInstalledPlugins (including mcpBlock & koBlock)
+    assert.ok(hostWin.__agyHostInstalledPlugins && hostWin.__agyHostInstalledPlugins.resolved === true, 'BLOCKING-5: RPC discovery must populate window.__agyHostInstalledPlugins');
+    assert.ok(hostWin.__agyHostInstalledPlugins.mcpBlock.includes('agyMcpManager'), 'BLOCKING-5: mcpBlock must be populated on window.__agyHostInstalledPlugins');
+    assert.ok(hostWin.__agyHostInstalledPlugins.koBlock.includes('__koMarkerSample'), 'BLOCKING-5: koBlock must be populated on window.__agyHostInstalledPlugins');
+
+    // Verify BLOCKING-1: zero own-property double-hook on coexistRcInst!
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(coexistRcInst, 'onIframeLoad'),
+      false,
+      'BLOCKING-1: bridge must NOT install duplicate instance-own onIframeLoad wrapper when inherited from prototype'
+    );
+    assert.equal(coexistRcInst.__agySuppressAutoIframeLoadCount, 2, 'BLOCKING-1: KO increments peer suppression count 1 -> 2 during promotion');
+
+    // Trigger blank load -> verify BLOCKING-2 & BLOCKING-3
+    const blankListener = hostIframe._listeners.find((l) => l.type === 'load');
+    blankListener.fn();
+
+    // BLOCKING-3: <script>.setAttribute('src', ...), relative './chunk.js', <link>.setAttribute('href', ...), <img>.setAttribute('src', ...)
+    const dynScript1 = childDoc.createElement('script');
+    dynScript1.setAttribute('src', '/web/2.33.0/lazy-chunk.js');
+    assert.equal(dynScript1.src, 'https://www.gstatic.com/antigravity/web/2.33.0/lazy-chunk.js', 'BLOCKING-3: script.setAttribute("src", "/web/2.33.0/...") must rewrite without duplicate /web/2.33.0');
+    assert.equal(dynScript1.nonce, 'host-csp-nonce-999');
+
+    const dynScript2 = childDoc.createElement('script');
+    dynScript2.setAttribute('src', './sub/rel-chunk.js');
+    assert.equal(dynScript2.src, 'https://www.gstatic.com/antigravity/web/2.33.0/sub/rel-chunk.js', 'BLOCKING-3: relative "./sub/rel-chunk.js" must resolve against virtual basePath on CDN');
+
+    const dynLink = childDoc.createElement('link');
+    dynLink.setAttribute('href', '/web/2.33.0/theme.css');
+    assert.equal(dynLink.getAttribute('href'), 'https://www.gstatic.com/antigravity/web/2.33.0/theme.css', 'BLOCKING-3: link.setAttribute("href", ...) must rewrite to CDN');
+    assert.equal(dynLink.nonce, 'host-csp-nonce-999');
+
+    const dynImg = childDoc.createElement('img');
+    dynImg.setAttribute('src', './icons/logo.svg');
+    assert.equal(dynImg.getAttribute('src'), 'https://www.gstatic.com/antigravity/web/2.33.0/icons/logo.svg', 'BLOCKING-3: img.setAttribute("src", "./...") must rewrite to CDN');
+
+    // BLOCKING-2: MessageChannel + hidden iframe Worker round-trip for /web/2.33.0/..., URL object, https://www.gstatic.com/..., and untrusted TypeError
+    const testWorkerRoundTrip = (arg, msg) =>
+      new Promise((resolve, reject) => {
+        const w = new childWin.Worker(arg);
+        w.addEventListener('message', (ev) => {
+          w.terminate();
+          resolve(ev.data);
+        });
+        w.onerror = reject;
+        w.postMessage(msg);
+      });
+
+    const r1 = await testWorkerRoundTrip('/web/2.33.0/editor.worker.js', 'hello-1');
+    assert.equal(r1.echoed, 'hello-1');
+    assert.equal(r1.url, 'https://www.gstatic.com/antigravity/web/2.33.0/editor.worker.js', 'BLOCKING-2: /web/2.33.0/... worker URL must not duplicate /web/2.33.0');
+
+    const r2 = await testWorkerRoundTrip(new URL('/web/2.33.0/ts.worker.js', 'https://antigravity.google.com/r/coexist-v2'), 'hello-2');
+    assert.equal(r2.echoed, 'hello-2');
+    assert.equal(r2.url, 'https://www.gstatic.com/antigravity/web/2.33.0/ts.worker.js', 'BLOCKING-2: URL instance worker argument must rewrite to CDN');
+
+    const r3 = await testWorkerRoundTrip('https://www.gstatic.com/antigravity/web/2.33.0/json.worker.js', 'hello-3');
+    assert.equal(r3.echoed, 'hello-3');
+    assert.equal(r3.url, 'https://www.gstatic.com/antigravity/web/2.33.0/json.worker.js', 'BLOCKING-2: absolute gstatic CDN worker URL must run via iframe+MessageChannel without cross-origin SecurityError');
+
+    assert.throws(
+      () => new childWin.Worker('https://evil.example/malicious-worker.js'),
+      { name: 'TypeError', message: /Blocked untrusted Worker script URL/ },
+      'BLOCKING-2: untrusted Worker URL must throw TypeError immediately'
+    );
+
+    // BLOCKING-1: mainScript.onload must invoke real Angular onIframeLoad EVEN WHILE peer holds __agySuppressAutoIframeLoadCount = 1, AND preserve peer count = 1!
+    const mainScriptEl = childHead.children.find((c) => c.tagName === 'SCRIPT' && String(c.src).endsWith('/main.js'));
+    mainScriptEl.onload();
+    assert.equal(realAngularOnIframeLoadCalls, 1, 'BLOCKING-1: ensureInitialConfigSent must invoke real Angular onIframeLoad without being blocked by peer wrapper');
+    assert.equal(coexistRcInst.__agySuppressAutoIframeLoadCount, 1, 'BLOCKING-1: peer suppression count (=1) must remain intact after KO releases its own count');
+    assert.equal(coexistRcInst.__agySuppressAutoIframeLoad, true, 'BLOCKING-1: peer suppression boolean must remain true while peer count > 0');
+
+    // BLOCKING-1: Hot-reload cleanup (__agyKoThoughtCleanup(false)) MUST NOT delete peer's active __agySuppressAutoIframeLoadCount!
+    hostWin.__agyKoThoughtCleanup(false);
+    assert.equal(coexistRcInst.__agySuppressAutoIframeLoadCount, 1, 'BLOCKING-1: __agyKoThoughtCleanup(false) must preserve peer __agySuppressAutoIframeLoadCount');
+    assert.equal(coexistRcInst.__agySuppressAutoIframeLoad, true, 'BLOCKING-1: __agyKoThoughtCleanup(false) must preserve peer __agySuppressAutoIframeLoad');
+  });
 });

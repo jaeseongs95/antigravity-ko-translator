@@ -370,8 +370,10 @@
       resolved: false,
       statusbarInstalled: Boolean(window.agyStatusBar),
       mcpManagerInstalled: Boolean(window.agyMcpManager),
+      koTranslatorInstalled: true,
       statusbarCode: '',
       mcpManagerCode: '',
+      koTranslatorCode: '',
     };
     if (window.__agyHostInstalledPlugins && typeof window.__agyHostInstalledPlugins === 'object') {
       const override = window.__agyHostInstalledPlugins;
@@ -382,11 +384,21 @@
       info.mcpManagerInstalled = Boolean(
         override.mcpManager || override.hasMcpManager || override['antigravity-mcp-manager']
       );
+      info.koTranslatorInstalled =
+        override.hasKoTranslator !== undefined || override.koTranslator !== undefined
+          ? Boolean(override.hasKoTranslator || override.koTranslator || override['ko-thought-translator'])
+          : true;
       info.statusbarCode = String(override.statusbarCode || override.statusbarBlock || '');
-      info.mcpManagerCode = String(override.mcpManagerCode || override.mcpManagerBlock || '');
+      info.mcpManagerCode = String(override.mcpManagerCode || override.mcpManagerBlock || override.mcpBlock || '');
+      info.koTranslatorCode = String(override.koTranslatorCode || override.koTranslatorBlock || override.koBlock || '');
       if (
         info.resolved &&
-        (info.statusbarInstalled || info.mcpManagerInstalled || override.statusbar !== undefined || override.mcpManager !== undefined)
+        (info.statusbarInstalled ||
+          info.mcpManagerInstalled ||
+          override.statusbar !== undefined ||
+          override.mcpManager !== undefined ||
+          override.hasStatusbar !== undefined ||
+          override.hasMcpManager !== undefined)
       ) {
         return info;
       }
@@ -455,11 +467,16 @@
         '// === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
         '/* === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 === */',
       ];
+      const koEndMarkers = [
+        '// === END_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
+        '/* === END_AGY_KO_THOUGHT_LOCALIZER_V2 === */',
+      ];
       const sbStartMarkers = ['/* === BEGIN_AGY_STATUSBAR === */', '// === BEGIN_AGY_STATUSBAR ==='];
       const sbEndMarkers = ['/* === END_AGY_STATUSBAR === */', '// === END_AGY_STATUSBAR ==='];
 
       let sbCode = extractCompanionBlock(rawText, sbStartMarkers, sbEndMarkers);
       const mcpCode = extractCompanionBlock(rawText, mcpStartMarkers, mcpEndMarkers);
+      const koCode = extractCompanionBlock(rawText, koStartMarkers, koEndMarkers);
 
       const markerPositions = [];
       for (const m of [...mcpStartMarkers, ...koStartMarkers, ...sbStartMarkers]) {
@@ -493,6 +510,10 @@
       ) {
         info.mcpManagerInstalled = true;
         info.mcpManagerCode = baseSegment;
+      }
+      if (koCode) {
+        info.koTranslatorInstalled = true;
+        info.koTranslatorCode = koCode;
       }
     };
 
@@ -568,14 +589,16 @@
           item.uri,
           item.rootUri,
           item.directory,
+          item.installPath,
         ];
         for (const f of fields) {
           if (!f) continue;
           const s = String(f);
           if (/antigravity-statusbar/i.test(s)) info.statusbarInstalled = true;
           if (/antigravity-mcp-manager/i.test(s)) info.mcpManagerInstalled = true;
+          if (/ko-thought-translator/i.test(s)) info.koTranslatorInstalled = true;
         }
-        const pathCandidate = item.path || item.uri || item.rootUri || item.directory;
+        const pathCandidate = item.path || item.uri || item.rootUri || item.directory || item.installPath;
         if (pathCandidate) candidatePaths.push(String(pathCandidate));
       };
 
@@ -631,6 +654,26 @@
       }
     } catch (e) {}
 
+    if (info.resolved && (!window.__agyHostInstalledPlugins || !window.__agyHostInstalledPlugins.resolved)) {
+      window.__agyHostInstalledPlugins = {
+        resolved: true,
+        statusbar: info.statusbarInstalled,
+        hasStatusbar: info.statusbarInstalled,
+        mcpManager: info.mcpManagerInstalled,
+        hasMcpManager: info.mcpManagerInstalled,
+        koTranslator: info.koTranslatorInstalled,
+        hasKoTranslator: info.koTranslatorInstalled,
+        statusbarBlock: info.statusbarCode,
+        statusbarCode: info.statusbarCode,
+        mcpBlock: info.mcpManagerCode,
+        mcpManagerBlock: info.mcpManagerCode,
+        mcpManagerCode: info.mcpManagerCode,
+        koBlock: info.koTranslatorCode,
+        koTranslatorBlock: info.koTranslatorCode,
+        koTranslatorCode: info.koTranslatorCode,
+      };
+    }
+
     return info;
   }
 
@@ -655,55 +698,62 @@
 
     probeHostCompanionPluginsForRemote(rcEl)
       .then((info) => {
+        window.__agyLastHostInstalledPluginsRef = window.__agyHostInstalledPlugins;
         if (!info || !info.resolved) return;
-        window.__agyKoCompanionsSynced = true;
 
+        let sbSyncDone = false;
+        let sbAsyncPromise = null;
         const hasSbScript = Boolean(
           typeof document?.querySelector === 'function' &&
             document.querySelector('script[data-agy-companion="statusbar"]')
         );
-        if (
-          info.statusbarInstalled &&
-          !window.agyStatusBar &&
-          !hasSbScript &&
-          !window.__agyKoFetchingStatusBar &&
-          !window.__agyLoadingStatusBarCompanion
-        ) {
+        if (!info.statusbarInstalled || window.agyStatusBar || hasSbScript) {
+          sbSyncDone = true;
+        } else if (!window.__agyKoFetchingStatusBar && !window.__agyLoadingStatusBarCompanion) {
           window.__agyKoFetchingStatusBar = true;
           window.__agyLoadingStatusBarCompanion = true;
           if (info.statusbarCode) {
             try {
-              injectRemoteCompanionScript(info.statusbarCode, () => refreshStatusbarTranslatorAdapter(), 'statusbar');
+              sbSyncDone = Boolean(
+                injectRemoteCompanionScript(info.statusbarCode, () => refreshStatusbarTranslatorAdapter(), 'statusbar')
+              );
             } finally {
+              delete window.__agyKoFetchingStatusBar;
               delete window.__agyLoadingStatusBarCompanion;
             }
           } else if (typeof fetch === 'function') {
-            fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' + Date.now())
+            sbAsyncPromise = fetch(
+              'https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' +
+                Date.now()
+            )
               .then((r) => (r && r.ok ? r.text() : ''))
               .then((code) => {
-                if (!code || window.agyStatusBar) return;
-                injectRemoteCompanionScript(code, () => refreshStatusbarTranslatorAdapter(), 'statusbar');
+                if (window.agyStatusBar) return true;
+                if (!code) return false;
+                return Boolean(
+                  injectRemoteCompanionScript(code, () => refreshStatusbarTranslatorAdapter(), 'statusbar')
+                );
               })
-              .catch(() => {})
+              .catch(() => false)
               .finally(() => {
+                delete window.__agyKoFetchingStatusBar;
                 delete window.__agyLoadingStatusBarCompanion;
               });
           } else {
+            delete window.__agyKoFetchingStatusBar;
             delete window.__agyLoadingStatusBarCompanion;
           }
         }
 
+        let mcpSyncDone = false;
+        let mcpAsyncPromise = null;
         const hasMcpScript = Boolean(
           typeof document?.querySelector === 'function' &&
             document.querySelector('script[data-agy-companion="mcp-manager"]')
         );
-        if (
-          info.mcpManagerInstalled &&
-          !window.agyMcpManager &&
-          !hasMcpScript &&
-          !window.__agyKoFetchingMcpManager &&
-          !window.__agyLoadingMcpManagerCompanion
-        ) {
+        if (!info.mcpManagerInstalled || window.agyMcpManager || hasMcpScript) {
+          mcpSyncDone = true;
+        } else if (!window.__agyKoFetchingMcpManager && !window.__agyLoadingMcpManagerCompanion) {
           window.__agyKoFetchingMcpManager = true;
           window.__agyLoadingMcpManagerCompanion = true;
           const mountMcpIntoInnerFrame = () => {
@@ -721,24 +771,45 @@
           };
           if (info.mcpManagerCode) {
             try {
-              injectRemoteCompanionScript(info.mcpManagerCode, mountMcpIntoInnerFrame, 'mcp-manager');
+              mcpSyncDone = Boolean(injectRemoteCompanionScript(info.mcpManagerCode, mountMcpIntoInnerFrame, 'mcp-manager'));
             } finally {
+              delete window.__agyKoFetchingMcpManager;
               delete window.__agyLoadingMcpManagerCompanion;
             }
           } else if (typeof fetch === 'function') {
-            fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' + Date.now())
+            mcpAsyncPromise = fetch(
+              'https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' +
+                Date.now()
+            )
               .then((r) => (r && r.ok ? r.text() : ''))
               .then((code) => {
-                if (!code || window.agyMcpManager) return;
-                injectRemoteCompanionScript(code, mountMcpIntoInnerFrame, 'mcp-manager');
+                if (window.agyMcpManager) return true;
+                if (!code) return false;
+                return Boolean(injectRemoteCompanionScript(code, mountMcpIntoInnerFrame, 'mcp-manager'));
               })
-              .catch(() => {})
+              .catch(() => false)
               .finally(() => {
+                delete window.__agyKoFetchingMcpManager;
                 delete window.__agyLoadingMcpManagerCompanion;
               });
           } else {
+            delete window.__agyKoFetchingMcpManager;
             delete window.__agyLoadingMcpManagerCompanion;
           }
+        }
+
+        if (!sbAsyncPromise && !mcpAsyncPromise) {
+          if (sbSyncDone && mcpSyncDone) {
+            window.__agyKoCompanionsSynced = true;
+          }
+        } else {
+          Promise.all([sbAsyncPromise || Promise.resolve(sbSyncDone), mcpAsyncPromise || Promise.resolve(mcpSyncDone)])
+            .then(([sbOk, mcpOk]) => {
+              if (sbOk && mcpOk) {
+                window.__agyKoCompanionsSynced = true;
+              }
+            })
+            .catch(() => {});
         }
       })
       .catch(() => {})
@@ -748,12 +819,18 @@
   }
 
   if (typeof disposables !== 'undefined' && disposables) {
-    disposables.register(() => {
+    disposables.register((fullRestore) => {
       for (const proto of hookedRcPrototypes) {
         try {
           delete proto.__agyKoProbeHooked;
         } catch (e) {}
       }
       hookedRcPrototypes.clear();
+      delete window.__agyKoSyncingCompanions;
+      if (fullRestore) {
+        delete window.__agyKoCompanionsSynced;
+        delete window.__agyKoFetchingStatusBar;
+        delete window.__agyKoFetchingMcpManager;
+      }
     });
   }

@@ -4719,13 +4719,38 @@
 
   function ensureStyle() {
     let st = document.getElementById(STYLE_ID);
+    let nonce = '';
+    if (typeof resolveHostCspNonce === 'function') {
+      nonce = resolveHostCspNonce(document);
+    } else if (document && typeof document.querySelectorAll === 'function') {
+      try {
+        const els = document.querySelectorAll('script, style, link');
+        for (let i = 0; i < els.length; i++) {
+          const v = (els[i] && (els[i].nonce || (typeof els[i].getAttribute === 'function' ? els[i].getAttribute('nonce') : ''))) || '';
+          if (v) {
+            nonce = String(v);
+            break;
+          }
+        }
+      } catch (e) {}
+    }
     if (!st) {
       st = document.createElement('style');
       st.id = STYLE_ID;
+      if (nonce) {
+        st.nonce = nonce;
+        if (typeof st.setAttribute === 'function') st.setAttribute('nonce', nonce);
+      }
       st.textContent = STYLE_CSS;
       (document.head || document.documentElement).appendChild(st);
-    } else if (st.textContent !== STYLE_CSS) {
-      st.textContent = STYLE_CSS;
+    } else {
+      if (nonce && !st.nonce) {
+        st.nonce = nonce;
+        if (typeof st.setAttribute === 'function') st.setAttribute('nonce', nonce);
+      }
+      if (st.textContent !== STYLE_CSS) {
+        st.textContent = STYLE_CSS;
+      }
     }
   }
 
@@ -6932,6 +6957,7 @@
 // Responsibility: Remote Control origin/script allowlist, owned Worker Blob URL registry, CSP nonce resolution, and one-time gated TrustedTypes policy port.
   const ownCreatedWorkerBlobUrls = new Set();
   let cachedRemoteTrustedPolicy = null;
+  let cachedRemoteTrustedPolicyAttempted = false;
   let pendingCompanionInlineAuth = null;
 
   function isTrustedRemoteOriginUrlObject(parsed) {
@@ -6978,8 +7004,14 @@
     if (typeof cachedRemoteTrustedPolicy !== 'undefined' && cachedRemoteTrustedPolicy) {
       return cachedRemoteTrustedPolicy;
     }
+    if (typeof cachedRemoteTrustedPolicyAttempted !== 'undefined' && cachedRemoteTrustedPolicyAttempted) {
+      return null;
+    }
     if (window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function') {
-      const names = ['agy-ko-translator', 'agy-ko-translator-rc', `agy-ko-translator-${Date.now().toString(36)}`];
+      if (typeof cachedRemoteTrustedPolicyAttempted !== 'undefined') {
+        cachedRemoteTrustedPolicyAttempted = true;
+      }
+      const names = ['agy-ko-translator', 'agy-ko-translator-rc'];
       for (const name of names) {
         try {
           const p = window.trustedTypes.createPolicy(name, {
@@ -7008,10 +7040,12 @@
               return s;
             },
           });
-          if (typeof cachedRemoteTrustedPolicy !== 'undefined') {
-            cachedRemoteTrustedPolicy = p;
+          if (p) {
+            if (typeof cachedRemoteTrustedPolicy !== 'undefined') {
+              cachedRemoteTrustedPolicy = p;
+            }
+            return p;
           }
-          return p;
         } catch (e) {}
       }
     }
@@ -7037,7 +7071,9 @@
 
   function canPromoteRemoteScriptUrl(probeUrl) {
     if (!isTrustedRemoteScriptUrl(probeUrl)) return false;
+    const ttSupported = Boolean(window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function');
     const preflightPolicy = getTrustedPolicyForRemote();
+    if (ttSupported && !preflightPolicy) return false;
     try {
       const probeScript = document.createElement('script');
       probeScript.src = preflightPolicy ? preflightPolicy.createScriptURL(probeUrl) : probeUrl;
@@ -7047,41 +7083,29 @@
     }
   }
 
-  function injectRemoteCompanionScript(code, onDone, companionId = '') {
-    if (!code || !document) return;
-    if (companionId && typeof document.querySelector === 'function') {
-      const existing = document.querySelector(`script[data-agy-companion="${companionId}"]`);
-      if (existing) {
-        if (typeof onDone === 'function') onDone();
-        return;
-      }
+  function assignAuthorizedInlineScriptText(scriptEl, codeStr) {
+    if (!scriptEl) return false;
+    const ttSupported = Boolean(window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function');
+    const p = getTrustedPolicyForRemote();
+    if (ttSupported && (!p || typeof p.createScript !== 'function')) {
+      return false;
     }
-    const codeStr = String(code);
     let authTicket = null;
     try {
-      const s = document.createElement('script');
-      const nonce = resolveHostCspNonce(document);
-      const p = getTrustedPolicyForRemote();
-      if (companionId && typeof s.setAttribute === 'function') {
-        s.setAttribute('data-agy-companion', companionId);
-      }
-      if (nonce) {
-        s.nonce = nonce;
-        if (typeof s.setAttribute === 'function') s.setAttribute('nonce', nonce);
-      }
+      const normalizedCode = String(codeStr ?? '');
       if (p && typeof p.createScript === 'function') {
         const randPart =
           typeof crypto !== 'undefined' && crypto && typeof crypto.getRandomValues === 'function'
             ? Array.from(crypto.getRandomValues(new Uint32Array(2)), (n) => n.toString(16)).join('')
             : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
         const inlineToken = `/*__agy_ko_inline_${randPart}__*/`;
-        const taggedScript = `${inlineToken}${codeStr}`;
+        const taggedScript = `${inlineToken}${normalizedCode}`;
         authTicket = { token: inlineToken, expectedScript: taggedScript, consumed: false };
         if (typeof pendingCompanionInlineAuth !== 'undefined') {
           pendingCompanionInlineAuth = authTicket;
         }
         try {
-          s.text = p.createScript(taggedScript);
+          scriptEl.text = p.createScript(taggedScript);
         } finally {
           authTicket.consumed = true;
           if (typeof pendingCompanionInlineAuth !== 'undefined' && pendingCompanionInlineAuth === authTicket) {
@@ -7089,15 +7113,45 @@
           }
         }
       } else {
-        s.text = codeStr;
+        scriptEl.text = normalizedCode;
       }
-      (document.head || document.documentElement).appendChild(s);
-      if (typeof onDone === 'function') onDone();
+      return true;
     } catch (e) {
       if (authTicket) authTicket.consumed = true;
       if (typeof pendingCompanionInlineAuth !== 'undefined' && pendingCompanionInlineAuth === authTicket) {
         pendingCompanionInlineAuth = null;
       }
+      return false;
+    }
+  }
+
+  function injectRemoteCompanionScript(code, onDone, companionId = '') {
+    if (!code || !document) return false;
+    if (companionId && typeof document.querySelector === 'function') {
+      const existing = document.querySelector(`script[data-agy-companion="${companionId}"]`);
+      if (existing) {
+        if (typeof onDone === 'function') onDone();
+        return true;
+      }
+    }
+    try {
+      const s = document.createElement('script');
+      const nonce = resolveHostCspNonce(document);
+      if (companionId && typeof s.setAttribute === 'function') {
+        s.setAttribute('data-agy-companion', companionId);
+      }
+      if (nonce) {
+        s.nonce = nonce;
+        if (typeof s.setAttribute === 'function') s.setAttribute('nonce', nonce);
+      }
+      if (!assignAuthorizedInlineScriptText(s, String(code))) {
+        return false;
+      }
+      (document.head || document.documentElement).appendChild(s);
+      if (typeof onDone === 'function') onDone();
+      return true;
+    } catch (e) {
+      return false;
     }
   }
 
@@ -7105,6 +7159,7 @@
     disposables.register(() => {
       ownCreatedWorkerBlobUrls.clear();
       cachedRemoteTrustedPolicy = null;
+      cachedRemoteTrustedPolicyAttempted = false;
       pendingCompanionInlineAuth = null;
     });
   }
@@ -7481,8 +7536,10 @@
       resolved: false,
       statusbarInstalled: Boolean(window.agyStatusBar),
       mcpManagerInstalled: Boolean(window.agyMcpManager),
+      koTranslatorInstalled: true,
       statusbarCode: '',
       mcpManagerCode: '',
+      koTranslatorCode: '',
     };
     if (window.__agyHostInstalledPlugins && typeof window.__agyHostInstalledPlugins === 'object') {
       const override = window.__agyHostInstalledPlugins;
@@ -7493,11 +7550,21 @@
       info.mcpManagerInstalled = Boolean(
         override.mcpManager || override.hasMcpManager || override['antigravity-mcp-manager']
       );
+      info.koTranslatorInstalled =
+        override.hasKoTranslator !== undefined || override.koTranslator !== undefined
+          ? Boolean(override.hasKoTranslator || override.koTranslator || override['ko-thought-translator'])
+          : true;
       info.statusbarCode = String(override.statusbarCode || override.statusbarBlock || '');
-      info.mcpManagerCode = String(override.mcpManagerCode || override.mcpManagerBlock || '');
+      info.mcpManagerCode = String(override.mcpManagerCode || override.mcpManagerBlock || override.mcpBlock || '');
+      info.koTranslatorCode = String(override.koTranslatorCode || override.koTranslatorBlock || override.koBlock || '');
       if (
         info.resolved &&
-        (info.statusbarInstalled || info.mcpManagerInstalled || override.statusbar !== undefined || override.mcpManager !== undefined)
+        (info.statusbarInstalled ||
+          info.mcpManagerInstalled ||
+          override.statusbar !== undefined ||
+          override.mcpManager !== undefined ||
+          override.hasStatusbar !== undefined ||
+          override.hasMcpManager !== undefined)
       ) {
         return info;
       }
@@ -7566,11 +7633,16 @@
         '// === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
         '/* === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 === */',
       ];
+      const koEndMarkers = [
+        '// === END_AGY_KO_THOUGHT_LOCALIZER_V2 ===',
+        '/* === END_AGY_KO_THOUGHT_LOCALIZER_V2 === */',
+      ];
       const sbStartMarkers = ['/* === BEGIN_AGY_STATUSBAR === */', '// === BEGIN_AGY_STATUSBAR ==='];
       const sbEndMarkers = ['/* === END_AGY_STATUSBAR === */', '// === END_AGY_STATUSBAR ==='];
 
       let sbCode = extractCompanionBlock(rawText, sbStartMarkers, sbEndMarkers);
       const mcpCode = extractCompanionBlock(rawText, mcpStartMarkers, mcpEndMarkers);
+      const koCode = extractCompanionBlock(rawText, koStartMarkers, koEndMarkers);
 
       const markerPositions = [];
       for (const m of [...mcpStartMarkers, ...koStartMarkers, ...sbStartMarkers]) {
@@ -7604,6 +7676,10 @@
       ) {
         info.mcpManagerInstalled = true;
         info.mcpManagerCode = baseSegment;
+      }
+      if (koCode) {
+        info.koTranslatorInstalled = true;
+        info.koTranslatorCode = koCode;
       }
     };
 
@@ -7679,14 +7755,16 @@
           item.uri,
           item.rootUri,
           item.directory,
+          item.installPath,
         ];
         for (const f of fields) {
           if (!f) continue;
           const s = String(f);
           if (/antigravity-statusbar/i.test(s)) info.statusbarInstalled = true;
           if (/antigravity-mcp-manager/i.test(s)) info.mcpManagerInstalled = true;
+          if (/ko-thought-translator/i.test(s)) info.koTranslatorInstalled = true;
         }
-        const pathCandidate = item.path || item.uri || item.rootUri || item.directory;
+        const pathCandidate = item.path || item.uri || item.rootUri || item.directory || item.installPath;
         if (pathCandidate) candidatePaths.push(String(pathCandidate));
       };
 
@@ -7742,6 +7820,26 @@
       }
     } catch (e) {}
 
+    if (info.resolved && (!window.__agyHostInstalledPlugins || !window.__agyHostInstalledPlugins.resolved)) {
+      window.__agyHostInstalledPlugins = {
+        resolved: true,
+        statusbar: info.statusbarInstalled,
+        hasStatusbar: info.statusbarInstalled,
+        mcpManager: info.mcpManagerInstalled,
+        hasMcpManager: info.mcpManagerInstalled,
+        koTranslator: info.koTranslatorInstalled,
+        hasKoTranslator: info.koTranslatorInstalled,
+        statusbarBlock: info.statusbarCode,
+        statusbarCode: info.statusbarCode,
+        mcpBlock: info.mcpManagerCode,
+        mcpManagerBlock: info.mcpManagerCode,
+        mcpManagerCode: info.mcpManagerCode,
+        koBlock: info.koTranslatorCode,
+        koTranslatorBlock: info.koTranslatorCode,
+        koTranslatorCode: info.koTranslatorCode,
+      };
+    }
+
     return info;
   }
 
@@ -7766,55 +7864,62 @@
 
     probeHostCompanionPluginsForRemote(rcEl)
       .then((info) => {
+        window.__agyLastHostInstalledPluginsRef = window.__agyHostInstalledPlugins;
         if (!info || !info.resolved) return;
-        window.__agyKoCompanionsSynced = true;
 
+        let sbSyncDone = false;
+        let sbAsyncPromise = null;
         const hasSbScript = Boolean(
           typeof document?.querySelector === 'function' &&
             document.querySelector('script[data-agy-companion="statusbar"]')
         );
-        if (
-          info.statusbarInstalled &&
-          !window.agyStatusBar &&
-          !hasSbScript &&
-          !window.__agyKoFetchingStatusBar &&
-          !window.__agyLoadingStatusBarCompanion
-        ) {
+        if (!info.statusbarInstalled || window.agyStatusBar || hasSbScript) {
+          sbSyncDone = true;
+        } else if (!window.__agyKoFetchingStatusBar && !window.__agyLoadingStatusBarCompanion) {
           window.__agyKoFetchingStatusBar = true;
           window.__agyLoadingStatusBarCompanion = true;
           if (info.statusbarCode) {
             try {
-              injectRemoteCompanionScript(info.statusbarCode, () => refreshStatusbarTranslatorAdapter(), 'statusbar');
+              sbSyncDone = Boolean(
+                injectRemoteCompanionScript(info.statusbarCode, () => refreshStatusbarTranslatorAdapter(), 'statusbar')
+              );
             } finally {
+              delete window.__agyKoFetchingStatusBar;
               delete window.__agyLoadingStatusBarCompanion;
             }
           } else if (typeof fetch === 'function') {
-            fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' + Date.now())
+            sbAsyncPromise = fetch(
+              'https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' +
+                Date.now()
+            )
               .then((r) => (r && r.ok ? r.text() : ''))
               .then((code) => {
-                if (!code || window.agyStatusBar) return;
-                injectRemoteCompanionScript(code, () => refreshStatusbarTranslatorAdapter(), 'statusbar');
+                if (window.agyStatusBar) return true;
+                if (!code) return false;
+                return Boolean(
+                  injectRemoteCompanionScript(code, () => refreshStatusbarTranslatorAdapter(), 'statusbar')
+                );
               })
-              .catch(() => {})
+              .catch(() => false)
               .finally(() => {
+                delete window.__agyKoFetchingStatusBar;
                 delete window.__agyLoadingStatusBarCompanion;
               });
           } else {
+            delete window.__agyKoFetchingStatusBar;
             delete window.__agyLoadingStatusBarCompanion;
           }
         }
 
+        let mcpSyncDone = false;
+        let mcpAsyncPromise = null;
         const hasMcpScript = Boolean(
           typeof document?.querySelector === 'function' &&
             document.querySelector('script[data-agy-companion="mcp-manager"]')
         );
-        if (
-          info.mcpManagerInstalled &&
-          !window.agyMcpManager &&
-          !hasMcpScript &&
-          !window.__agyKoFetchingMcpManager &&
-          !window.__agyLoadingMcpManagerCompanion
-        ) {
+        if (!info.mcpManagerInstalled || window.agyMcpManager || hasMcpScript) {
+          mcpSyncDone = true;
+        } else if (!window.__agyKoFetchingMcpManager && !window.__agyLoadingMcpManagerCompanion) {
           window.__agyKoFetchingMcpManager = true;
           window.__agyLoadingMcpManagerCompanion = true;
           const mountMcpIntoInnerFrame = () => {
@@ -7832,24 +7937,45 @@
           };
           if (info.mcpManagerCode) {
             try {
-              injectRemoteCompanionScript(info.mcpManagerCode, mountMcpIntoInnerFrame, 'mcp-manager');
+              mcpSyncDone = Boolean(injectRemoteCompanionScript(info.mcpManagerCode, mountMcpIntoInnerFrame, 'mcp-manager'));
             } finally {
+              delete window.__agyKoFetchingMcpManager;
               delete window.__agyLoadingMcpManagerCompanion;
             }
           } else if (typeof fetch === 'function') {
-            fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' + Date.now())
+            mcpAsyncPromise = fetch(
+              'https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' +
+                Date.now()
+            )
               .then((r) => (r && r.ok ? r.text() : ''))
               .then((code) => {
-                if (!code || window.agyMcpManager) return;
-                injectRemoteCompanionScript(code, mountMcpIntoInnerFrame, 'mcp-manager');
+                if (window.agyMcpManager) return true;
+                if (!code) return false;
+                return Boolean(injectRemoteCompanionScript(code, mountMcpIntoInnerFrame, 'mcp-manager'));
               })
-              .catch(() => {})
+              .catch(() => false)
               .finally(() => {
+                delete window.__agyKoFetchingMcpManager;
                 delete window.__agyLoadingMcpManagerCompanion;
               });
           } else {
+            delete window.__agyKoFetchingMcpManager;
             delete window.__agyLoadingMcpManagerCompanion;
           }
+        }
+
+        if (!sbAsyncPromise && !mcpAsyncPromise) {
+          if (sbSyncDone && mcpSyncDone) {
+            window.__agyKoCompanionsSynced = true;
+          }
+        } else {
+          Promise.all([sbAsyncPromise || Promise.resolve(sbSyncDone), mcpAsyncPromise || Promise.resolve(mcpSyncDone)])
+            .then(([sbOk, mcpOk]) => {
+              if (sbOk && mcpOk) {
+                window.__agyKoCompanionsSynced = true;
+              }
+            })
+            .catch(() => {});
         }
       })
       .catch(() => {})
@@ -7859,13 +7985,19 @@
   }
 
   if (typeof disposables !== 'undefined' && disposables) {
-    disposables.register(() => {
+    disposables.register((fullRestore) => {
       for (const proto of hookedRcPrototypes) {
         try {
           delete proto.__agyKoProbeHooked;
         } catch (e) {}
       }
       hookedRcPrototypes.clear();
+      delete window.__agyKoSyncingCompanions;
+      if (fullRestore) {
+        delete window.__agyKoCompanionsSynced;
+        delete window.__agyKoFetchingStatusBar;
+        delete window.__agyKoFetchingMcpManager;
+      }
     });
   }
 
@@ -7920,8 +8052,25 @@
     return true;
   }
 
+  function findPrototypeOnIframeLoadOwner(rcInst) {
+    if (!rcInst || typeof rcInst !== 'object') return null;
+    let cur = Object.getPrototypeOf(rcInst);
+    while (cur && cur !== Object.prototype) {
+      if (Object.prototype.hasOwnProperty.call(cur, 'onIframeLoad') && typeof cur.onIframeLoad === 'function') {
+        return cur;
+      }
+      cur = Object.getPrototypeOf(cur);
+    }
+    return null;
+  }
+
   function ensureChainedOnIframeLoadHook(target) {
-    if (!target || typeof target.onIframeLoad !== 'function' || hookedOnLoadTargets.has(target)) {
+    if (
+      !target ||
+      !Object.prototype.hasOwnProperty.call(target, 'onIframeLoad') ||
+      typeof target.onIframeLoad !== 'function' ||
+      hookedOnLoadTargets.has(target)
+    ) {
       return;
     }
     const prevFn = target.onIframeLoad;
@@ -7932,6 +8081,7 @@
         function (...args) {
           if (
             this &&
+            !this.__agyForceAllowOnIframeLoad &&
             (this.__agySuppressAutoIframeLoad ||
               (typeof this.__agySuppressAutoIframeLoadCount === 'number' && this.__agySuppressAutoIframeLoadCount > 0))
           ) {
@@ -7944,6 +8094,7 @@
       target.onIframeLoad = function (...args) {
         if (
           this &&
+          !this.__agyForceAllowOnIframeLoad &&
           (this.__agySuppressAutoIframeLoad ||
             (typeof this.__agySuppressAutoIframeLoadCount === 'number' && this.__agySuppressAutoIframeLoadCount > 0))
         ) {
@@ -7951,6 +8102,52 @@
         }
         return prevFn.apply(this, args);
       };
+    }
+  }
+
+  function invokeOriginalOnIframeLoadUnsuppressed(rcInst, protoOwner) {
+    if (!rcInst) return undefined;
+    const hasOwnMethod = Object.prototype.hasOwnProperty.call(rcInst, 'onIframeLoad');
+    const origLoad =
+      (hasOwnMethod ? origOnLoadFnMap.get(rcInst) : null) ||
+      (protoOwner ? origOnLoadFnMap.get(protoOwner) : null) ||
+      rcInst.onIframeLoad;
+    if (typeof origLoad !== 'function') return undefined;
+    const hadFlag = Object.prototype.hasOwnProperty.call(rcInst, '__agySuppressAutoIframeLoad');
+    const prevFlag = rcInst.__agySuppressAutoIframeLoad;
+    const hadCount = Object.prototype.hasOwnProperty.call(rcInst, '__agySuppressAutoIframeLoadCount');
+    const prevCount = rcInst.__agySuppressAutoIframeLoadCount;
+    rcInst.__agyForceAllowOnIframeLoad = true;
+    try {
+      delete rcInst.__agySuppressAutoIframeLoad;
+      delete rcInst.__agySuppressAutoIframeLoadCount;
+      return origLoad.call(rcInst);
+    } finally {
+      delete rcInst.__agyForceAllowOnIframeLoad;
+      if (hadFlag) {
+        rcInst.__agySuppressAutoIframeLoad = prevFlag;
+      } else {
+        delete rcInst.__agySuppressAutoIframeLoad;
+      }
+      if (hadCount) {
+        rcInst.__agySuppressAutoIframeLoadCount = prevCount;
+      } else {
+        delete rcInst.__agySuppressAutoIframeLoadCount;
+      }
+    }
+  }
+
+  function resetKoOwnedPromotionFlags(iframe) {
+    if (!iframe) return;
+    delete iframe.__agyKoPromoted;
+    delete iframe.__agyKoPromoting;
+    if (!iframe.__agyRemotePromotionOwner || iframe.__agyRemotePromotionOwner === 'ko-thought-translator') {
+      delete iframe.__agyPromoted;
+      delete iframe.__agyRemotePromotionOwner;
+      delete iframe.__agyRemotePromotionState;
+      try {
+        delete iframe.src;
+      } catch (e) {}
     }
   }
 
@@ -8058,18 +8255,12 @@
         (!cd || !cd.getElementById || !cd.getElementById('root'))
       ) {
         transitionBridgeSession(session, REMOTE_BRIDGE_STATES.IDLE);
-        delete iframe.__agyKoPromoted;
-        delete iframe.__agyPromoted;
-        delete iframe.__agyRemotePromotionOwner;
-        delete iframe.__agyRemotePromotionState;
+        resetKoOwnedPromotionFlags(iframe);
       }
     } catch (e) {
       if (session.state === REMOTE_BRIDGE_STATES.READY) {
         transitionBridgeSession(session, REMOTE_BRIDGE_STATES.IDLE);
-        delete iframe.__agyKoPromoted;
-        delete iframe.__agyPromoted;
-        delete iframe.__agyRemotePromotionOwner;
-        delete iframe.__agyRemotePromotionState;
+        resetKoOwnedPromotionFlags(iframe);
       }
     }
 
@@ -8178,11 +8369,11 @@
     const spoofedSrc = `${window.location.origin}${basePath}/?iframe=true`;
     session.spoofedSrc = spoofedSrc;
 
-    const rcProto = Object.getPrototypeOf(rcInst);
-    if (rcProto && typeof rcProto.onIframeLoad === 'function') {
-      ensureChainedOnIframeLoadHook(rcProto);
+    const rcProtoOwner = findPrototypeOnIframeLoadOwner(rcInst);
+    if (rcProtoOwner) {
+      ensureChainedOnIframeLoadHook(rcProtoOwner);
     }
-    if (typeof rcInst.onIframeLoad === 'function') {
+    if (Object.prototype.hasOwnProperty.call(rcInst, 'onIframeLoad') && typeof rcInst.onIframeLoad === 'function') {
       ensureChainedOnIframeLoadHook(rcInst);
     }
     acquireAutoLoadSuppression(session, rcInst);
@@ -8245,6 +8436,78 @@
           return;
         }
 
+        const rewriteChildAssetUrl = (rawInput) => {
+          if (rawInput === null || rawInput === undefined) return '';
+          const isUrlObj =
+            typeof rawInput === 'object' &&
+            rawInput !== null &&
+            typeof rawInput.href === 'string' &&
+            typeof rawInput.protocol === 'string';
+          if (typeof rawInput !== 'string' && !isUrlObj) return rawInput;
+          const trimmed = String(isUrlObj ? rawInput.href : rawInput).trim();
+          if (!trimmed) return trimmed;
+          if (/^(?:blob:|data:|javascript:|mailto:|tel:|about:|#|\?)/i.test(trimmed)) {
+            return trimmed;
+          }
+          if (trimmed.startsWith('/antigravity/')) {
+            return `https://www.gstatic.com${trimmed}`;
+          }
+          if (basePath && (trimmed === basePath || trimmed.startsWith(`${basePath}/`))) {
+            return `${cdnBaseUrl}${trimmed.slice(basePath.length)}`;
+          }
+          if (trimmed.startsWith('/web/')) {
+            return `${cdnOrigin}${trimmed}`;
+          }
+          if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+            return `${cdnBaseUrl}${trimmed}`;
+          }
+          if (!/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmed) && !trimmed.startsWith('//')) {
+            try {
+              const virtualBase = `${window.location.origin}${basePath}/`;
+              const resolvedRel = new URL(trimmed, virtualBase);
+              if (
+                resolvedRel.origin === window.location.origin &&
+                resolvedRel.pathname.startsWith(`${basePath}/`)
+              ) {
+                return `${cdnBaseUrl}${resolvedRel.pathname.slice(basePath.length)}${resolvedRel.search}${resolvedRel.hash}`;
+              }
+            } catch (e) {}
+            return trimmed;
+          }
+          try {
+            const parsedAsset = new URL(trimmed, window.location.href);
+            if (
+              parsedAsset.origin === window.location.origin ||
+              parsedAsset.hostname === 'antigravity.static.usercontent.goog'
+            ) {
+              if (parsedAsset.pathname.startsWith('/antigravity/')) {
+                return `https://www.gstatic.com${parsedAsset.pathname}${parsedAsset.search}${parsedAsset.hash}`;
+              }
+              if (basePath && (parsedAsset.pathname === basePath || parsedAsset.pathname.startsWith(`${basePath}/`))) {
+                return `${cdnBaseUrl}${parsedAsset.pathname.slice(basePath.length)}${parsedAsset.search}${parsedAsset.hash}`;
+              }
+              if (parsedAsset.pathname.startsWith('/web/')) {
+                return `${cdnOrigin}${parsedAsset.pathname}${parsedAsset.search}${parsedAsset.hash}`;
+              }
+              if (parsedAsset.origin === window.location.origin && !parsedAsset.pathname.startsWith('/r/')) {
+                return `${cdnBaseUrl}${parsedAsset.pathname}${parsedAsset.search}${parsedAsset.hash}`;
+              }
+            }
+          } catch (e) {}
+          return trimmed;
+        };
+
+        const toSafeChildScriptUrl = (rawVal) => {
+          if (rawVal && typeof rawVal === 'object' && typeof rawVal.href !== 'string') {
+            return rawVal;
+          }
+          const nextUrl = rewriteChildAssetUrl(rawVal);
+          if (ttPolicy && typeof nextUrl === 'string' && isTrustedRemoteScriptUrl(nextUrl)) {
+            return ttPolicy.createScriptURL(nextUrl);
+          }
+          return nextUrl;
+        };
+
         if (cd.documentElement && typeof cd.documentElement.setAttribute === 'function') {
           cd.documentElement.setAttribute('lang', 'en');
         }
@@ -8261,46 +8524,110 @@
         headEl.textContent = '';
         bodyEl.textContent = '';
 
+        const scriptProto = cw.HTMLScriptElement && cw.HTMLScriptElement.prototype;
+        const scriptSrcDesc = scriptProto ? Object.getOwnPropertyDescriptor(scriptProto, 'src') : null;
         try {
-          if (typeof cd.createElement === 'function' && !cd.__agyCreateElPatched) {
-            const origCreateEl = cd.createElement.bind(cd);
-            cd.createElement = function (tagName, options) {
-              const el = options !== undefined ? origCreateEl(tagName, options) : origCreateEl(tagName);
-              if (nonce && el && typeof tagName === 'string') {
-                const upper = tagName.toUpperCase();
-                if (upper === 'SCRIPT' || upper === 'STYLE' || upper === 'LINK') {
-                  try {
-                    el.nonce = nonce;
-                    if (typeof el.setAttribute === 'function') el.setAttribute('nonce', nonce);
-                  } catch (e) {}
-                }
-              }
-              return el;
-            };
-            cd.__agyCreateElPatched = true;
-          }
-          const scriptProto = cw.HTMLScriptElement && cw.HTMLScriptElement.prototype;
-          const scriptSrcDesc = scriptProto ? Object.getOwnPropertyDescriptor(scriptProto, 'src') : null;
           if (scriptProto && scriptSrcDesc && typeof scriptSrcDesc.set === 'function' && !scriptProto.__agyScriptSrcPatched) {
             Object.defineProperty(scriptProto, 'src', {
               configurable: true,
               enumerable: true,
               get: scriptSrcDesc.get,
               set(val) {
-                if (typeof val === 'string') {
-                  let nextUrl = val;
-                  if (basePath && nextUrl.startsWith(basePath + '/')) {
-                    nextUrl = `${cdnBaseUrl}${nextUrl.slice(basePath.length)}`;
-                  }
-                  if (ttPolicy && isTrustedRemoteScriptUrl(nextUrl)) {
-                    return scriptSrcDesc.set.call(this, ttPolicy.createScriptURL(nextUrl));
-                  }
-                  return scriptSrcDesc.set.call(this, nextUrl);
+                if (nonce) {
+                  try {
+                    this.nonce = nonce;
+                  } catch (e) {}
+                }
+                if (typeof val === 'string' || (val && typeof val === 'object' && typeof val.href === 'string')) {
+                  return scriptSrcDesc.set.call(this, toSafeChildScriptUrl(val));
                 }
                 return scriptSrcDesc.set.call(this, val);
               },
             });
             scriptProto.__agyScriptSrcPatched = true;
+          }
+
+          const linkProto = cw.HTMLLinkElement && cw.HTMLLinkElement.prototype;
+          const linkHrefDesc = linkProto ? Object.getOwnPropertyDescriptor(linkProto, 'href') : null;
+          if (linkProto && linkHrefDesc && typeof linkHrefDesc.set === 'function' && !linkProto.__agyLinkHrefPatched) {
+            Object.defineProperty(linkProto, 'href', {
+              configurable: true,
+              enumerable: true,
+              get: linkHrefDesc.get,
+              set(val) {
+                if (nonce) {
+                  try {
+                    this.nonce = nonce;
+                  } catch (e) {}
+                }
+                if (typeof val === 'string' || (val && typeof val === 'object' && typeof val.href === 'string')) {
+                  return linkHrefDesc.set.call(this, rewriteChildAssetUrl(val));
+                }
+                return linkHrefDesc.set.call(this, val);
+              },
+            });
+            linkProto.__agyLinkHrefPatched = true;
+          }
+
+          if (typeof cd.createElement === 'function' && !cd.__agyCreateElPatched) {
+            const origCreateEl = cd.createElement.bind(cd);
+            cd.createElement = function (tagName, options) {
+              const el = options !== undefined ? origCreateEl(tagName, options) : origCreateEl(tagName);
+              const upper = typeof tagName === 'string' ? tagName.toUpperCase() : '';
+              if (nonce && el && (upper === 'SCRIPT' || upper === 'STYLE' || upper === 'LINK')) {
+                try {
+                  el.nonce = nonce;
+                  if (typeof el.setAttribute === 'function') el.setAttribute('nonce', nonce);
+                } catch (e) {}
+              }
+              const isNativeElem = Boolean(cw.Element && el instanceof cw.Element);
+              if (el && !isNativeElem && typeof el.setAttribute === 'function' && !el.__agySyntheticSetAttrPatched) {
+                const origElSetAttr = el.setAttribute.bind(el);
+                el.setAttribute = function (attrName, attrVal) {
+                  const attrLower = String(attrName || '').toLowerCase();
+                  if (upper === 'SCRIPT' && attrLower === 'src') {
+                    if (nonce) {
+                      try {
+                        el.nonce = nonce;
+                        origElSetAttr('nonce', nonce);
+                      } catch (e) {}
+                    }
+                    const safeVal = toSafeChildScriptUrl(attrVal);
+                    el.src = safeVal;
+                    return origElSetAttr(attrName, safeVal);
+                  }
+                  if (upper === 'LINK' && attrLower === 'href') {
+                    if (nonce) {
+                      try {
+                        el.nonce = nonce;
+                        origElSetAttr('nonce', nonce);
+                      } catch (e) {}
+                    }
+                    const nextHref =
+                      attrVal && typeof attrVal === 'object' && typeof attrVal.href !== 'string'
+                        ? attrVal
+                        : rewriteChildAssetUrl(attrVal);
+                    el.href = nextHref;
+                    return origElSetAttr(attrName, nextHref);
+                  }
+                  if (
+                    (upper === 'IMG' || upper === 'SOURCE' || upper === 'AUDIO' || upper === 'VIDEO') &&
+                    attrLower === 'src'
+                  ) {
+                    const nextSrc =
+                      attrVal && typeof attrVal === 'object' && typeof attrVal.href !== 'string'
+                        ? attrVal
+                        : rewriteChildAssetUrl(attrVal);
+                    el.src = nextSrc;
+                    return origElSetAttr(attrName, nextSrc);
+                  }
+                  return origElSetAttr(attrName, attrVal);
+                };
+                el.__agySyntheticSetAttrPatched = true;
+              }
+              return el;
+            };
+            cd.__agyCreateElPatched = true;
           }
         } catch (e) {}
 
@@ -8403,35 +8730,67 @@
           };
           cw.customElements.__agyGuarded = true;
         }
-        const imgProto = cw.HTMLImageElement && cw.HTMLImageElement.prototype;
-        const imgSrcDesc = imgProto ? Object.getOwnPropertyDescriptor(imgProto, 'src') : null;
-        if (imgProto && imgSrcDesc && typeof imgSrcDesc.set === 'function' && !imgProto.__agyImgSrcPatched) {
-          Object.defineProperty(imgProto, 'src', {
-            configurable: true,
-            enumerable: true,
-            get: imgSrcDesc.get,
-            set(val) {
-              if (typeof val === 'string' && basePath && val.startsWith(basePath + '/')) {
-                val = `${cdnBaseUrl}${val.slice(basePath.length)}`;
-              }
-              return imgSrcDesc.set.call(this, val);
-            },
-          });
-          imgProto.__agyImgSrcPatched = true;
+        for (const mediaProto of [
+          cw.HTMLImageElement && cw.HTMLImageElement.prototype,
+          cw.HTMLSourceElement && cw.HTMLSourceElement.prototype,
+        ]) {
+          const mediaSrcDesc = mediaProto ? Object.getOwnPropertyDescriptor(mediaProto, 'src') : null;
+          if (mediaProto && mediaSrcDesc && typeof mediaSrcDesc.set === 'function' && !mediaProto.__agyImgSrcPatched) {
+            Object.defineProperty(mediaProto, 'src', {
+              configurable: true,
+              enumerable: true,
+              get: mediaSrcDesc.get,
+              set(val) {
+                if (typeof val === 'string' || (val && typeof val === 'object' && typeof val.href === 'string')) {
+                  val = rewriteChildAssetUrl(val);
+                }
+                return mediaSrcDesc.set.call(this, val);
+              },
+            });
+            mediaProto.__agyImgSrcPatched = true;
+          }
         }
         const elProto = cw.Element && cw.Element.prototype;
         if (elProto && typeof elProto.setAttribute === 'function' && !elProto.__agySetAttrPatched) {
           const origSetAttr = elProto.setAttribute;
           elProto.setAttribute = function (name, val) {
+            const attrLower = String(name || '').toLowerCase();
+            const tagUpper = String(this?.tagName || '').toUpperCase();
+            if (tagUpper === 'SCRIPT' && attrLower === 'src') {
+              if (nonce) {
+                try {
+                  this.nonce = nonce;
+                  origSetAttr.call(this, 'nonce', nonce);
+                } catch (e) {}
+              }
+              if (val && typeof val === 'object' && typeof val.href !== 'string') {
+                return origSetAttr.call(this, name, val);
+              }
+              const safeVal = toSafeChildScriptUrl(val);
+              if (scriptSrcDesc && typeof scriptSrcDesc.set === 'function') {
+                scriptSrcDesc.set.call(this, safeVal);
+                return undefined;
+              }
+              return origSetAttr.call(this, name, safeVal);
+            }
+            if (tagUpper === 'LINK' && attrLower === 'href') {
+              if (nonce) {
+                try {
+                  this.nonce = nonce;
+                  origSetAttr.call(this, 'nonce', nonce);
+                } catch (e) {}
+              }
+              const nextHref =
+                val && typeof val === 'object' && typeof val.href !== 'string' ? val : rewriteChildAssetUrl(val);
+              return origSetAttr.call(this, name, nextHref);
+            }
             if (
-              this.tagName === 'IMG' &&
-              typeof name === 'string' &&
-              name.toLowerCase() === 'src' &&
-              typeof val === 'string' &&
-              basePath &&
-              val.startsWith(basePath + '/')
+              (tagUpper === 'IMG' || tagUpper === 'SOURCE' || tagUpper === 'AUDIO' || tagUpper === 'VIDEO') &&
+              attrLower === 'src'
             ) {
-              val = `${cdnBaseUrl}${val.slice(basePath.length)}`;
+              const nextSrc =
+                val && typeof val === 'object' && typeof val.href !== 'string' ? val : rewriteChildAssetUrl(val);
+              return origSetAttr.call(this, name, nextSrc);
             }
             return origSetAttr.call(this, name, val);
           };
@@ -8486,61 +8845,469 @@
         try {
           if (typeof cw.Worker === 'function' && !cw.Worker.__agyWorkerPatched) {
             const OrigWorker = cw.Worker;
-            const makeInertWorkerStub = () => ({
-              postMessage() {},
-              terminate() {},
-              addEventListener() {},
-              removeEventListener() {},
-              dispatchEvent: () => false,
-              onmessage: null,
-              onerror: null,
-            });
-            const PatchedWorker = function (scriptURL, options) {
-              const urlStr = String(scriptURL || '');
-              if (urlStr.startsWith('/') && !urlStr.startsWith('//')) {
-                const targetWorkerUrl = `${cdnBaseUrl}${urlStr}`;
-                if (isTrustedRemoteScriptUrl(targetWorkerUrl)) {
+            const mountIframeBackedWorker = (targetWorkerUrl, options) => {
+              if (typeof cw.MessageChannel !== 'function' || !cd) return null;
+              const container = cd.body || cd.documentElement;
+              if (!container || typeof container.appendChild !== 'function' || typeof cd.createElement !== 'function') {
+                return null;
+              }
+              let wf = null;
+              try {
+                wf = cd.createElement('iframe');
+                if (!wf) return null;
+                if (typeof wf.setAttribute === 'function') {
+                  wf.setAttribute('aria-hidden', 'true');
+                  wf.setAttribute('tabindex', '-1');
+                  wf.setAttribute('data-agy-ko-worker', '1');
+                  wf.setAttribute(
+                    'style',
+                    'display:none!important;width:0!important;height:0!important;border:0!important;'
+                  );
+                }
+                container.appendChild(wf);
+                let wWin = wf.contentWindow;
+                let wDoc = wf.contentDocument;
+                if (!wWin || !wDoc) {
+                  if (typeof wf.remove === 'function') wf.remove();
+                  else if (wf.parentNode) wf.parentNode.removeChild(wf);
+                  return null;
+                }
+                if (wWin.location && wWin.location.href === 'about:blank' && typeof wDoc.open === 'function') {
                   try {
-                    if (typeof cw.Blob === 'function' && cw.URL && typeof cw.URL.createObjectURL === 'function') {
-                      const blob = new cw.Blob([`importScripts(${JSON.stringify(targetWorkerUrl)});`], {
-                        type: 'application/javascript',
-                      });
-                      const blobUrl = cw.URL.createObjectURL(blob);
-                      ownCreatedWorkerBlobUrls.add(blobUrl);
-                      let revoked = false;
-                      const revokeBlobUrl = () => {
-                        if (revoked) return;
-                        revoked = true;
-                        ownCreatedWorkerBlobUrls.delete(blobUrl);
-                        try {
-                          if (cw.URL && typeof cw.URL.revokeObjectURL === 'function') {
-                            cw.URL.revokeObjectURL(blobUrl);
-                          }
-                        } catch (e) {}
-                      };
-                      try {
-                        const worker = new OrigWorker(ttPolicy ? ttPolicy.createScriptURL(blobUrl) : blobUrl, options);
-                        if (worker && typeof worker.addEventListener === 'function') {
-                          worker.addEventListener('error', revokeBlobUrl, { once: true });
-                        }
-                        const sched = typeof cw.setTimeout === 'function' ? cw.setTimeout.bind(cw) : setTimeout;
-                        sched(revokeBlobUrl, 1500);
-                        return worker;
-                      } catch (workerErr) {
-                        revokeBlobUrl();
-                        return makeInertWorkerStub();
-                      }
-                    }
+                    wDoc.open();
+                    if (typeof wDoc.close === 'function') wDoc.close();
+                    wWin = wf.contentWindow || wWin;
+                    wDoc = wf.contentDocument || wDoc;
+                  } catch (e) {}
+                }
+
+                const mc = new cw.MessageChannel();
+                const hostPort = mc.port1;
+                const workerPort = mc.port2;
+                let terminated = false;
+                const outerListeners = {
+                  message: new Set(),
+                  error: new Set(),
+                  messageerror: new Set(),
+                };
+                let outerOnMessage = null;
+                let outerOnError = null;
+                let outerOnMessageError = null;
+                const workerFacade = Object.create(OrigWorker.prototype);
+                Object.defineProperties(workerFacade, {
+                  url: { configurable: true, enumerable: true, value: targetWorkerUrl },
+                  onmessage: {
+                    configurable: true,
+                    enumerable: true,
+                    get: () => outerOnMessage,
+                    set: (fn) => {
+                      outerOnMessage = typeof fn === 'function' ? fn : null;
+                    },
+                  },
+                  onerror: {
+                    configurable: true,
+                    enumerable: true,
+                    get: () => outerOnError,
+                    set: (fn) => {
+                      outerOnError = typeof fn === 'function' ? fn : null;
+                    },
+                  },
+                  onmessageerror: {
+                    configurable: true,
+                    enumerable: true,
+                    get: () => outerOnMessageError,
+                    set: (fn) => {
+                      outerOnMessageError = typeof fn === 'function' ? fn : null;
+                    },
+                  },
+                });
+                workerFacade.addEventListener = function (type, listener) {
+                  const set = outerListeners[String(type || '').toLowerCase()];
+                  if (set && typeof listener === 'function') set.add(listener);
+                };
+                workerFacade.removeEventListener = function (type, listener) {
+                  const set = outerListeners[String(type || '').toLowerCase()];
+                  if (set && typeof listener === 'function') set.delete(listener);
+                };
+                workerFacade.dispatchEvent = function (ev) {
+                  if (!ev || !ev.type) return false;
+                  const typeLower = String(ev.type).toLowerCase();
+                  const propHandler = workerFacade[`on${typeLower}`];
+                  if (typeof propHandler === 'function') propHandler.call(workerFacade, ev);
+                  const set = outerListeners[typeLower];
+                  if (set) {
+                    for (const fn of Array.from(set)) fn.call(workerFacade, ev);
+                  }
+                  return true;
+                };
+                workerFacade.postMessage = function (data, transferOrOptions) {
+                  if (terminated) return;
+                  if (Array.isArray(transferOrOptions)) {
+                    hostPort.postMessage(data, transferOrOptions);
+                  } else {
+                    hostPort.postMessage(data);
+                  }
+                };
+                workerFacade.terminate = function () {
+                  if (terminated) return;
+                  terminated = true;
+                  try {
+                    hostPort.onmessage = null;
+                    workerPort.onmessage = null;
+                    if (typeof hostPort.close === 'function') hostPort.close();
+                    if (typeof workerPort.close === 'function') workerPort.close();
+                  } catch (e) {}
+                  try {
+                    if (wf && typeof wf.remove === 'function') wf.remove();
+                    else if (wf && wf.parentNode) wf.parentNode.removeChild(wf);
+                  } catch (e) {}
+                };
+
+                if (typeof disposables !== 'undefined' && disposables && typeof disposables.register === 'function') {
+                  disposables.register(() => workerFacade.terminate());
+                }
+
+                const emitOuterError = (errObj) => {
+                  if (terminated) return;
+                  const EvCtor = cw.ErrorEvent || cw.Event || Event;
+                  const message = errObj && errObj.message ? String(errObj.message) : String(errObj || 'Worker error');
+                  let errEv;
+                  try {
+                    errEv = new EvCtor('error', { message, error: errObj });
                   } catch (e) {
-                    return makeInertWorkerStub();
+                    errEv = { type: 'error', message, error: errObj };
+                  }
+                  if (typeof workerFacade.onerror === 'function') {
+                    try {
+                      workerFacade.onerror.call(workerFacade, errEv);
+                    } catch (e) {}
+                  }
+                  for (const fn of Array.from(outerListeners.error)) {
+                    try {
+                      fn.call(workerFacade, errEv);
+                    } catch (e) {}
+                  }
+                };
+
+                hostPort.onmessage = (ev) => {
+                  if (terminated) return;
+                  const MsgEvCtor = cw.MessageEvent || MessageEvent;
+                  let msgEv;
+                  try {
+                    msgEv = new MsgEvCtor('message', { data: ev.data });
+                  } catch (e) {
+                    msgEv = { type: 'message', data: ev.data };
+                  }
+                  if (typeof workerFacade.onmessage === 'function') {
+                    workerFacade.onmessage.call(workerFacade, msgEv);
+                  }
+                  for (const fn of Array.from(outerListeners.message)) {
+                    fn.call(workerFacade, msgEv);
+                  }
+                };
+
+                let innerOnMessage = null;
+                const innerMsgListeners = new Set();
+                try {
+                  Object.defineProperty(wWin, 'onmessage', {
+                    configurable: true,
+                    get: () => innerOnMessage,
+                    set: (fn) => {
+                      innerOnMessage = typeof fn === 'function' ? fn : null;
+                    },
+                  });
+                } catch (e) {
+                  wWin.onmessage = null;
+                }
+                const origInnerAddEv = typeof wWin.addEventListener === 'function' ? wWin.addEventListener.bind(wWin) : null;
+                const origInnerRemEv =
+                  typeof wWin.removeEventListener === 'function' ? wWin.removeEventListener.bind(wWin) : null;
+                const customAddEv = function (type, listener, evOpts) {
+                  if (type === 'message' && typeof listener === 'function') {
+                    innerMsgListeners.add(listener);
+                    return undefined;
+                  }
+                  return origInnerAddEv ? origInnerAddEv(type, listener, evOpts) : undefined;
+                };
+                const customRemEv = function (type, listener, evOpts) {
+                  if (type === 'message' && typeof listener === 'function') {
+                    innerMsgListeners.delete(listener);
+                    return undefined;
+                  }
+                  return origInnerRemEv ? origInnerRemEv(type, listener, evOpts) : undefined;
+                };
+                const customPostMsg = function (data, transferOrOptions) {
+                  if (terminated) return;
+                  if (Array.isArray(transferOrOptions)) {
+                    workerPort.postMessage(data, transferOrOptions);
+                  } else {
+                    workerPort.postMessage(data);
+                  }
+                };
+                const customClose = function () {
+                  workerFacade.terminate();
+                };
+                try {
+                  Object.defineProperty(wWin, 'addEventListener', { configurable: true, writable: true, value: customAddEv });
+                } catch (e) {
+                  wWin.addEventListener = customAddEv;
+                }
+                try {
+                  Object.defineProperty(wWin, 'removeEventListener', { configurable: true, writable: true, value: customRemEv });
+                } catch (e) {
+                  wWin.removeEventListener = customRemEv;
+                }
+                try {
+                  Object.defineProperty(wWin, 'postMessage', { configurable: true, writable: true, value: customPostMsg });
+                } catch (e) {
+                  wWin.postMessage = customPostMsg;
+                }
+                try {
+                  Object.defineProperty(wWin, 'close', { configurable: true, writable: true, value: customClose });
+                } catch (e) {}
+
+                let workerScope = wWin;
+                if (typeof Proxy === 'function') {
+                  try {
+                    workerScope = new Proxy(Object.create(null), {
+                      get(_, prop) {
+                        if (prop === 'self' || prop === 'globalThis') return workerScope;
+                        if (prop === 'postMessage') return customPostMsg;
+                        if (prop === 'onmessage') return innerOnMessage;
+                        if (prop === 'addEventListener') return customAddEv;
+                        if (prop === 'removeEventListener') return customRemEv;
+                        if (prop === 'close') return customClose;
+                        const val = wWin[prop];
+                        if (typeof val === 'function') {
+                          const isCtor = Boolean(val.prototype && val.prototype.constructor === val);
+                          return isCtor ? val : val.bind(wWin);
+                        }
+                        return val;
+                      },
+                      set(_, prop, val) {
+                        if (prop === 'onmessage') {
+                          innerOnMessage = typeof val === 'function' ? val : null;
+                          return true;
+                        }
+                        wWin[prop] = val;
+                        return true;
+                      },
+                      has(_, prop) {
+                        return (
+                          prop === 'self' ||
+                          prop === 'globalThis' ||
+                          prop === 'postMessage' ||
+                          prop === 'onmessage' ||
+                          prop === 'addEventListener' ||
+                          prop === 'removeEventListener' ||
+                          prop === 'close' ||
+                          prop in wWin
+                        );
+                      },
+                    });
+                    wWin.__agyWorkerScope = workerScope;
+                  } catch (e) {
+                    workerScope = wWin;
                   }
                 }
+
+                if (origInnerAddEv) {
+                  origInnerAddEv('error', (ev) => {
+                    emitOuterError(ev?.error || new Error(ev?.message || 'Worker runtime error'));
+                  });
+                }
+
+                let scriptEvaluated = false;
+                const preEvalMessageQueue = [];
+                const deliverToWorkerRealm = (ev) => {
+                  if (terminated) return;
+                  const MsgEvCtor = wWin.MessageEvent || cw.MessageEvent || MessageEvent;
+                  let msgEv;
+                  try {
+                    msgEv = new MsgEvCtor('message', { data: ev.data });
+                  } catch (e) {
+                    msgEv = { type: 'message', data: ev.data };
+                  }
+                  const handler = innerOnMessage || wWin.onmessage;
+                  if (typeof handler === 'function') {
+                    try {
+                      handler.call(workerScope, msgEv);
+                    } catch (err) {
+                      emitOuterError(err);
+                    }
+                  }
+                  for (const fn of Array.from(innerMsgListeners)) {
+                    try {
+                      fn.call(workerScope, msgEv);
+                    } catch (err) {
+                      emitOuterError(err);
+                    }
+                  }
+                };
+                const flushPreEvalMessages = () => {
+                  if (scriptEvaluated) return;
+                  scriptEvaluated = true;
+                  while (preEvalMessageQueue.length > 0 && !terminated) {
+                    deliverToWorkerRealm(preEvalMessageQueue.shift());
+                  }
+                };
+
+                workerPort.onmessage = (ev) => {
+                  if (terminated) return;
+                  if (!scriptEvaluated) {
+                    preEvalMessageQueue.push(ev);
+                    return;
+                  }
+                  deliverToWorkerRealm(ev);
+                };
+
+                if (typeof hostPort.start === 'function') hostPort.start();
+                if (typeof workerPort.start === 'function') workerPort.start();
+
+                const loadWorkerViaScriptTag = () => {
+                  if (terminated) return;
+                  const wScript = wDoc.createElement('script');
+                  if (nonce) {
+                    wScript.nonce = nonce;
+                    if (typeof wScript.setAttribute === 'function') wScript.setAttribute('nonce', nonce);
+                  }
+                  if (options && options.type === 'module') {
+                    wScript.type = 'module';
+                  }
+                  wScript.onload = () => {
+                    flushPreEvalMessages();
+                  };
+                  wScript.onerror = () => {
+                    preEvalMessageQueue.length = 0;
+                    emitOuterError(new Error(`Failed to load Worker script: ${targetWorkerUrl}`));
+                  };
+                  wScript.src = ttPolicy ? ttPolicy.createScriptURL(targetWorkerUrl) : targetWorkerUrl;
+                  const scriptTarget = wDoc.head || wDoc.body || wDoc.documentElement;
+                  scriptTarget.appendChild(wScript);
+                };
+
+                const canFetchWorkerSource =
+                  !(options && options.type === 'module') &&
+                  typeof cw.fetch === 'function' &&
+                  workerScope !== wWin &&
+                  typeof assignAuthorizedInlineScriptText === 'function';
+                if (canFetchWorkerSource) {
+                  Promise.resolve()
+                    .then(() => cw.fetch(targetWorkerUrl))
+                    .then((res) => {
+                      if (!res || !res.ok) {
+                        throw new Error(`Worker fetch HTTP ${res ? res.status : 0}`);
+                      }
+                      return res.text();
+                    })
+                    .then((workerSource) => {
+                      if (terminated) return;
+                      const wrappedCode = `(function(self,postMessage,addEventListener,removeEventListener,close){\n${workerSource}\n}).call(window.__agyWorkerScope,window.__agyWorkerScope,window.__agyWorkerScope.postMessage,window.__agyWorkerScope.addEventListener,window.__agyWorkerScope.removeEventListener,window.__agyWorkerScope.close);`;
+                      const wScript = wDoc.createElement('script');
+                      if (nonce) {
+                        wScript.nonce = nonce;
+                        if (typeof wScript.setAttribute === 'function') wScript.setAttribute('nonce', nonce);
+                      }
+                      if (!assignAuthorizedInlineScriptText(wScript, wrappedCode)) {
+                        loadWorkerViaScriptTag();
+                        return;
+                      }
+                      const scriptTarget = wDoc.head || wDoc.body || wDoc.documentElement;
+                      scriptTarget.appendChild(wScript);
+                      flushPreEvalMessages();
+                    })
+                    .catch(() => {
+                      loadWorkerViaScriptTag();
+                    });
+                } else {
+                  loadWorkerViaScriptTag();
+                }
+                return workerFacade;
+              } catch (err) {
+                try {
+                  if (wf && typeof wf.remove === 'function') wf.remove();
+                  else if (wf && wf.parentNode) wf.parentNode.removeChild(wf);
+                } catch (e) {}
+                return null;
               }
-              try {
-                return new OrigWorker(scriptURL, options);
-              } catch (e) {
-                return makeInertWorkerStub();
+            };
+
+            const PatchedWorker = function (scriptURL, options) {
+              const rawStr = String(
+                scriptURL && typeof scriptURL === 'object' && typeof scriptURL.href === 'string'
+                  ? scriptURL.href
+                  : scriptURL ?? ''
+              ).trim();
+              if (!rawStr) {
+                throw new TypeError('Empty Worker script URL rejected');
               }
+              if (/^blob:/i.test(rawStr)) {
+                const hostOrigin =
+                  window.location && window.location.origin && window.location.origin !== 'null'
+                    ? window.location.origin
+                    : '';
+                if (hostOrigin && !rawStr.startsWith(`blob:${hostOrigin}/`)) {
+                  throw new TypeError(`Blocked cross-origin blob Worker URL: ${rawStr}`);
+                }
+                if (!isTrustedRemoteScriptUrl(rawStr)) {
+                  throw new TypeError(`Blocked unowned blob Worker URL: ${rawStr}`);
+                }
+                const safeBlob = ttPolicy ? ttPolicy.createScriptURL(rawStr) : rawStr;
+                return options !== undefined ? new OrigWorker(safeBlob, options) : new OrigWorker(safeBlob);
+              }
+
+              const targetWorkerUrl = rewriteChildAssetUrl(scriptURL);
+              if (!targetWorkerUrl || !isTrustedRemoteScriptUrl(targetWorkerUrl)) {
+                throw new TypeError(`Blocked untrusted Worker script URL: ${rawStr}`);
+              }
+
+              // Under Remote Control CSP (`worker-src 'self'`), both cross-origin CDN URLs and `blob:` URLs
+              // violate `worker-src 'self'` when passed to native `new Worker(...)`. Execute in an isolated
+              // hidden same-origin iframe realm (`script-src 'nonce-...'` + TrustedScriptURL) bridged by MessageChannel.
+              const iframeWorker = mountIframeBackedWorker(targetWorkerUrl, options);
+              if (iframeWorker) {
+                return iframeWorker;
+              }
+
+              if (typeof cw.Blob === 'function' && cw.URL && typeof cw.URL.createObjectURL === 'function') {
+                const bootCode =
+                  options && options.type === 'module'
+                    ? `import ${JSON.stringify(targetWorkerUrl)};`
+                    : `importScripts(${JSON.stringify(targetWorkerUrl)});`;
+                const blob = new cw.Blob([bootCode], {
+                  type: 'application/javascript',
+                });
+                const blobUrl = cw.URL.createObjectURL(blob);
+                ownCreatedWorkerBlobUrls.add(blobUrl);
+                let revoked = false;
+                const revokeBlobUrl = () => {
+                  if (revoked) return;
+                  revoked = true;
+                  ownCreatedWorkerBlobUrls.delete(blobUrl);
+                  try {
+                    if (cw.URL && typeof cw.URL.revokeObjectURL === 'function') {
+                      cw.URL.revokeObjectURL(blobUrl);
+                    }
+                  } catch (e) {}
+                };
+                try {
+                  const safeBlobUrl = ttPolicy ? ttPolicy.createScriptURL(blobUrl) : blobUrl;
+                  const worker =
+                    options !== undefined ? new OrigWorker(safeBlobUrl, options) : new OrigWorker(safeBlobUrl);
+                  if (worker && typeof worker.addEventListener === 'function') {
+                    worker.addEventListener('error', revokeBlobUrl, { once: true });
+                  }
+                  const sched = typeof cw.setTimeout === 'function' ? cw.setTimeout.bind(cw) : setTimeout;
+                  sched(revokeBlobUrl, 1500);
+                  return worker;
+                } catch (workerErr) {
+                  revokeBlobUrl();
+                  throw workerErr;
+                }
+              }
+
+              const safeDirectUrl = ttPolicy ? ttPolicy.createScriptURL(targetWorkerUrl) : targetWorkerUrl;
+              return options !== undefined ? new OrigWorker(safeDirectUrl, options) : new OrigWorker(safeDirectUrl);
             };
             PatchedWorker.prototype = OrigWorker.prototype;
             PatchedWorker.__agyWorkerPatched = true;
@@ -8567,10 +9334,6 @@
           cw.__agyMainBooted = true;
           releaseAutoLoadSuppression(session);
           if (savedChildPath) rcInst.initialChildPath = savedChildPath;
-          const origLoad =
-            origOnLoadFnMap.get(rcInst) ||
-            (rcProto ? origOnLoadFnMap.get(rcProto) : null) ||
-            rcInst.onIframeLoad;
           let initialConfigInFlight = false;
           const replayBufferedInitialConfig = () => {
             if (!cw.__initialConfigReceived && cw.__agyBufferedInitialConfigEvent && msgListeners.size > 0) {
@@ -8585,12 +9348,12 @@
           };
           const ensureInitialConfigSent = () => {
             replayBufferedInitialConfig();
-            if (typeof origLoad === 'function' && !cw.__initialConfigReceived && !initialConfigInFlight && !cw.__agyOnIframeLoadCalled) {
+            if (!cw.__initialConfigReceived && !initialConfigInFlight && !cw.__agyOnIframeLoadCalled) {
               initialConfigInFlight = true;
               cw.__agyOnIframeLoadCalled = true;
               if (savedChildPath) rcInst.initialChildPath = savedChildPath;
               try {
-                const res = origLoad.call(rcInst);
+                const res = invokeOriginalOnIframeLoadUnsuppressed(rcInst, rcProtoOwner);
                 Promise.resolve(res)
                   .catch(() => {})
                   .finally(() => {
@@ -8697,12 +9460,6 @@
 
   if (typeof disposables !== 'undefined' && disposables) {
     disposables.register((fullRestore) => {
-      for (const target of hookedOnLoadTargets) {
-        try {
-          delete target.__agySuppressAutoIframeLoad;
-          delete target.__agySuppressAutoIframeLoadCount;
-        } catch (e) {}
-      }
       hookedOnLoadTargets.clear();
       try {
         const rcFrame = document.querySelector && document.querySelector('ga-remote-control');
@@ -8715,18 +9472,21 @@
             cw.__agyKoThoughtCleanup(fullRestore);
           }
           if (fullRestore) {
+            const ownedByKo =
+              !innerIframe.__agyRemotePromotionOwner ||
+              innerIframe.__agyRemotePromotionOwner === 'ko-thought-translator';
             remoteBridgeSessions.delete(innerIframe);
             delete innerIframe.__agyKoPromoted;
             delete innerIframe.__agyKoPromoting;
             delete innerIframe.__agyKoPromotionFailedSrc;
-            if (innerIframe.__agyRemotePromotionOwner === 'ko-thought-translator') {
+            if (ownedByKo) {
               delete innerIframe.__agyPromoted;
               delete innerIframe.__agyRemotePromotionOwner;
               delete innerIframe.__agyRemotePromotionState;
+              try {
+                delete innerIframe.src;
+              } catch (e) {}
             }
-            try {
-              delete innerIframe.src;
-            } catch (e) {}
           }
         }
       } catch (e) {}

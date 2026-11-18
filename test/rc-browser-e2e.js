@@ -628,9 +628,11 @@ async function runScenario(browserBin, scenario) {
     });
   }
   let cdp = null;
+  let browserCdp = null;
   const consoleErrors = [];
   const pageExceptions = [];
   const cspViolations = [];
+  const failedAssetUrls = [];
 
   try {
     let targets = null;
@@ -655,15 +657,33 @@ async function runScenario(browserBin, scenario) {
     await cdp.send('Runtime.enable');
     await cdp.send('Log.enable');
     await cdp.send('Network.enable');
-    await cdp.send('Fetch.enable', {
-      patterns: [
-        { urlPattern: 'https://antigravity.google.com/*' },
-        { urlPattern: 'https://raw.githubusercontent.com/*' },
-        { urlPattern: 'https://www.gstatic.com/antigravity/*' },
-        { urlPattern: 'https://antigravity.static.usercontent.goog/*' },
-        { urlPattern: 'https://translate.googleapis.com/*' },
-      ],
-    });
+
+    const fetchPatterns = [
+      { urlPattern: 'https://antigravity.google.com/*' },
+      { urlPattern: 'https://raw.githubusercontent.com/*' },
+      { urlPattern: 'https://www.gstatic.com/antigravity/*' },
+      { urlPattern: 'https://antigravity.static.usercontent.goog/*' },
+      { urlPattern: 'https://translate.googleapis.com/*' },
+    ];
+    let fetchClient = cdp;
+    try {
+      const versionInfo = await httpGetJson(`http://127.0.0.1:${port}/json/version`);
+      if (versionInfo && versionInfo.webSocketDebuggerUrl) {
+        browserCdp = new MiniCdpClient(versionInfo.webSocketDebuggerUrl);
+        await browserCdp.connect();
+        await browserCdp.send('Fetch.enable', { patterns: fetchPatterns });
+        fetchClient = browserCdp;
+      }
+    } catch {
+      if (browserCdp) {
+        browserCdp.close();
+        browserCdp = null;
+      }
+      fetchClient = cdp;
+    }
+    if (fetchClient === cdp) {
+      await cdp.send('Fetch.enable', { patterns: fetchPatterns });
+    }
 
     cdp.on('Runtime.consoleAPICalled', (params) => {
       if (params.type === 'error') {
@@ -690,7 +710,7 @@ async function runScenario(browserBin, scenario) {
     const instanceUuid = '547d3ff8-7d19-415f-a68a-9bbf28c06f6f-v2';
     const hostPageUrl = `https://antigravity.google.com/r/${instanceUuid}`;
 
-    cdp.on('Fetch.requestPaused', async (params) => {
+    fetchClient.on('Fetch.requestPaused', async (params, sessionId) => {
       const reqUrl = params.request.url;
       const requestId = params.requestId;
       try {
@@ -707,29 +727,29 @@ async function runScenario(browserBin, scenario) {
             { name: 'Content-Security-Policy', value: scenario.cspHeader1.replace(/__NONCE__/g, nonce) },
             { name: 'Content-Security-Policy', value: scenario.cspHeader2.replace(/__NONCE__/g, nonce) },
           ];
-          await cdp.send('Fetch.fulfillRequest', {
+          await fetchClient.send('Fetch.fulfillRequest', {
             requestId,
             responseCode: 200,
             responseHeaders,
             body: Buffer.from(html, 'utf8').toString('base64'),
-          });
+          }, sessionId);
           return;
         }
 
         if (reqUrl.startsWith('https://antigravity.google.com/_/GoogleAntigravity/cspreport')) {
           cspViolations.push(`CSP_REPORT:${params.request.postData || ''}`);
-          await cdp.send('Fetch.fulfillRequest', {
+          await fetchClient.send('Fetch.fulfillRequest', {
             requestId,
             responseCode: 204,
             responseHeaders: [],
             body: '',
-          });
+          }, sessionId);
           return;
         }
 
         if (reqUrl.startsWith('https://raw.githubusercontent.com/jaeseongs95/antigravity-ko-translator/')) {
           const bodyBuf = fs.readFileSync(KO_AUTOINJECT_PATH);
-          await cdp.send('Fetch.fulfillRequest', {
+          await fetchClient.send('Fetch.fulfillRequest', {
             requestId,
             responseCode: 200,
             responseHeaders: [
@@ -737,15 +757,16 @@ async function runScenario(browserBin, scenario) {
               { name: 'Access-Control-Allow-Origin', value: '*' },
             ],
             body: bodyBuf.toString('base64'),
-          });
+          }, sessionId);
           return;
         }
 
         if (reqUrl.startsWith('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/')) {
-          const bodyBuf = fs.existsSync(SIBLING_STATUSBAR_DIST)
-            ? fs.readFileSync(SIBLING_STATUSBAR_DIST)
-            : Buffer.from('window.agyStatusBar={version:"stub"};', 'utf8');
-          await cdp.send('Fetch.fulfillRequest', {
+          if (!fs.existsSync(SIBLING_STATUSBAR_DIST)) {
+            throw new Error(`Missing required real companion bundle: ${SIBLING_STATUSBAR_DIST}`);
+          }
+          const bodyBuf = fs.readFileSync(SIBLING_STATUSBAR_DIST);
+          await fetchClient.send('Fetch.fulfillRequest', {
             requestId,
             responseCode: 200,
             responseHeaders: [
@@ -753,15 +774,16 @@ async function runScenario(browserBin, scenario) {
               { name: 'Access-Control-Allow-Origin', value: '*' },
             ],
             body: bodyBuf.toString('base64'),
-          });
+          }, sessionId);
           return;
         }
 
         if (reqUrl.startsWith('https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/')) {
-          const bodyBuf = fs.existsSync(SIBLING_MCP_DIST)
-            ? fs.readFileSync(SIBLING_MCP_DIST)
-            : Buffer.from('window.agyMcpManager={version:"stub"};', 'utf8');
-          await cdp.send('Fetch.fulfillRequest', {
+          if (!fs.existsSync(SIBLING_MCP_DIST)) {
+            throw new Error(`Missing required real companion bundle: ${SIBLING_MCP_DIST}`);
+          }
+          const bodyBuf = fs.readFileSync(SIBLING_MCP_DIST);
+          await fetchClient.send('Fetch.fulfillRequest', {
             requestId,
             responseCode: 200,
             responseHeaders: [
@@ -769,7 +791,61 @@ async function runScenario(browserBin, scenario) {
               { name: 'Access-Control-Allow-Origin', value: '*' },
             ],
             body: bodyBuf.toString('base64'),
-          });
+          }, sessionId);
+          return;
+        }
+
+        if (reqUrl.startsWith('https://www.gstatic.com/antigravity/web/2.33.0/__e2e_worker.js')) {
+          const workerCode =
+            "self.addEventListener('message', function(ev) { self.postMessage({ echoed: ev.data, origin: String((self.location && self.location.origin) || '') }); });";
+          await fetchClient.send('Fetch.fulfillRequest', {
+            requestId,
+            responseCode: 200,
+            responseHeaders: [
+              { name: 'Content-Type', value: 'application/javascript; charset=utf-8' },
+              { name: 'Access-Control-Allow-Origin', value: '*' },
+            ],
+            body: Buffer.from(workerCode, 'utf8').toString('base64'),
+          }, sessionId);
+          return;
+        }
+
+        if (reqUrl.startsWith('https://www.gstatic.com/antigravity/web/2.33.0/__e2e_chunk.js')) {
+          await fetchClient.send('Fetch.fulfillRequest', {
+            requestId,
+            responseCode: 200,
+            responseHeaders: [
+              { name: 'Content-Type', value: 'application/javascript; charset=utf-8' },
+              { name: 'Access-Control-Allow-Origin', value: '*' },
+            ],
+            body: Buffer.from('window.__agyE2eSetAttrChunkLoaded = true;', 'utf8').toString('base64'),
+          }, sessionId);
+          return;
+        }
+
+        if (reqUrl.startsWith('https://www.gstatic.com/antigravity/web/2.33.0/__e2e_rel_chunk.js')) {
+          await fetchClient.send('Fetch.fulfillRequest', {
+            requestId,
+            responseCode: 200,
+            responseHeaders: [
+              { name: 'Content-Type', value: 'application/javascript; charset=utf-8' },
+              { name: 'Access-Control-Allow-Origin', value: '*' },
+            ],
+            body: Buffer.from('window.__agyE2eRelChunkLoaded = true;', 'utf8').toString('base64'),
+          }, sessionId);
+          return;
+        }
+
+        if (reqUrl.startsWith('https://www.gstatic.com/antigravity/web/2.33.0/__e2e_dyn.css')) {
+          await fetchClient.send('Fetch.fulfillRequest', {
+            requestId,
+            responseCode: 200,
+            responseHeaders: [
+              { name: 'Content-Type', value: 'text/css; charset=utf-8' },
+              { name: 'Access-Control-Allow-Origin', value: '*' },
+            ],
+            body: Buffer.from('#agy-e2e-probe { --agy-dyn-css-loaded: 1; }', 'utf8').toString('base64'),
+          }, sessionId);
           return;
         }
 
@@ -778,7 +854,7 @@ async function runScenario(browserBin, scenario) {
           const q = u.searchParams.get('q') || '';
           const koText = `[번역됨] ${q}`;
           const payload = JSON.stringify([[[koText, q, null, null, 10]], null, 'en']);
-          await cdp.send('Fetch.fulfillRequest', {
+          await fetchClient.send('Fetch.fulfillRequest', {
             requestId,
             responseCode: 200,
             responseHeaders: [
@@ -786,15 +862,15 @@ async function runScenario(browserBin, scenario) {
               { name: 'Access-Control-Allow-Origin', value: '*' },
             ],
             body: Buffer.from(payload, 'utf8').toString('base64'),
-          });
+          }, sessionId);
           return;
         }
 
         if (scenario.failCdnMainJs && reqUrl.includes('www.gstatic.com/antigravity/') && reqUrl.endsWith('/main.js')) {
-          await cdp.send('Fetch.failRequest', {
+          await fetchClient.send('Fetch.failRequest', {
             requestId,
             errorReason: 'BlockedByClient',
-          });
+          }, sessionId);
           return;
         }
 
@@ -803,6 +879,9 @@ async function runScenario(browserBin, scenario) {
           reqUrl.startsWith('https://antigravity.static.usercontent.goog/')
         ) {
           const upstream = await fetchUpstreamBuffer(reqUrl);
+          if (upstream.statusCode >= 400) {
+            failedAssetUrls.push(`${upstream.statusCode}:${reqUrl}`);
+          }
           const respHeaders = [];
           for (const [k, v] of Object.entries(upstream.headers)) {
             if (v === undefined) continue;
@@ -812,19 +891,19 @@ async function runScenario(browserBin, scenario) {
               respHeaders.push({ name: k, value: String(v) });
             }
           }
-          await cdp.send('Fetch.fulfillRequest', {
+          await fetchClient.send('Fetch.fulfillRequest', {
             requestId,
             responseCode: upstream.statusCode,
             responseHeaders: respHeaders,
             body: upstream.body.toString('base64'),
-          });
+          }, sessionId);
           return;
         }
 
-        await cdp.send('Fetch.continueRequest', { requestId });
+        await fetchClient.send('Fetch.continueRequest', { requestId }, sessionId);
       } catch (err) {
         try {
-          await cdp.send('Fetch.failRequest', { requestId, errorReason: 'Failed' });
+          await fetchClient.send('Fetch.failRequest', { requestId, errorReason: 'Failed' }, sessionId);
         } catch {}
       }
     });
@@ -877,6 +956,34 @@ async function runScenario(browserBin, scenario) {
       });
     }
 
+    if (scenario.companionFirst) {
+      // Execute real antigravity-statusbar & antigravity-mcp-manager companion bundles BEFORE ko-thought-translator
+      const injectCompanionExpr = `(() => {
+        const urls = [
+          'https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' + Date.now(),
+          'https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' + Date.now()
+        ];
+        return Promise.all(urls.map(u => fetch(u).then(r => r.text()))).then(codes => {
+          const n = [...document.querySelectorAll('script,style,link')].map(e => e.nonce || e.getAttribute('nonce')).find(Boolean);
+          const p = window.trustedTypes?.createPolicy('agy-e2e-companion-seed', { createScript: x => x });
+          for (const c of codes) {
+            const s = document.createElement('script');
+            if (n) { s.nonce = n; s.setAttribute('nonce', n); }
+            s.text = p ? p.createScript(c) : c;
+            document.head.appendChild(s);
+          }
+          return { sb: Boolean(window.agyStatusBar), mcp: Boolean(window.agyMcpManager) };
+        });
+      })()`;
+      await cdp.send('Runtime.evaluate', {
+        expression: injectCompanionExpr,
+        awaitPromise: true,
+        returnByValue: true,
+      });
+      // Give companion promoters time to hook RC prototype and promote or attach
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+
     // Execute exact README bookmarklet (or scenario override such as user's saved v1.2.39 bookmarklet) in main world
     const bookmarkletCode = scenario.customBookmarkletCode || extractBookmarkletBodyFromReadme();
     const evalBm = await cdp.send('Runtime.evaluate', {
@@ -888,10 +995,10 @@ async function runScenario(browserBin, scenario) {
       pageExceptions.push(`BookmarkletSyncException: ${evalBm.exceptionDetails.exception?.description || evalBm.exceptionDetails.text}`);
     }
 
-    // Wait up to 12s for promotion + workbench mount + localization (or observe black-screen failure)
+    // Wait up to 14s for promotion + workbench mount + companion sync + localization
     let postState = null;
     const postStart = Date.now();
-    while (Date.now() - postStart < 12000) {
+    while (Date.now() - postStart < 14000) {
       await new Promise((r) => setTimeout(r, 400));
       const res = await cdp.send('Runtime.evaluate', {
         expression: `(() => {
@@ -924,11 +1031,23 @@ async function runScenario(browserBin, scenario) {
           }
           const rect = f ? f.getBoundingClientRect() : { width: 0, height: 0 };
           const compStyle = f ? window.getComputedStyle(f) : null;
+          const hasRealStatusBar = Boolean(
+            window.agyStatusBar &&
+              window.agyStatusBar.version !== 'stub' &&
+              typeof window.agyStatusBar.registerAdapter === 'function'
+          );
+          const hasRealMcpManager = Boolean(
+            window.agyMcpManager &&
+              window.agyMcpManager.version !== 'stub' &&
+              typeof window.__agyMountMcpManager === 'function'
+          );
+          const manifest = window.__agyHostInstalledPlugins || null;
           return {
             hostLocalizerActive: window.__agyKoLocalizerActive || '',
             topBtns,
             iframeAttrSrc: f ? f.getAttribute('src') : '',
             iframePropSrc: f ? f.src : '',
+            promotionOwner: f ? (f.__agyRemotePromotionOwner || '') : '',
             dimmed: Boolean(f && f.classList.contains('dimmed')),
             opacity: compStyle ? compStyle.opacity : '',
             display: compStyle ? compStyle.display : '',
@@ -946,17 +1065,23 @@ async function runScenario(browserBin, scenario) {
             rootSampleText,
             koLocalizerActive,
             hasKoreanInChild,
+            hasRealStatusBar,
+            hasRealMcpManager,
+            manifestResolved: Boolean(manifest && manifest.resolved === true),
+            manifestHasCompanions: Boolean(manifest && manifest.hasStatusbar && manifest.hasMcpManager),
           };
         })()`,
         returnByValue: true,
       });
       postState = res.result?.value;
+      const companionsReady = !scenario.companionInstalled || (postState && postState.hasRealStatusBar && postState.hasRealMcpManager);
       if (
         postState &&
         postState.sameOriginAccessible &&
         postState.rootChildCount > 0 &&
         postState.koLocalizerActive &&
-        !postState.dimmed
+        !postState.dimmed &&
+        companionsReady
       ) {
         // Inject a synthetic English UI + Thinking block inside the promoted real workbench to verify live Korean translation!
         await cdp.send('Runtime.evaluate', {
@@ -1007,6 +1132,109 @@ async function runScenario(browserBin, scenario) {
             break;
           }
         }
+
+        if (scenario.verifyWorkerAndDynamicDom) {
+          const dynRes = await cdp.send('Runtime.evaluate', {
+            expression: `(() => {
+              const f = document.querySelector('ga-remote-control iframe');
+              const cw = f.contentWindow;
+              const cd = f.contentDocument;
+              const roundTripWorker = (arg, payload) => new Promise((resolve, reject) => {
+                const timer = setTimeout(() => reject(new Error('Worker timeout for ' + payload)), 4000);
+                try {
+                  const w = new cw.Worker(arg);
+                  w.onerror = (err) => { clearTimeout(timer); w.terminate(); reject(new Error(err?.message || 'worker error')); };
+                  w.addEventListener('message', (ev) => {
+                    clearTimeout(timer);
+                    w.terminate();
+                    resolve(ev.data);
+                  });
+                  w.postMessage(payload);
+                } catch (e) {
+                  clearTimeout(timer);
+                  reject(e);
+                }
+              });
+
+              let untrustedRejected = false;
+              try {
+                new cw.Worker('https://evil.example/untrusted.js');
+              } catch (e) {
+                untrustedRejected = e && e.name === 'TypeError';
+              }
+
+              const loadDynScript = (srcVal, flagName) => new Promise((resolve) => {
+                const s = cd.createElement('script');
+                s.onload = () => resolve(Boolean(cw[flagName]));
+                s.onerror = () => resolve(false);
+                s.setAttribute('src', srcVal);
+                cd.head.appendChild(s);
+              });
+
+              const loadDynCss = () => new Promise((resolve) => {
+                const l = cd.createElement('link');
+                l.setAttribute('rel', 'stylesheet');
+                l.onload = () => {
+                  const probeEl = cd.getElementById('agy-e2e-probe');
+                  const val = probeEl ? cw.getComputedStyle(probeEl).getPropertyValue('--agy-dyn-css-loaded').trim() : '';
+                  resolve(val === '1');
+                };
+                l.onerror = () => resolve(false);
+                l.setAttribute('href', '/web/2.33.0/__e2e_dyn.css');
+                cd.head.appendChild(l);
+              });
+
+              return Promise.all([
+                roundTripWorker('/web/2.33.0/__e2e_worker.js', 'ping-path'),
+                roundTripWorker(new cw.URL('/web/2.33.0/__e2e_worker.js', cw.location.href), 'ping-url'),
+                roundTripWorker('https://www.gstatic.com/antigravity/web/2.33.0/__e2e_worker.js', 'ping-abs'),
+                roundTripWorker('./__e2e_worker.js', 'ping-rel'),
+                loadDynScript('/web/2.33.0/__e2e_chunk.js', '__agyE2eSetAttrChunkLoaded'),
+                loadDynScript('./__e2e_rel_chunk.js', '__agyE2eRelChunkLoaded'),
+                loadDynCss(),
+              ]).then(([wPath, wUrl, wAbs, wRel, chunkAbsOk, chunkRelOk, cssOk]) => {
+                const hostStyle = document.getElementById('agy-ko-thought-style');
+                const childStyle = cd.getElementById('agy-ko-thought-style');
+                return {
+                  wPathEcho: wPath?.echoed || '',
+                  wUrlEcho: wUrl?.echoed || '',
+                  wAbsEcho: wAbs?.echoed || '',
+                  wRelEcho: wRel?.echoed || '',
+                  untrustedRejected,
+                  chunkAbsOk,
+                  chunkRelOk,
+                  cssOk,
+                  styleNoncePresent: Boolean((hostStyle && hostStyle.nonce) || (childStyle && childStyle.nonce)),
+                };
+              }).catch((err) => ({
+                error: String(err && (err.stack || err.message || err)),
+              }));
+            })()`,
+            awaitPromise: true,
+            returnByValue: true,
+          });
+          postState.dynamicChecks = dynRes.result?.value || { error: dynRes.exceptionDetails?.text || 'dynRes failed' };
+        }
+
+        if (scenario.verifyPeerLockOnHotReload) {
+          const lockRes = await cdp.send('Runtime.evaluate', {
+            expression: `(() => {
+              const rc = window.__testRcInst;
+              rc.__agySuppressAutoIframeLoad = true;
+              rc.__agySuppressAutoIframeLoadCount = 1;
+              if (typeof window.__agyKoThoughtCleanup === 'function') {
+                window.__agyKoThoughtCleanup(false);
+              }
+              const preserved = rc.__agySuppressAutoIframeLoad === true && rc.__agySuppressAutoIframeLoadCount === 1;
+              delete rc.__agySuppressAutoIframeLoad;
+              delete rc.__agySuppressAutoIframeLoadCount;
+              return preserved;
+            })()`,
+            returnByValue: true,
+          });
+          postState.hotReloadPreservedPeerLock = Boolean(lockRes.result?.value);
+        }
+
         break;
       }
       if (scenario.expectNativePreserved && Date.now() - postStart >= 2400 && postState && postState.uiReady && !postState.dimmed) {
@@ -1026,8 +1254,10 @@ async function runScenario(browserBin, scenario) {
       consoleErrors,
       pageExceptions,
       cspViolations,
+      failedAssetUrls,
     };
   } finally {
+    if (browserCdp) browserCdp.close();
     if (cdp) cdp.close();
     try { proc.kill(); } catch {}
     await new Promise((r) => setTimeout(r, 250));
@@ -1039,6 +1269,12 @@ async function runAllBrowserE2E(options = {}) {
   const browserBin = findBrowserBinary();
   if (!browserBin) {
     return { skipped: true, reason: 'No Chrome/Edge binary found on host' };
+  }
+  if (!fs.existsSync(SIBLING_STATUSBAR_DIST)) {
+    throw new Error(`Real sibling companion bundle missing: ${SIBLING_STATUSBAR_DIST}`);
+  }
+  if (!fs.existsSync(SIBLING_MCP_DIST)) {
+    throw new Error(`Real sibling companion bundle missing: ${SIBLING_MCP_DIST}`);
   }
 
   const artifactDir = options.artifactDir || null;
@@ -1052,6 +1288,7 @@ async function runAllBrowserE2E(options = {}) {
       cspHeader2: "require-trusted-types-for 'script';report-uri /_/GoogleAntigravity/cspreport",
       injectEmptyNonceScriptBeforeBookmarklet: false,
       companionInstalled: true,
+      verifyWorkerAndDynamicDom: true,
     },
     {
       name: 'S0b_legacy_v1239_saved_bookmarklet_compatibility',
@@ -1075,8 +1312,8 @@ async function runAllBrowserE2E(options = {}) {
     {
       name: 'S2a_explicit_trusted_types_allowlist_allowing_agy_ko',
       iframeUrl: 'https://antigravity.static.usercontent.goog/web/2.33.0/?iframe=true',
-      cspHeader1: "script-src 'nonce-__NONCE__' 'unsafe-inline';object-src 'none';base-uri 'self';worker-src 'self'",
-      cspHeader2: "require-trusted-types-for 'script';trusted-types angular goog#html agy-ko-translator agy-ko-translator-bm",
+      cspHeader1: "script-src 'nonce-__NONCE__' 'unsafe-inline';object-src 'none';base-uri 'self';report-uri /_/GoogleAntigravity/cspreport;worker-src 'self'",
+      cspHeader2: "require-trusted-types-for 'script';trusted-types angular goog#html agy-ko-translator agy-ko-translator-bm;report-uri /_/GoogleAntigravity/cspreport",
       injectEmptyNonceScriptBeforeBookmarklet: false,
       companionInstalled: false,
       screenshotAfterPath: artifactDir ? path.join(artifactDir, `${options.prefix || 'rc'}_s2a_after.png`) : null,
@@ -1084,8 +1321,8 @@ async function runAllBrowserE2E(options = {}) {
     {
       name: 'S2b_disallowed_trusted_types_graceful_no_black_screen',
       iframeUrl: 'https://antigravity.static.usercontent.goog/web/2.33.0/?iframe=true',
-      cspHeader1: "script-src 'nonce-__NONCE__' 'unsafe-inline';object-src 'none';base-uri 'self';worker-src 'self'",
-      cspHeader2: "require-trusted-types-for 'script';trusted-types angular",
+      cspHeader1: "script-src 'nonce-__NONCE__' 'unsafe-inline';object-src 'none';base-uri 'self';report-uri /_/GoogleAntigravity/cspreport;worker-src 'self'",
+      cspHeader2: "require-trusted-types-for 'script';trusted-types angular;report-uri /_/GoogleAntigravity/cspreport",
       injectEmptyNonceScriptBeforeBookmarklet: false,
       companionInstalled: false,
       expectNativePreserved: true,
@@ -1093,12 +1330,22 @@ async function runAllBrowserE2E(options = {}) {
     {
       name: 'S3_promotion_network_failure_clean_native_rollback_no_black_loop',
       iframeUrl: 'https://antigravity.static.usercontent.goog/web/2.33.0/?iframe=true',
-      cspHeader1: "script-src 'nonce-__NONCE__' 'unsafe-inline';object-src 'none';base-uri 'self';worker-src 'self'",
-      cspHeader2: "require-trusted-types-for 'script'",
+      cspHeader1: "script-src 'nonce-__NONCE__' 'unsafe-inline';object-src 'none';base-uri 'self';report-uri /_/GoogleAntigravity/cspreport;worker-src 'self'",
+      cspHeader2: "require-trusted-types-for 'script';report-uri /_/GoogleAntigravity/cspreport",
       failCdnMainJs: true,
       companionInstalled: false,
       expectNativePreserved: true,
       screenshotAfterPath: artifactDir ? path.join(artifactDir, `${options.prefix || 'rc'}_s3_after.png`) : null,
+    },
+    {
+      name: 'S4_companion_first_statusbar_and_mcp_coexistence_with_ko_bookmarklet',
+      iframeUrl: 'https://antigravity.static.usercontent.goog/web/2.33.0/?iframe=true',
+      cspHeader1: "script-src 'nonce-__NONCE__' 'unsafe-inline';object-src 'none';base-uri 'self';report-uri /_/GoogleAntigravity/cspreport;worker-src 'self'",
+      cspHeader2: "require-trusted-types-for 'script';report-uri /_/GoogleAntigravity/cspreport",
+      injectEmptyNonceScriptBeforeBookmarklet: false,
+      companionInstalled: true,
+      companionFirst: true,
+      verifyPeerLockOnHotReload: true,
     },
   ];
 
@@ -1110,8 +1357,8 @@ async function runAllBrowserE2E(options = {}) {
     results.push(res);
 
     const ps = res.postState || {};
-    if (sc.name.startsWith('S0') || sc.name.startsWith('S1_') || sc.name.startsWith('S2a_')) {
-      if (!ps.hostLocalizerActive) failures.push(`${sc.name}: hostLocalizerActive is empty`);
+    if (sc.name.startsWith('S0') || sc.name.startsWith('S1_') || sc.name.startsWith('S2a_') || sc.name.startsWith('S4_')) {
+      if (!ps.hostLocalizerActive && !sc.verifyPeerLockOnHotReload) failures.push(`${sc.name}: hostLocalizerActive is empty`);
       if (!ps.sameOriginAccessible) failures.push(`${sc.name}: iframe not promoted to same-origin (childHref=${ps.childHref})`);
       if (!(ps.rootChildCount > 0)) failures.push(`${sc.name}: black screen! #root childElementCount=${ps.rootChildCount}`);
       if (ps.dimmed || ps.opacity === '0') failures.push(`${sc.name}: iframe remained dimmed/invisible (dimmed=${ps.dimmed}, opacity=${ps.opacity})`);
@@ -1119,6 +1366,33 @@ async function runAllBrowserE2E(options = {}) {
       if (!ps.topBtns || !ps.topBtns.includes('앱으로 설치')) failures.push(`${sc.name}: host topbar UI not localized (${JSON.stringify(ps.topBtns)})`);
       if (!ps.probe || ps.probe.navBtnText !== '일반') failures.push(`${sc.name}: child static UI 'General' not localized (${JSON.stringify(ps.probe)})`);
       if (!ps.probe || !/[가-힣]/.test(ps.probe.thoughtText || '')) failures.push(`${sc.name}: child Thinking block not translated (${JSON.stringify(ps.probe)})`);
+      if (sc.companionInstalled) {
+        if (!ps.hasRealStatusBar) failures.push(`${sc.name}: real antigravity-statusbar bundle did not mount on window.agyStatusBar`);
+        if (!ps.hasRealMcpManager) failures.push(`${sc.name}: real antigravity-mcp-manager bundle did not mount on window.agyMcpManager`);
+        if (!ps.manifestResolved || !ps.manifestHasCompanions) {
+          failures.push(`${sc.name}: window.__agyHostInstalledPlugins manifest not populated (${JSON.stringify(ps)})`);
+        }
+      }
+      if (sc.verifyWorkerAndDynamicDom) {
+        const dc = ps.dynamicChecks || {};
+        if (
+          dc.wPathEcho !== 'ping-path' ||
+          dc.wUrlEcho !== 'ping-url' ||
+          dc.wAbsEcho !== 'ping-abs' ||
+          dc.wRelEcho !== 'ping-rel' ||
+          !dc.untrustedRejected ||
+          !dc.chunkAbsOk ||
+          !dc.chunkRelOk ||
+          !dc.cssOk ||
+          !dc.styleNoncePresent
+        ) {
+          failures.push(`${sc.name}: Worker/setAttribute/link/styleNonce checks failed: ${JSON.stringify(dc)}`);
+        }
+      }
+      if (sc.verifyPeerLockOnHotReload && !ps.hotReloadPreservedPeerLock) {
+        failures.push(`${sc.name}: __agyKoThoughtCleanup(false) clobbered peer __agySuppressAutoIframeLoadCount`);
+      }
+      if (res.failedAssetUrls.length > 0) failures.push(`${sc.name}: failed asset HTTP requests=${JSON.stringify(res.failedAssetUrls)}`);
       if (res.cspViolations.length > 0) failures.push(`${sc.name}: CSP/TrustedTypes violations=${JSON.stringify(res.cspViolations)}`);
       if (res.pageExceptions.length > 0) failures.push(`${sc.name}: uncaught exceptions=${JSON.stringify(res.pageExceptions)}`);
     } else if (sc.name.startsWith('S2b_')) {
@@ -1127,6 +1401,17 @@ async function runAllBrowserE2E(options = {}) {
       }
       if (!ps.uiReady || ps.dimmed) {
         failures.push(`${sc.name}: native workbench was disrupted under strict TrustedTypes (uiReady=${ps.uiReady}, dimmed=${ps.dimmed})`);
+      }
+      if (ps.hostLocalizerActive) {
+        failures.push(`${sc.name}: bookmarklet did not fail closed under disallowed TrustedTypes`);
+      }
+      const sinkViolations = res.cspViolations.filter((v) =>
+        /TrustedScript assignment|TrustedScriptURL assignment|"violated-directive"\s*:\s*"require-trusted-types-for"|"violated-directive"\s*:\s*"script-src/i.test(
+          v
+        )
+      );
+      if (sinkViolations.length > 0) {
+        failures.push(`${sc.name}: bookmarklet triggered plaintext TrustedScript sink violation (${JSON.stringify(sinkViolations)})`);
       }
       if (res.pageExceptions.length > 0) {
         failures.push(`${sc.name}: bookmarklet threw uncaught exception (${JSON.stringify(res.pageExceptions)})`);
@@ -1138,6 +1423,9 @@ async function runAllBrowserE2E(options = {}) {
       }
       if (!ps.uiReady || ps.dimmed) {
         failures.push(`${sc.name}: native workbench did not recover after rollback (uiReady=${ps.uiReady}, dimmed=${ps.dimmed}, onIframeLoadCalls=${ps.onIframeLoadCalls})`);
+      }
+      if (res.cspViolations.length > 0) {
+        failures.push(`${sc.name}: CSP violations during rollback=${JSON.stringify(res.cspViolations)}`);
       }
     }
   }

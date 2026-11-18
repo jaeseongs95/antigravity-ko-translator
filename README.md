@@ -34,7 +34,7 @@ Register a single bookmark on your Chrome bookmarks bar to enable Korean localiz
 3. **URL**: Copy and paste the single-line bookmarklet below and save:
 
 ```javascript
-javascript:(()=>{fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-ko-translator/main/scripts/ko_thought_autoinject.js?t='+Date.now()).then(r=>r.ok?r.text():'').then(c=>{if(!c)return;try{const s=document.createElement('script'),n=[...document.querySelectorAll('script,style,link')].map(e=>e.nonce||e.getAttribute('nonce')).find(Boolean);let u=0,p=null;for(const k of['agy-ko-translator-bm','agy-ko-'+Date.now()])try{p=window.trustedTypes?.createPolicy(k,{createScript:x=>{if(u||x!==c)throw new TypeError();u=1;return x}});if(p)break}catch{}if(n){s.nonce=n;s.setAttribute('nonce',n)}s.text=p?p.createScript(c):c;(document.head||document.documentElement).appendChild(s)}catch{}})})();
+javascript:(()=>{fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-ko-translator/main/scripts/ko_thought_autoinject.js?t='+Date.now()).then(r=>r.ok?r.text():'').then(c=>{if(!c)return;try{const s=document.createElement('script'),n=[...document.querySelectorAll('script,style,link')].map(e=>e.nonce||e.getAttribute('nonce')).find(Boolean),t=window.trustedTypes;let u=0,p=null;if(t?.createPolicy){for(const k of['agy-ko-translator-bm','agy-ko-translator'])try{p=t.createPolicy(k,{createScript:x=>{if(u||x!==c)throw new TypeError();u=1;return x}});if(p)break}catch{}if(!p)return}if(n){s.nonce=n;s.setAttribute('nonce',n)}s.text=p?p.createScript(c):c;(document.head||document.documentElement).appendChild(s)}catch{}})})();
 ```
 
 4. **How to use**:
