@@ -614,11 +614,19 @@ async function runScenario(browserBin, scenario) {
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-gpu',
+    '--disable-dev-shm-usage',
+    ...(process.platform === 'linux' ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
     '--window-size=1440,900',
     'about:blank',
   ];
 
   const proc = spawn(browserBin, chromeArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+  let chromeStderr = '';
+  if (proc.stderr) {
+    proc.stderr.on('data', (chunk) => {
+      if (chromeStderr.length < 4096) chromeStderr += chunk.toString('utf8');
+    });
+  }
   let cdp = null;
   const consoleErrors = [];
   const pageExceptions = [];
@@ -626,7 +634,10 @@ async function runScenario(browserBin, scenario) {
 
   try {
     let targets = null;
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 80; i++) {
+      if (proc.exitCode !== null) {
+        throw new Error(`Headless Chrome exited early (code=${proc.exitCode}): ${chromeStderr.trim()}`);
+      }
       try {
         targets = await httpGetJson(`http://127.0.0.1:${port}/json/list`);
         if (Array.isArray(targets) && targets.length > 0) break;
@@ -634,7 +645,7 @@ async function runScenario(browserBin, scenario) {
       await new Promise((r) => setTimeout(r, 150));
     }
     if (!targets || targets.length === 0) {
-      throw new Error('Failed to connect to headless Chrome DevTools JSON endpoint');
+      throw new Error(`Failed to connect to headless Chrome DevTools JSON endpoint: ${chromeStderr.trim()}`);
     }
     const pageTarget = targets.find((t) => t.type === 'page') || targets[0];
     cdp = new MiniCdpClient(pageTarget.webSocketDebuggerUrl);
