@@ -449,7 +449,7 @@ function buildHostShellHtml({ hostTheme = 'light', prependEmptyNonceDecoy = fals
 <body>
   <ga-remote-control id="rc-host">
     <div id="rc-frame-wrapper" class="dimmed">
-      <iframe id="rc-workbench-iframe" src="${rawSandboxSrc}"></iframe>
+      <iframe id="rc-workbench-iframe"></iframe>
     </div>
   </ga-remote-control>
   <script nonce="${HOST_NONCE}">
@@ -628,6 +628,7 @@ function buildHostShellHtml({ hostTheme = 'light', prependEmptyNonceDecoy = fals
       iframeEl.addEventListener('load', () => {
         rcInst.onIframeLoad();
       });
+      iframeEl.setAttribute('src', rawSandboxSrc);
     })();
   </script>
 </body>
