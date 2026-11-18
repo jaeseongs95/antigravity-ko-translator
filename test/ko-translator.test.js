@@ -14,7 +14,11 @@ const BUNDLE_INJECTOR_PATH = path.join(HOST_DIR, 'bundle-injector.js');
 test('modular SOLID structure and bundle assembly verification', () => {
   const { RENDERER_MODULE_FILES } = require(path.join(HOST_DIR, 'paths.js'));
   const { assembleRendererSourceFromModules } = require(BUNDLE_INJECTOR_PATH);
-  assert.equal(RENDERER_MODULE_FILES.length, 8);
+  assert.equal(RENDERER_MODULE_FILES.length, 13);
+  assert.ok(
+    !fs.existsSync(path.join(RENDERER_DIR, '08-dom-observer.js')),
+    'D-0041: monolithic 08-dom-observer.js must be removed after 13-module SOLID split'
+  );
   for (const file of RENDERER_MODULE_FILES) {
     const fullPath = path.join(RENDERER_DIR, file);
     assert.ok(fs.existsSync(fullPath), `Missing renderer module: ${file}`);
@@ -27,10 +31,10 @@ test('modular SOLID structure and bundle assembly verification', () => {
   }
 
   const bundleCode = assembleRendererSourceFromModules();
-  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v13.33';"));
+  assert.ok(bundleCode.includes("const KO_LOCALIZER_VERSION = 'v14.0';"));
   const pkgJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const pluginJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'plugin.json'), 'utf8'));
-  assert.equal(pkgJson.version, '1.2.39');
+  assert.equal(pkgJson.version, '1.3.0');
   assert.equal(pluginJson.version, pkgJson.version, 'D-0019: plugin.json version must stay synchronized with package.json');
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';"));
   assert.ok(bundleCode.includes("const DEFAULT_TRANSLATE_THINKING_ENABLED = true;"));
@@ -55,13 +59,19 @@ test('modular SOLID structure and bundle assembly verification', () => {
   assert.doesNotThrow(() => new vm.Script(bundleCode));
 });
 
-test('non-intrusion & SRP boundary enforcement across renderer modules (01, 06, 07, 08)', () => {
+test('non-intrusion & SRP boundary enforcement across renderer modules (01, 06, 07, 08..13)', () => {
   const mod01 = fs.readFileSync(path.join(RENDERER_DIR, '01-bootstrap-and-cache.js'), 'utf8');
   const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
   const mod07 = fs.readFileSync(path.join(RENDERER_DIR, '07-statusbar-adapter.js'), 'utf8');
-  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-thinking-and-triggers.js'), 'utf8');
+  const mod09 = fs.readFileSync(path.join(RENDERER_DIR, '09-static-ui-localizer.js'), 'utf8');
+  const mod10 = fs.readFileSync(path.join(RENDERER_DIR, '10-remote-security-policy.js'), 'utf8');
+  const mod11 = fs.readFileSync(path.join(RENDERER_DIR, '11-remote-companion-sync.js'), 'utf8');
+  const mod12 = fs.readFileSync(path.join(RENDERER_DIR, '12-remote-workbench-bridge.js'), 'utf8');
+  const mod13 = fs.readFileSync(path.join(RENDERER_DIR, '13-dom-observer-lifecycle.js'), 'utf8');
 
-  // 1. 01-bootstrap-and-cache.js must not touch .agy-ctx-statusbar or builtin statusbar buttons
+  // 1. 01-bootstrap-and-cache.js owns DisposableRegistry and must not touch .agy-ctx-statusbar or builtin statusbar buttons
+  assert.ok(mod01.includes('function createDisposableRegistry()'), '01-bootstrap-and-cache.js must define createDisposableRegistry');
   assert.ok(!mod01.includes('.agy-ctx-statusbar'), '01-bootstrap-and-cache.js must not query .agy-ctx-statusbar');
   assert.ok(!mod01.includes('.agy-ctx-btn'), '01-bootstrap-and-cache.js must not touch .agy-ctx-btn');
 
@@ -77,16 +87,25 @@ test('non-intrusion & SRP boundary enforcement across renderer modules (01, 06, 
   assert.ok(!mod07.includes('agy-ctx-btn'), '07-statusbar-adapter.js must not hardcode statusbar internal class names');
   assert.ok(mod07.includes("className: 'agy-ko-translator-status-btn'"), '07-statusbar-adapter.js must use its own button class token');
 
-  // 4. 08-dom-observer.js must not call registerStatusbarTranslatorAdapter inside the 16ms scheduleCoalescedScan loop
-  const coalescedMatch = mod08.match(/function scheduleCoalescedScan\(\)\s*\{[\s\S]*?\r?\n  \}/);
-  assert.ok(coalescedMatch, 'scheduleCoalescedScan must exist in 08-dom-observer.js');
+  // 4. Split modules 08..12 must preserve strict SRP boundaries (no cross-bleed of Remote Bridge into Thinking/Static UI)
+  assert.ok(!mod08.includes('bridgeRemoteControlIframe'), '08-thinking-and-triggers.js must not contain Remote Control iframe bridge');
+  assert.ok(!mod09.includes('bridgeRemoteControlIframe'), '09-static-ui-localizer.js must not contain Remote Control iframe bridge');
+  assert.ok(mod10.includes('function getTrustedPolicyForRemote()'), '10-remote-security-policy.js must own TrustedTypes policy adapter');
+  assert.ok(mod11.includes('function syncRemoteCompanionPlugins('), '11-remote-companion-sync.js must own companion plugin sync');
+  assert.ok(mod12.includes('const REMOTE_BRIDGE_STATES = Object.freeze('), '12-remote-workbench-bridge.js must own explicit RemoteWorkbenchBridge FSM');
+
+  // 5. 13-dom-observer-lifecycle.js must not call registerStatusbarTranslatorAdapter inside the 16ms scheduleCoalescedScan loop
+  const coalescedMatch = mod13.match(/function scheduleCoalescedScan\(\)\s*\{[\s\S]*?\r?\n  \}/);
+  assert.ok(coalescedMatch, 'scheduleCoalescedScan must exist in 13-dom-observer-lifecycle.js');
   assert.ok(
     !coalescedMatch[0].includes('registerStatusbarTranslatorAdapter'),
     'scheduleCoalescedScan must not repeatedly call registerStatusbarTranslatorAdapter'
   );
   assert.ok(coalescedMatch[0].includes('runFastThoughtAndTriggerScan()'), 'scheduleCoalescedScan must run fast thought/trigger scan synchronously');
   assert.ok(coalescedMatch[0].includes('}, 16)'), 'scheduleCoalescedScan must coalesce full-DOM localizeStaticUiInRoot via 16ms timer');
-  assert.ok(mod08.includes('observer.takeRecords()'), '08-dom-observer.js must flush self-induced mutation records'
+  assert.ok(
+    mod09.includes('observer.takeRecords()') && mod13.includes('observer.takeRecords()'),
+    '09-static-ui-localizer.js and 13-dom-observer-lifecycle.js must flush self-induced mutation records'
   );
 });
 
@@ -368,20 +387,25 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     signal: null,
   });
   assert.equal(fallbackOut, '리모트 세션 추론 번역 완료', 'local-llm must fall back to google-translate when local server is unreachable');
-  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
-  assert.ok(mod08.includes('__agySuppressAutoIframeLoad'), 'must guard onIframeLoad to prevent teardownProxyPort freeze');
-  assert.ok(mod08.includes('https://www.gstatic.com/antigravity'), 'must load remote iframe scripts from CSP-allowed gstatic mirror');
-  assert.ok(mod08.includes('cw.AudioWorklet.prototype.addModule'), 'must stub AudioWorklet.addModule against cross-origin CSP');
-  assert.ok(mod08.includes('runFastThoughtAndTriggerScan()'), 'must run fast thought/trigger scan without blocking on full DOM');
-  assert.ok(mod08.includes('scanTimerScheduled = true'), 'must coalesce full-DOM localizeStaticUiInRoot via 16ms timer');
-  assert.ok(mod08.includes('__JETSKI_LS_CLIENT_DECORATOR__'), 'must pre-hook __JETSKI_LS_CLIENT_DECORATOR__ on promoted Mobile Chrome iframe');
-  assert.ok(mod08.includes('height:100dvh'), 'must enforce 100dvh viewport on Mobile Chrome remote iframe');
-  assert.ok(mod08.includes("el.classList.contains('agy-mcp-server-name')"), 'must exclude .agy-mcp-server-name from static UI text node translation');
-  assert.ok(mod08.includes("el.classList.contains('agy-mcp-tool-chip')"), 'must exclude .agy-mcp-tool-chip from static UI text node translation');
-  assert.ok(mod08.includes("const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');"), 'must localize #agy-mcp-manager-modal-backdrop synchronously in fast scan');
-  assert.ok(mod08.includes("const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');"), 'must localize #agy-mcp-edit-popup-backdrop synchronously in fast scan');
-  assert.ok(mod08.includes("const mcpOAuthModal = document.getElementById('agy-mcp-oauth-connect-backdrop');"), 'must localize #agy-mcp-oauth-connect-backdrop synchronously in fast scan');
-  assert.ok(mod08.includes('mcp_manager_autoinject.js'), 'must auto-load mcp_manager_autoinject.js on Remote Control web when bookmarklet runs');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-thinking-and-triggers.js'), 'utf8');
+  const mod09 = fs.readFileSync(path.join(RENDERER_DIR, '09-static-ui-localizer.js'), 'utf8');
+  const mod10 = fs.readFileSync(path.join(RENDERER_DIR, '10-remote-security-policy.js'), 'utf8');
+  const mod11 = fs.readFileSync(path.join(RENDERER_DIR, '11-remote-companion-sync.js'), 'utf8');
+  const mod12 = fs.readFileSync(path.join(RENDERER_DIR, '12-remote-workbench-bridge.js'), 'utf8');
+  const mod13 = fs.readFileSync(path.join(RENDERER_DIR, '13-dom-observer-lifecycle.js'), 'utf8');
+  assert.ok(mod12.includes('__agySuppressAutoIframeLoad'), 'must guard onIframeLoad to prevent teardownProxyPort freeze');
+  assert.ok(mod10.includes('https://www.gstatic.com/antigravity') || mod12.includes('https://www.gstatic.com/antigravity'), 'must load remote iframe scripts from CSP-allowed gstatic mirror');
+  assert.ok(mod12.includes('cw.AudioWorklet.prototype.addModule'), 'must stub AudioWorklet.addModule against cross-origin CSP');
+  assert.ok(mod13.includes('runFastThoughtAndTriggerScan()'), 'must run fast thought/trigger scan without blocking on full DOM');
+  assert.ok(mod13.includes('scanTimerScheduled = true'), 'must coalesce full-DOM localizeStaticUiInRoot via 16ms timer');
+  assert.ok(mod12.includes('__JETSKI_LS_CLIENT_DECORATOR__'), 'must pre-hook __JETSKI_LS_CLIENT_DECORATOR__ on promoted Mobile Chrome iframe');
+  assert.ok(mod12.includes('height:100dvh'), 'must enforce 100dvh viewport on Mobile Chrome remote iframe');
+  assert.ok(mod09.includes("el.classList.contains('agy-mcp-server-name')"), 'must exclude .agy-mcp-server-name from static UI text node translation');
+  assert.ok(mod09.includes("el.classList.contains('agy-mcp-tool-chip')"), 'must exclude .agy-mcp-tool-chip from static UI text node translation');
+  assert.ok(mod13.includes("const mcpModal = document.getElementById('agy-mcp-manager-modal-backdrop');"), 'must localize #agy-mcp-manager-modal-backdrop synchronously in fast scan');
+  assert.ok(mod13.includes("const mcpEditPopup = document.getElementById('agy-mcp-edit-popup-backdrop');"), 'must localize #agy-mcp-edit-popup-backdrop synchronously in fast scan');
+  assert.ok(mod13.includes("const mcpOAuthModal = document.getElementById('agy-mcp-oauth-connect-backdrop');"), 'must localize #agy-mcp-oauth-connect-backdrop synchronously in fast scan');
+  assert.ok(mod11.includes('mcp_manager_autoinject.js'), 'must auto-load mcp_manager_autoinject.js on Remote Control web when bookmarklet runs');
   const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
   const renderTranslatorFnMatch = mod06.match(
     /function renderTranslatorSettingsContent\(container, isFullPage = false, isModal = false\)\s*\{[\s\S]*?\r?\n  \}/
@@ -993,7 +1017,7 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   let providerSetCalls = [];
   const reinjectSandbox = {
     window: {
-      __agyKoLocalizerActive: 'v13.33',
+      __agyKoLocalizerActive: 'v14.0',
       __agyKoThoughtCleanup: () => {},
       __agyRetranslateVisibleThoughts: () => {},
       __agySetShowThinking: () => {},
@@ -1191,8 +1215,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'D-0004: __agySetPretranslate must propagate to window.parent when called inside remote workbench iframe'
   );
   assert.ok(
-    mod08.includes('probeHostCompanionPluginsForRemote') && mod08.includes('info.statusbarInstalled') && mod08.includes('info.mcpManagerInstalled'),
-    'D-0006: 08-dom-observer.js must verify host companion installation before loading statusbar or mcp-manager in Remote Control web'
+    mod11.includes('probeHostCompanionPluginsForRemote') && mod11.includes('info.statusbarInstalled') && mod11.includes('info.mcpManagerInstalled'),
+    'D-0006: 11-remote-companion-sync.js must verify host companion installation before loading statusbar or mcp-manager in Remote Control web'
   );
 
   // 11. D-0007 regression checks: Remote Control Settings strings, nested __ngContext__ BFS, initial URL query preservation, and base64 ReadFile decoding
@@ -1216,18 +1240,18 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     '무엇이든 물어보세요 (@로 멘션, /로 작업 실행)'
   );
   assert.ok(
-    mod08.includes('buildInitialIframeHistoryUrl') && mod08.includes('navigateIframeToChildPath'),
+    mod12.includes('buildInitialIframeHistoryUrl') && mod12.includes('navigateIframeToChildPath'),
     'D-0007: bridgeRemoteControlIframe must preserve savedChildPath query params (?settingsOpen=true&settingsScreen=General) during same-origin promotion'
   );
   assert.ok(
-    mod08.includes('mod.getDebugNode') &&
-      mod08.includes('dbgNode?.componentInstance') &&
-      mod08.includes('\\u0275getLContext') &&
-      mod08.includes('initialConfigInFlight'),
+    mod11.includes('mod.getDebugNode') &&
+      mod11.includes('dbgNode?.componentInstance') &&
+      mod11.includes('\\u0275getLContext') &&
+      mod12.includes('initialConfigInFlight'),
     'D-0007: getRemoteControlComponentInstance must resolve Angular 19 componentInstance via getDebugNode(rcEl).componentInstance / ɵgetLContext and guard onIframeLoad against duplicate teardownProxyPort()'
   );
   assert.ok(
-    mod08.includes('decodeBase64Utf8') && mod08.includes('/exa.language_server_pb.LanguageServerService/ReadFile'),
+    mod11.includes('decodeBase64Utf8') && mod11.includes('/exa.language_server_pb.LanguageServerService/ReadFile'),
     'D-0007: probeHostCompanionPluginsForRemote must support ReadFile { uri } base64 decoding and rcInst.proxyCommand fallback'
   );
 
@@ -1242,17 +1266,17 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   );
   assert.equal(rcDictSandbox.__translateStatic('Last active: 2h ago'), '마지막 활동: 2시간 전');
   assert.ok(
-    mod08.includes('extractFromLContext') &&
-      mod08.includes('tNode.directiveStart + tNode.componentOffset') &&
-      mod08.includes('__agyBufferedInitialConfigEvent') &&
-      mod08.includes('__agyOnIframeLoadCalled') &&
-      mod08.includes('__agyWorkerPatched'),
-    'D-0010: 08-dom-observer.js must extract Angular 19 component via TNode directiveStart+componentOffset, buffer/replay INITIAL_CONFIG without calling onIframeLoad twice, and wrap relative Worker URLs'
+    mod11.includes('extractFromLContext') &&
+      mod11.includes('tNode.directiveStart + tNode.componentOffset') &&
+      mod12.includes('__agyBufferedInitialConfigEvent') &&
+      mod12.includes('__agyOnIframeLoadCalled') &&
+      mod12.includes('__agyWorkerPatched'),
+    'D-0010: 11/12 remote modules must extract Angular 19 component via TNode directiveStart+componentOffset, buffer/replay INITIAL_CONFIG without calling onIframeLoad twice, and wrap relative Worker URLs'
   );
 
   // Runtime execution proof for getRemoteControlComponentInstance with deep Angular 19 LView & TNode
-  const getRcFnMatch = mod08.match(
-    /function getRemoteControlComponentInstance\(rcEl\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  function decodeBase64Utf8/
+  const getRcFnMatch = mod11.match(
+    /const hookedRcPrototypes = new Set\(\);\r?\n\r?\n  function getRemoteControlComponentInstance\(rcEl\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  function decodeBase64Utf8/
   );
   assert.ok(getRcFnMatch, 'getRemoteControlComponentInstance must be extractable for runtime verification');
   const getRcFnCode = getRcFnMatch[0].replace(/\r?\n\r?\n  function decodeBase64Utf8$/, '');
@@ -1351,16 +1375,16 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   );
 
   // Verify syncRemoteCompanionPlugins and probeHostCompanionPluginsForRemote never throw when iframe.contentWindow is cross-origin and throws DOMException SecurityError on property read
-  const extractBlockFnsMatch = mod08.match(
-    /function findLineStartMarkerIndex\(text, marker, fromIndex = 0\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  function injectRemoteCompanionScript/
+  const extractBlockFnsMatch = mod11.match(
+    /function findLineStartMarkerIndex\(text, marker, fromIndex = 0\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  async function probeHostCompanionPluginsForRemote/
   );
   assert.ok(extractBlockFnsMatch, 'findLineStartMarkerIndex and extractCompanionBlock must be extractable');
-  const extractBlockFnsCode = extractBlockFnsMatch[0].replace(/\r?\n\r?\n  function injectRemoteCompanionScript$/, '');
-  const syncFnMatch = mod08.match(
-    /async function probeHostCompanionPluginsForRemote\(rcEl\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  function bridgeRemoteControlIframe/
+  const extractBlockFnsCode = extractBlockFnsMatch[0].replace(/\r?\n\r?\n  async function probeHostCompanionPluginsForRemote$/, '');
+  const syncFnMatch = mod11.match(
+    /async function probeHostCompanionPluginsForRemote\(rcEl\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  if \(typeof disposables/
   );
   assert.ok(syncFnMatch, 'probeHostCompanionPluginsForRemote and syncRemoteCompanionPlugins must be extractable');
-  const syncFnsCode = syncFnMatch[0].replace(/\r?\n\r?\n  function bridgeRemoteControlIframe$/, '');
+  const syncFnsCode = syncFnMatch[0].replace(/\r?\n\r?\n  if \(typeof disposables$/, '');
   const crossOriginWindow = new Proxy(
     {},
     {
@@ -1590,8 +1614,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 14. D-0013~D-0019 & KO-BUG-03/05 & KO-NEW-BUG-04/05 regression checks: session switch flicker prevention, .no-animations Web Animations suppression, 16ms FOUC elimination, worked-for latest turn guard, retranslateVisibleThoughts parent propagation, queued messages card & new strings, SKILL.md & README accuracy
   const readmeText = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
   assert.ok(
-    readmeText.includes('v13.33') && !readmeText.includes('verboseConversationSteps: true'),
-    'KO-BUG-05: README.md must reference v13.33 and must NOT claim verboseConversationSteps: true is force-enabled'
+    readmeText.includes('v14.0') && !readmeText.includes('verboseConversationSteps: true'),
+    'KO-BUG-05: README.md must reference v14.0 and must NOT claim verboseConversationSteps: true is force-enabled'
   );
   const skillMdText = fs.readFileSync(path.join(ROOT, 'skills', 'ko-thought-translator', 'SKILL.md'), 'utf8');
   assert.ok(
@@ -1605,19 +1629,19 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'D-0013: STYLE_CSS must suppress transitions on conversation-view during session switching'
   );
   assert.ok(
-    mod08.includes('STATIC_UI_SUBTREE_PRUNE_SELECTOR') &&
-      mod08.includes('CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR') &&
-      mod08.includes('[data-agy-no-translate="true"]') &&
-      mod08.includes('NodeFilter.FILTER_REJECT'),
+    mod09.includes('STATIC_UI_SUBTREE_PRUNE_SELECTOR') &&
+      mod09.includes('CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR') &&
+      mod09.includes('[data-agy-no-translate="true"]') &&
+      mod09.includes('NodeFilter.FILTER_REJECT'),
     'D-0013: localizeStaticUiInRoot and MutationObserver must prune excluded and [data-agy-no-translate="true"] subtrees'
   );
   assert.ok(
-    mod08.includes('fastScanMicrotaskScheduled') && mod08.includes('guardSessionSwitchTransitions'),
+    mod13.includes('fastScanMicrotaskScheduled') && mod13.includes('guardSessionSwitchTransitions'),
     'D-0013: scheduleCoalescedScan must deduplicate rapid synchronous mutations into a single microtask and freeze session switch transitions'
   );
   // D-0014: runFastThoughtAndTriggerScan must localize conversation-view & subagent-tab-conversation immediately in pre-paint microtask
-  const fastScanFnMatch = mod08.match(/function runFastThoughtAndTriggerScan\(\)\s*\{[\s\S]*?\r?\n  \}/);
-  assert.ok(fastScanFnMatch, 'runFastThoughtAndTriggerScan must exist in 08-dom-observer.js');
+  const fastScanFnMatch = mod13.match(/function runFastThoughtAndTriggerScan\(\)\s*\{[\s\S]*?\r?\n  \}/);
+  assert.ok(fastScanFnMatch, 'runFastThoughtAndTriggerScan must exist in 13-dom-observer-lifecycle.js');
   assert.ok(
     fastScanFnMatch[0].includes('[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"]') &&
       fastScanFnMatch[0].includes('localizeStaticUiInRoot(convEl)'),
@@ -1713,10 +1737,10 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
     'Unit test execution · 종료 코드 0'
   );
 
-  const isExcludedFnMatch = mod08.match(
+  const isExcludedFnMatch = mod09.match(
     /function isExcludedFromStaticUiLocalization\(el, forAttributes = false\)\s*\{[\s\S]*?\r?\n  \}/
   );
-  assert.ok(isExcludedFnMatch, 'isExcludedFromStaticUiLocalization must exist in 08-dom-observer.js');
+  assert.ok(isExcludedFnMatch, 'isExcludedFromStaticUiLocalization must exist in 09-static-ui-localizer.js');
   const exclSandbox = {};
   vm.runInNewContext(
     `${isExcludedFnMatch[0]}\n;globalThis.__isExcluded = isExcludedFromStaticUiLocalization;`,
@@ -1795,10 +1819,10 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
   // 1) sets data-agy-session-switching="1" on both conversation-view and subagent-tab-conversation on cascadeId change
   // 2) does NOT shorten the 650ms timer to 250ms on the next microtask when turns are already present
   // 3) arms a 250ms timer when an empty view finishes async trajectorySlice load even after >650ms (700ms)
-  const guardSwitchMatch = mod08.match(
+  const guardSwitchMatch = mod13.match(
     /let lastObservedCascadeId = null;\r?\n  let sessionSwitchFreezeTimer = null;\r?\n  let sessionSwitchFreezeUntil = 0;\r?\n\r?\n  function guardSessionSwitchTransitions\(\)\s*\{[\s\S]*?\r?\n  \}/
   );
-  assert.ok(guardSwitchMatch, 'guardSessionSwitchTransitions must exist in 08-dom-observer.js');
+  assert.ok(guardSwitchMatch, 'guardSessionSwitchTransitions must exist in 13-dom-observer-lifecycle.js');
   const convAttrs = { 'data-testid': 'conversation-view', 'data-cascade-id': 'session-alpha' };
   const subagentAttrs = { 'data-testid': 'subagent-tab-conversation', 'data-cascade-id': 'subagent-alpha' };
   let convHasTurns = true;
@@ -1920,7 +1944,8 @@ test('Remote Control web support: UserScript header, zero innerHTML (TrustedType
 
 test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Project header localization, and bilingual README contract', () => {
   const mod02 = fs.readFileSync(path.join(RENDERER_DIR, '02-static-ui-dict.js'), 'utf8');
-  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-thinking-and-triggers.js'), 'utf8');
+  const mod09 = fs.readFileSync(path.join(RENDERER_DIR, '09-static-ui-localizer.js'), 'utf8');
 
   const dictSandbox = { window: {} };
   vm.runInNewContext(`${mod02}\n;globalThis.__tr = translateStaticUiSync;`, dictSandbox);
@@ -1987,10 +2012,10 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
 
   // D-0021: CLI Project fixed system header is allowed while custom project names are excluded
   assert.equal(tr('CLI Project'), 'CLI 프로젝트');
-  const exclMatch = mod08.match(
+  const exclMatch = mod09.match(
     /const CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR =[\s\S]*?function isExcludedFromStaticUiLocalization\(el,\s*forAttributes\s*=\s*false\)\s*\{[\s\S]*?\r?\n  \}/
   );
-  assert.ok(exclMatch, 'isExcludedFromStaticUiLocalization must exist in 08-dom-observer.js');
+  assert.ok(exclMatch, 'isExcludedFromStaticUiLocalization must exist in 09-static-ui-localizer.js');
   const exclSandbox = {};
   vm.runInNewContext(`${exclMatch[0]}\n;globalThis.__isExcl = isExcludedFromStaticUiLocalization;`, exclSandbox);
   const isExcl = exclSandbox.__isExcl;
@@ -2043,8 +2068,8 @@ test('D-0020, D-0021, D-0022: Antigravity v2.29.0 static UI patterns, CLI Projec
   const readmeKo = fs.readFileSync(readmeKoPath, 'utf8');
   assert.ok(readmeEn.includes('[한국어 문서 (README.ko.md)](./README.ko.md)'), 'D-0022: English README.md must link to README.ko.md at the top');
   assert.ok(readmeKo.includes('[English Documentation (README.md)](./README.md)'), 'D-0022: Korean README.ko.md must link to README.md at the top');
-  assert.ok(readmeEn.includes('v1.2.39') && readmeEn.includes('v13.33'), 'D-0022: README.md must reflect v1.2.39 / v13.33');
-  assert.ok(readmeKo.includes('v1.2.39') && readmeKo.includes('v13.33'), 'D-0022: README.ko.md must reflect v1.2.39 / v13.33');
+  assert.ok(readmeEn.includes('v1.3.0') && readmeEn.includes('v14.0'), 'D-0022: README.md must reflect v1.3.0 / v14.0');
+  assert.ok(readmeKo.includes('v1.3.0') && readmeKo.includes('v14.0'), 'D-0022: README.ko.md must reflect v1.3.0 / v14.0');
 
   // D-0023: Verify segment.isLatest:false overrides isLastContainer:true on Lhc fiber so historical execution segments inside the latest turn container are NEVER force-expanded on session switch
   const activeHelperMatch = mod08.match(
@@ -2132,7 +2157,7 @@ test('D-0024..D-0031 comprehensive audit regressions (v1.2.35 / v13.30 & Antigra
   const mod05 = fs.readFileSync(path.join(RENDERER_DIR, '05-fiber-pretranslator.js'), 'utf8');
   const mod06 = fs.readFileSync(path.join(RENDERER_DIR, '06-settings-modal-ui.js'), 'utf8');
   const mod07 = fs.readFileSync(path.join(RENDERER_DIR, '07-statusbar-adapter.js'), 'utf8');
-  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+  const mod09 = fs.readFileSync(path.join(RENDERER_DIR, '09-static-ui-localizer.js'), 'utf8');
 
   // D-0024: README.md and README.ko.md must document '한글 번역' tab options accurately without claiming Show Thinking is inside '한글 번역' tab
   const readmeEn = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
@@ -2362,8 +2387,8 @@ test('D-0024..D-0031 comprehensive audit regressions (v1.2.35 / v13.30 & Antigra
       return widgetTranslateAttempt === 1 ? null : '네트워크 접근을 승인하시겠습니까?';
     },
   };
-  const widgetFnMatch = mod08.match(/function localizeQuestionAndPermissionWidgets\(rootNode\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  const STATIC_UI_SUBTREE_PRUNE_SELECTOR/);
-  assert.ok(widgetFnMatch, 'localizeQuestionAndPermissionWidgets must exist in 08-dom-observer.js');
+  const widgetFnMatch = mod09.match(/function localizeQuestionAndPermissionWidgets\(rootNode\)\s*\{[\s\S]*?\r?\n  \}\r?\n\r?\n  const STATIC_UI_SUBTREE_PRUNE_SELECTOR/);
+  assert.ok(widgetFnMatch, 'localizeQuestionAndPermissionWidgets must exist in 09-static-ui-localizer.js');
   const widgetFnCode = widgetFnMatch[0].replace(/\r?\n\r?\n  const STATIC_UI_SUBTREE_PRUNE_SELECTOR$/, '');
   vm.runInNewContext(`${widgetFnCode}\n;globalThis.__locWidgets = localizeQuestionAndPermissionWidgets;`, widgetRetrySandbox);
   widgetRetrySandbox.__locWidgets(widgetRoot);
@@ -2512,9 +2537,9 @@ test('D-0024..D-0031 comprehensive audit regressions (v1.2.35 / v13.30 & Antigra
       },
     },
   };
-  const locStaticMatch = mod08.match(/const CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR[\s\S]*?function doesWorkedForButtonContainThinking/);
-  assert.ok(locStaticMatch, 'localizeStaticUiInRoot section must exist in 08-dom-observer.js');
-  const locStaticSource = locStaticMatch[0].replace(/\r?\n\r?\n  function doesWorkedForButtonContainThinking$/, '');
+  const locStaticMatch = mod09.match(/const CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR[\s\S]*$/);
+  assert.ok(locStaticMatch, 'localizeStaticUiInRoot section must exist in 09-static-ui-localizer.js');
+  const locStaticSource = locStaticMatch[0];
   vm.runInNewContext(
     `${locStaticSource}\n;globalThis.__locRoot = localizeStaticUiInRoot; globalThis.__isExcl = isExcludedFromStaticUiLocalization;`,
     domObsSandbox
@@ -3014,7 +3039,7 @@ test('D-0033: clearing cache or switching providers cancels saveCacheTimer, bloc
   const mod03 = fs.readFileSync(path.join(RENDERER_DIR, '03-text-tokenizer.js'), 'utf8');
   const mod04 = fs.readFileSync(path.join(RENDERER_DIR, '04-translation-adapters.js'), 'utf8');
   const mod05 = fs.readFileSync(path.join(RENDERER_DIR, '05-fiber-pretranslator.js'), 'utf8');
-  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-thinking-and-triggers.js'), 'utf8');
 
   let resolveSlowFetch;
   const backingStore = new Map();
@@ -3319,7 +3344,7 @@ test('D-0029 & D-0034: bundled ensure_statusbar_patch.js lexical transform, NUL-
     // 4. Conjunction (&&) active check in buildImmediateEvalExpression when statusbar is active but ko-localizer is missing/outdated
     const sampleCombinedBundle = [
       'window.__agyStatusBarActive = true;',
-      "const KO_LOCALIZER_VERSION = 'v13.33';",
+      "const KO_LOCALIZER_VERSION = 'v14.0';",
       'window.__agyKoLocalizerActive = KO_LOCALIZER_VERSION;',
       'window.__agyKoThoughtCleanup = function() {};',
       'globalThis.__reinjectedCount = (globalThis.__reinjectedCount || 0) + 1;',
@@ -3337,7 +3362,7 @@ test('D-0029 & D-0034: bundled ensure_statusbar_patch.js lexical transform, NUL-
     );
     const fullWindow = {
       __agyStatusBarActive: true,
-      __agyKoLocalizerActive: 'v13.33',
+      __agyKoLocalizerActive: 'v14.0',
       __agyKoThoughtCleanup: () => {},
       document: { querySelector: () => ({ id: 'agy-ctx-statusbar' }) },
     };
@@ -3421,7 +3446,9 @@ test('D-0029 & D-0034: bundled ensure_statusbar_patch.js lexical transform, NUL-
 
 test('D-0035: Antigravity v2.32.1 Side Question body protection, Side Question & Browser Subagent thinking translation, and new UI strings', () => {
   const mod02 = fs.readFileSync(path.join(RENDERER_DIR, '02-static-ui-dict.js'), 'utf8');
-  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-dom-observer.js'), 'utf8');
+  const mod08 = fs.readFileSync(path.join(RENDERER_DIR, '08-thinking-and-triggers.js'), 'utf8');
+  const mod09 = fs.readFileSync(path.join(RENDERER_DIR, '09-static-ui-localizer.js'), 'utf8');
+  const mod13 = fs.readFileSync(path.join(RENDERER_DIR, '13-dom-observer-lifecycle.js'), 'utf8');
 
   const dictSandbox = {};
   vm.runInNewContext(`${mod02}\n;globalThis.__tr = translateStaticUiSync;`, dictSandbox);
@@ -3439,8 +3466,8 @@ test('D-0035: Antigravity v2.32.1 Side Question body protection, Side Question &
   assert.equal(dictSandbox.__tr('Minimize side question'), '사이드 질문 최소화');
   assert.equal(dictSandbox.__tr('Delete side question'), '사이드 질문 삭제');
 
-  const locStaticMatch = mod08.match(/const CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR[\s\S]*?function doesWorkedForButtonContainThinking/);
-  const locStaticSource = locStaticMatch[0].replace(/\r?\n\r?\n  function doesWorkedForButtonContainThinking$/, '');
+  const locStaticMatch = mod09.match(/const CUSTOM_NO_TRANSLATE_SUBTREE_SELECTOR[\s\S]*$/);
+  const locStaticSource = locStaticMatch[0];
   const exclSandbox = {
     NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3 },
     Node: { TEXT_NODE: 3 },
@@ -3500,23 +3527,23 @@ test('D-0035: Antigravity v2.32.1 Side Question body protection, Side Question &
   assert.equal(exclSandbox.__isExcl(sqToolStatusSpan, false), false, 'D-0035: Side Question tool status badge must localize');
 
   assert.ok(
-    mod08.includes('side-question-tab-conversation'),
+    mod13.includes('side-question-tab-conversation'),
     'D-0035: side-question-tab-conversation must be included in transition freeze and fast conversation scan'
   );
   assert.ok(
-    mod08.includes('browser-subagent-thinking'),
+    mod08.includes('browser-subagent-thinking') && mod09.includes('browser-subagent-thinking'),
     'D-0035: browser-subagent-thinking live reasoning text must be handled by dynamic thought translation'
   );
   assert.ok(
-    mod08.includes('side-question-answer'),
+    mod08.includes('side-question-answer') && mod09.includes('side-question-answer'),
     'D-0035: Side Question answer markdown body must be protected while its g1 thinking blocks are translated'
   );
 
   // Runtime execution proof for guardSessionSwitchTransitions on side-question-tab-conversation
-  const guardMatch = mod08.match(
+  const guardMatch = mod13.match(
     /function guardSessionSwitchTransitions\(\)\s*\{[\s\S]*?\n  \}\r?\n\r?\n  function /
   );
-  assert.ok(guardMatch, 'D-0035: guardSessionSwitchTransitions must exist in 08-dom-observer.js');
+  assert.ok(guardMatch, 'D-0035: guardSessionSwitchTransitions must exist in 13-dom-observer-lifecycle.js');
   const guardFnSrc = guardMatch[0].replace(/\r?\n\r?\n  function $/, '');
   const sqAttrs = new Map([
     ['data-testid', 'side-question-tab-conversation'],
@@ -4850,7 +4877,7 @@ test(
     };
     activeIframe = validIframe;
     winObj.__agyForceRescanAll();
-    assert.equal(validIframe.__agyKoPromoted, 'v13.33', 'trusted Antigravity iframe must begin promotion');
+    assert.equal(validIframe.__agyKoPromoted, 'v14.0', 'trusted Antigravity iframe must begin promotion');
     assert.equal(rcInst.__agySuppressAutoIframeLoad, true);
 
     const loadListener = validIframe._listeners.find((l) => l.type === 'load');
@@ -5561,5 +5588,276 @@ test(
     assert.equal(missingPatcherRes.report.pluginEnabled, false);
     assert.equal(missingPatcherRes.report.pretranslateEnabled, true);
     assert.equal(missingPatcherRes.report.translationProvider, 'local-llm');
+  });
+
+  await t.test('11. [D-0041] 13-module SOLID DisposableRegistry chained method hooks, zero-arg cd.open/cd.close URL promotion before replaceState, FSM re-entrancy lock, ROLLED_BACK terminal state, and EXTERNAL_PROMOTED passive attach', () => {
+    const mod01 = fs.readFileSync(path.join(RENDERER_DIR, '01-bootstrap-and-cache.js'), 'utf8');
+    const { assembleRendererSourceFromModules } = require(BUNDLE_INJECTOR_PATH);
+    const bundleCode = assembleRendererSourceFromModules();
+
+    // (11a) DisposableRegistry LIFO disposal + non-destructive chained registerMethodHook when peer plugin wraps after us
+    const regMatch = mod01.match(/function createDisposableRegistry\(\)\s*\{[\s\S]*?\r?\n  \}/);
+    assert.ok(regMatch, 'D-0041: createDisposableRegistry must exist in 01-bootstrap-and-cache.js');
+    const regSandbox = {};
+    vm.runInNewContext(`${regMatch[0]}\n;globalThis.__makeReg = createDisposableRegistry;`, regSandbox);
+    const reg = regSandbox.__makeReg();
+    const lifoOrder = [];
+    reg.register(() => lifoOrder.push('first'));
+    reg.register(() => lifoOrder.push('second'));
+
+    const callTrace = [];
+    const peerTarget = {
+      onIframeLoad(arg) {
+        callTrace.push(`orig:${arg}`);
+        return `base:${arg}`;
+      },
+    };
+    reg.registerMethodHook(peerTarget, 'onIframeLoad', (orig) => function (arg) {
+      callTrace.push(`ko:${arg}`);
+      return orig.call(this, arg);
+    });
+    // Simulate peer plugin (mcp-manager / statusbar) wrapping peerTarget.onIframeLoad AFTER ko-thought-translator
+    const wrappedAfterKo = peerTarget.onIframeLoad;
+    peerTarget.onIframeLoad = function peerWrapper(arg) {
+      callTrace.push(`peer:${arg}`);
+      return wrappedAfterKo.call(this, arg);
+    };
+    assert.equal(peerTarget.onIframeLoad('t1'), 'base:t1');
+    assert.deepEqual(callTrace, ['peer:t1', 'ko:t1', 'orig:t1']);
+
+    // Disposing ko-thought-translator MUST bypass ko's hook in-place WITHOUT clobbering peerWrapper!
+    reg.disposeAll();
+    assert.deepEqual(lifoOrder, ['second', 'first'], 'D-0041: DisposableRegistry must dispose in LIFO order');
+    callTrace.length = 0;
+    assert.equal(peerTarget.onIframeLoad('t2'), 'base:t2');
+    assert.deepEqual(
+      callTrace,
+      ['peer:t2', 'orig:t2'],
+      'D-0041: disposing registerMethodHook must preserve outer peer plugin wrapper while bypassing disposed ko hook'
+    );
+
+    // (11b) RemoteWorkbenchBridge FSM invariants:
+    // - zero-arg cd.open() -> cd.close() transitions cw.location.href from about:blank BEFORE cw.history.replaceState()
+    // - re-entrant scanAll() while PROMOTING_BLANK / BOOTING_WORKBENCH does not double-trigger promotion
+    // - ROLLED_BACK terminal lock on failedSrc prevents infinite black-screen retry loops
+    // - EXTERNAL_PROMOTED passive attach when iframe.__agyRemotePromotionOwner === 'mcp-manager'
+    const makeEl = (tag) => {
+      const attrs = new Map();
+      const listeners = [];
+      const el = {
+        nodeType: 1,
+        tagName: String(tag || 'DIV').toUpperCase(),
+        id: '',
+        className: '',
+        textContent: '',
+        nonce: '',
+        src: '',
+        href: '',
+        rel: '',
+        async: true,
+        onload: null,
+        onerror: null,
+        style: {},
+        children: [],
+        childNodes: [],
+        classList: { add() {}, remove() {}, contains: () => false },
+        getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+        setAttribute: (k, v) => {
+          attrs.set(k, String(v));
+          if (k === 'id') el.id = String(v);
+          if (k === 'src') el.src = String(v);
+        },
+        removeAttribute: (k) => attrs.delete(k),
+        appendChild(ch) {
+          el.children.push(ch);
+          el.childNodes.push(ch);
+          return ch;
+        },
+        remove() {},
+        closest: () => null,
+        querySelector: () => null,
+        querySelectorAll: () => [],
+        addEventListener(type, fn) {
+          listeners.push({ type, fn });
+        },
+        removeEventListener() {},
+        _listeners: listeners,
+      };
+      return el;
+    };
+
+    const origCdnSrc = 'https://antigravity.static.usercontent.goog/web/2.33.0/?iframe=true';
+    let liveSrc = origCdnSrc;
+    let blankAssignCount = 0;
+    let cdOpenCalled = false;
+    let cdCloseCalled = false;
+    let replaceStateHrefAtCall = null;
+
+    class FakeFrame {}
+    const frameHead = makeEl('HEAD');
+    const frameBody = makeEl('BODY');
+    const frameDoc = {
+      documentElement: makeEl('HTML'),
+      head: frameHead,
+      body: frameBody,
+      readyState: 'complete',
+      open(...args) {
+        assert.equal(args.length, 0, 'D-0041: cd.open() must be invoked with 0 arguments (0 TrustedHTML sinks)');
+        cdOpenCalled = true;
+      },
+      close() {
+        if (cdOpenCalled) {
+          frameWin.location.href = 'https://antigravity.google.com/r/session-v2';
+        }
+        cdCloseCalled = true;
+      },
+      createElement: (t) => makeEl(t),
+      createTreeWalker: () => ({ nextNode: () => null }),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      getElementById: (id) => frameBody.children.find((c) => c.id === id) || null,
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+    const frameWin = {
+      location: { origin: 'https://antigravity.google.com', href: 'about:blank' },
+      document: frameDoc,
+      navigator: { userAgent: 'Mozilla/5.0' },
+      history: {
+        replaceState(_st, _t, nextUrl) {
+          replaceStateHrefAtCall = frameWin.location.href;
+          if (!frameWin.location.href.startsWith('https://antigravity.google.com/')) {
+            const err = new Error("Failed to execute 'replaceState' on 'History': cannot be created in a document with origin 'https://antigravity.google.com' and URL 'about:blank'.");
+            err.name = 'SecurityError';
+            throw err;
+          }
+          frameWin.location.href = new URL(nextUrl, frameWin.location.href).href;
+        },
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      Worker: function W(u) { this.url = u; },
+      Blob: class B {},
+      URL: { createObjectURL: () => 'blob:https://antigravity.google.com/w-1', revokeObjectURL: () => {} },
+      MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } },
+      Node: { TEXT_NODE: 3, ELEMENT_NODE: 1 },
+      NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4 },
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    };
+
+    const fsmIframe = makeEl('IFRAME');
+    fsmIframe.setAttribute('src', origCdnSrc);
+    Object.defineProperty(FakeFrame.prototype, 'src', {
+      configurable: true,
+      get: () => liveSrc,
+      set(v) {
+        liveSrc = String(v);
+        if (this === fsmIframe && v === 'about:blank') {
+          blankAssignCount++;
+          fsmIframe.contentWindow = frameWin;
+          fsmIframe.contentDocument = frameDoc;
+        }
+      },
+    });
+    Object.setPrototypeOf(fsmIframe, FakeFrame.prototype);
+    fsmIframe.contentWindow = null;
+    fsmIframe.contentDocument = null;
+
+    let activeFrame = fsmIframe;
+    const rcEl = { querySelector: (s) => (s === 'iframe' ? activeFrame : null) };
+    const rcInst = { destroyed: false, proxyCommand: async () => null, onIframeLoad: () => Promise.resolve() };
+    const hostDoc = {
+      body: makeEl('BODY'),
+      head: makeEl('HEAD'),
+      documentElement: makeEl('HTML'),
+      createElement: (t) => makeEl(t),
+      createTreeWalker: () => ({ nextNode: () => null }),
+      getElementById: () => null,
+      querySelector: (s) => (s === 'ga-remote-control' ? rcEl : null),
+      querySelectorAll: () => [],
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    const hostWin = {
+      location: {
+        hostname: 'antigravity.google.com',
+        protocol: 'https:',
+        origin: 'https://antigravity.google.com',
+        href: 'https://antigravity.google.com/r/session-v2',
+        search: '',
+      },
+      document: hostDoc,
+      ng: { getComponent: () => rcInst },
+      HTMLIFrameElement: FakeFrame,
+      MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } },
+      Node: { TEXT_NODE: 3, ELEMENT_NODE: 1 },
+      NodeFilter: { SHOW_ELEMENT: 1, SHOW_TEXT: 4 },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    };
+
+    vm.runInNewContext(bundleCode, {
+      window: hostWin,
+      document: hostDoc,
+      URL,
+      URLSearchParams,
+      HTMLIFrameElement: FakeFrame,
+      setTimeout: () => 1,
+      clearTimeout: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+    });
+
+    assert.equal(fsmIframe.__agyRemotePromotionState, 'promoting');
+    assert.equal(fsmIframe.__agyRemotePromotionOwner, 'ko-thought-translator');
+    assert.equal(blankAssignCount, 1);
+    // Re-entrant rescan while PROMOTING_BLANK must NOT re-assign about:blank
+    hostWin.__agyForceRescanAll();
+    hostWin.__agyForceRescanAll();
+    assert.equal(blankAssignCount, 1, 'D-0041: re-entrant scanAll during PROMOTING_BLANK must not re-assign iframe.src');
+
+    const loadHandler = fsmIframe._listeners.find((l) => l.type === 'load');
+    loadHandler.fn();
+    assert.equal(cdOpenCalled && cdCloseCalled, true, 'D-0041: zero-arg cd.open() and cd.close() must execute on blank load');
+    assert.equal(
+      replaceStateHrefAtCall,
+      'https://antigravity.google.com/r/session-v2',
+      'D-0041: cw.location.href must already be promoted from about:blank before cw.history.replaceState runs'
+    );
+    assert.equal(fsmIframe.__agyKoPromoting, true);
+
+    // Simulate main.js network failure -> ROLLED_BACK terminal lock on origCdnSrc
+    const mainScript = frameHead.children.find((c) => c.tagName === 'SCRIPT' && String(c.src).endsWith('/main.js'));
+    mainScript.onerror();
+    assert.equal(fsmIframe.__agyKoPromotionFailedSrc, origCdnSrc);
+    assert.equal(Boolean(fsmIframe.__agyKoPromoting), false);
+    assert.equal(liveSrc, origCdnSrc);
+    // Subsequent rescans on the same failedSrc MUST stay in ROLLED_BACK (zero infinite black-screen retry loop!)
+    hostWin.__agyForceRescanAll();
+    assert.equal(blankAssignCount, 1, 'D-0041: ROLLED_BACK state must block retry loops on the same failedSrc');
+
+    // Switch to an iframe already promoted by peer plugin (mcp-manager) -> EXTERNAL_PROMOTED passive attach!
+    const peerPromotedFrame = makeEl('IFRAME');
+    peerPromotedFrame.__agyRemotePromotionOwner = 'mcp-manager';
+    peerPromotedFrame.__agyRemotePromotionState = 'ready';
+    frameWin.__agyMainBooted = true;
+    peerPromotedFrame.contentWindow = frameWin;
+    peerPromotedFrame.contentDocument = frameDoc;
+    activeFrame = peerPromotedFrame;
+    hostWin.__agyForceRescanAll();
+    assert.equal(
+      peerPromotedFrame.__agyRemotePromotionOwner,
+      'mcp-manager',
+      'D-0041: iframe owned by peer plugin (__agyRemotePromotionOwner="mcp-manager") must preserve peer owner without re-promoting'
+    );
+    assert.equal(blankAssignCount, 1, 'D-0041: EXTERNAL_PROMOTED must never re-assign iframe.src to about:blank');
+    assert.ok(frameWin.__agyKoLocalizerActive === 'v14.0', 'D-0041: EXTERNAL_PROMOTED must passively inject localizer into peer-promoted child frame');
   });
 });

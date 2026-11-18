@@ -2,7 +2,7 @@
 
 > 🌐 **Language**: [English Documentation (README.md)](./README.md) | **한국어**
 
-Antigravity 2.0 데스크톱 앱과 **원격 제어(Remote Control) 웹·모바일 브라우저(`https://antigravity.google.com/r/...`)**에서 영어로 스트리밍되는 **Thinking(추론 과정) 본문**(사이드 질문 추론 및 브라우저 서브에이전트 실시간 추론 포함), **작업 단계 요약(`Worked for ...`)**, **앱 전체 정적 UI 메뉴·설정·위젯**을 실시간 한국어로 자동 전환하는 플러그인입니다 (`v1.2.39` / `v13.33`).
+Antigravity 2.0 데스크톱 앱과 **원격 제어(Remote Control) 웹·모바일 브라우저(`https://antigravity.google.com/r/...`)**에서 영어로 스트리밍되는 **Thinking(추론 과정) 본문**(사이드 질문 추론 및 브라우저 서브에이전트 실시간 추론 포함), **작업 단계 요약(`Worked for ...`)**, **앱 전체 정적 UI 메뉴·설정·위젯**을 실시간 한국어로 자동 전환하는 플러그인입니다 (`v1.3.0` / `v14.0`).
 
 ---
 
@@ -34,7 +34,7 @@ Antigravity 2.0 데스크톱 앱과 **원격 제어(Remote Control) 웹·모바�
 3. **URL(주소)**: 아래 한 줄 코드를 그대로 복사해 붙여넣고 저장합니다.
 
 ```javascript
-javascript:(()=>{fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-ko-translator/main/scripts/ko_thought_autoinject.js?t='+Date.now()).then(r=>r.text()).then(c=>{const s=document.createElement('script'),n=document.querySelector('script[nonce]')?.nonce,p=window.trustedTypes?.createPolicy('agy-ko-'+Date.now(),{createScript:x=>x});if(n)s.nonce=n;s.text=p?p.createScript(c):c;document.head.appendChild(s)})})();
+javascript:(()=>{fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-ko-translator/main/scripts/ko_thought_autoinject.js?t='+Date.now()).then(r=>r.ok?r.text():'').then(c=>{if(!c)return;try{const s=document.createElement('script'),n=[...document.querySelectorAll('script,style,link')].map(e=>e.nonce||e.getAttribute('nonce')).find(Boolean);let u=0,p=null;for(const k of['agy-ko-translator-bm','agy-ko-'+Date.now()])try{p=window.trustedTypes?.createPolicy(k,{createScript:x=>{if(u||x!==c)throw new TypeError();u=1;return x}});if(p)break}catch{}if(n){s.nonce=n;s.setAttribute('nonce',n)}s.text=p?p.createScript(c):c;(document.head||document.documentElement).appendChild(s)}catch{}})})();
 ```
 
 4. **사용 방법**:
@@ -134,14 +134,19 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 ## 6. 모듈 구조 (SOLID Architecture)
 
 - **렌더러 계층 (`scripts/renderer/`)**:
-  - `01-bootstrap-and-cache.js`: 버전 가드(`v13.33`), `remove-conversation-history: false`(`대화 기록` 메뉴) 자동 활성화, 네이티브 `verboseConversationSteps`(`대화 단계 표시: 기본값/상세히`) 설정 읽기 전용 조회, 비활성화 시 DOM 원본 복원, 세대(epoch) 가드 기반 번역 캐시(`memCache`/`localStorage`) 관리
+  - `01-bootstrap-and-cache.js`: 버전 가드(`v14.0`), `DisposableRegistry` LIFO 자원 생명주기 관리(`register`, `registerInterval`, `registerTimeout`, `registerEvent`, `registerMethodHook`, `registerWindowGlobal`), `remove-conversation-history: false`(`대화 기록` 메뉴) 자동 활성화, 네이티브 `verboseConversationSteps`(`대화 단계 표시: 기본값/상세히`) 설정 읽기 전용 조회, 비활성화 시 DOM 원본 복원, 세대(epoch) 가드 기반 번역 캐시(`memCache`/`localStorage`) 관리
   - `02-static-ui-dict.js`: 0ms 정적 UI 한국어 사전(`STATIC_UI_MAP`) 및 동기 패턴 매처
   - `03-text-tokenizer.js`: 코드(`⟦C0⟧`)·식별자/인용구(`⟦T0⟧`) 보호 토크나이저, 조사 교정, 마크다운 세그먼트 추출
   - `04-translation-adapters.js`: Port & Adapter 번역 엔진(`local-llm`, `google-translate`, 커스텀 어댑터) 및 동시성/취소 큐
   - `05-fiber-pretranslator.js`: 영구 설정 로드 및 React Fiber 백그라운드 사전 번역기
   - `06-settings-modal-ui.js`: 스타일시트, Antigravity 2.0 네이티브 설정 모달(`.settings-modal-container`) 및 빠른 설정 모달(`#agy-ko-translator-modal`) UI 통합
   - `07-statusbar-adapter.js`: `antigravity-statusbar` `StatusBarAdapter` (`window.agyStatusBar.registerAdapter` / `unregisterAdapter` / `updateAll`) 순수 어댑터 브릿지
-  - `08-dom-observer.js`: 원격 제어 `<ga-remote-control>`(`getDebugNode(rcEl).componentInstance`) 동일 출처 `hubFrame` 브릿지, 호스트 동반 플러그인 조건부 동기화, 스트리밍 Thinking 블록 렌더러, 정적 UI TreeWalker 및 `MutationObserver` 생명주기 관리
+  - `08-thinking-and-triggers.js`: 스트리밍 Thinking 블록 렌더러(`.cursor-edit`, 사이드 질문 추론, 브라우저 서브에이전트 실시간 추론), 활성/최신 턴 React Fiber·DOM 판별기 및 비파괴 접이식 트리거 라벨 처리
+  - `09-static-ui-localizer.js`: 번역 제외 정책, 속성(`placeholder`, `title`, `aria-label`) 로컬라이저, `ask_question`·권한 위젯 동적 번역 및 0ms `TreeWalker` 정적 UI 한글화
+  - `10-remote-security-policy.js`: 원격 제어 허용 출처·스크립트 URL 검증, 자체 생성 Worker Blob URL 레지스트리, 비공백 CSP `nonce` 해석 및 1회용 토큰 기반 `TrustedTypes` 보안 포트
+  - `11-remote-companion-sync.js`: Angular 19 `<ga-remote-control>` 컴포넌트 탐색 어댑터(`getDebugNode` / `ɵgetLContext` / `LView` `TNode`) 및 호스트 동반 플러그인(`antigravity-statusbar` / `antigravity-mcp-manager`) 조건부 동기화
+  - `12-remote-workbench-bridge.js`: `WeakMap` 기반 유한 상태 기계(`IDLE -> PREFLIGHT -> PROMOTING_BLANK -> BOOTING_WORKBENCH -> READY | ROLLED_BACK | EXTERNAL_PROMOTED`)를 통한 동일 출처 `hubFrame` 승격, WHATWG `cd.open(); cd.close();` URL 상속, `INITIAL_CONFIG` `MessagePort` 버퍼·리플레이 및 다중 플러그인 승격 공존 제어
+  - `13-dom-observer-lifecycle.js`: 세션 전환 플리커 억제 가드, 고속 마이크로태스크·16ms 병합 `MutationObserver` 스케줄러, 주기적 재스캔 및 결정론적 `DisposableRegistry` 정리 생명주기
 - **호스트 계층 (`scripts/host/` & `scripts/ensure_ko_thought_patch.js`)**:
   - `paths.js`: 호스트 경로, 배포 미러(`scripts/`, `dist/`, `plugins/`, `skills/`) 및 환경 상수
   - `ensure_statusbar_patch.js`: 단독 설치 환경을 위한 내장 `app.asar` 및 Live CDP 패처 폴백

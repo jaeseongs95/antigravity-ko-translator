@@ -1,6 +1,6 @@
 // Module: 01-bootstrap-and-cache.js
-// Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.33';
+// Responsibility: Version guard, DisposableRegistry resource lifecycle, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
+  const KO_LOCALIZER_VERSION = 'v14.0';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -11,6 +11,115 @@
   const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';
   const PROVIDER_STORAGE_KEY = 'agy-ko-thought-provider';
   let disposed = false;
+
+  function createDisposableRegistry() {
+    const stack = [];
+    const windowGlobals = new Set();
+
+    function register(fn) {
+      if (typeof fn === 'function') stack.push(fn);
+      return fn;
+    }
+
+    function registerInterval(id) {
+      if (id !== null && id !== undefined) {
+        stack.push(() => {
+          try {
+            clearInterval(id);
+          } catch (e) {}
+        });
+      }
+      return id;
+    }
+
+    function registerTimeout(id) {
+      if (id !== null && id !== undefined) {
+        stack.push(() => {
+          try {
+            clearTimeout(id);
+          } catch (e) {}
+        });
+      }
+      return id;
+    }
+
+    function registerEvent(target, type, listener, options) {
+      if (!target || typeof target.addEventListener !== 'function' || typeof listener !== 'function') {
+        return () => {};
+      }
+      target.addEventListener(type, listener, options);
+      const off = () => {
+        try {
+          if (typeof target.removeEventListener === 'function') {
+            target.removeEventListener(type, listener, options);
+          }
+        } catch (e) {}
+      };
+      stack.push(off);
+      return off;
+    }
+
+    function registerMethodHook(target, methodName, createWrapper) {
+      if (!target || (typeof target !== 'object' && typeof target !== 'function')) return () => {};
+      const prevFn = target[methodName];
+      if (typeof prevFn !== 'function' || typeof createWrapper !== 'function') return () => {};
+      let active = true;
+      const customFn = createWrapper(prevFn);
+      const wrappedFn = function (...args) {
+        if (!active) return prevFn.apply(this, args);
+        return customFn.apply(this, args);
+      };
+      target[methodName] = wrappedFn;
+      const unhook = () => {
+        if (!active) return;
+        active = false;
+        try {
+          if (target[methodName] === wrappedFn) {
+            target[methodName] = prevFn;
+          }
+        } catch (e) {}
+      };
+      stack.push(unhook);
+      return unhook;
+    }
+
+    function registerWindowGlobal(propName) {
+      if (propName && typeof propName === 'string') {
+        windowGlobals.add(propName);
+      }
+    }
+
+    function disposeAll(fullRestore = false) {
+      while (stack.length > 0) {
+        const fn = stack.pop();
+        try {
+          fn(Boolean(fullRestore));
+        } catch (e) {}
+      }
+      if (fullRestore && window) {
+        for (const prop of windowGlobals) {
+          try {
+            delete window[prop];
+          } catch (e) {}
+        }
+        windowGlobals.clear();
+      }
+    }
+
+    return {
+      register,
+      registerInterval,
+      registerTimeout,
+      registerEvent,
+      registerMethodHook,
+      registerWindowGlobal,
+      disposeAll,
+      get size() {
+        return stack.length;
+      },
+    };
+  }
+  const disposables = createDisposableRegistry();
 
   let cachedReactFiberKey = null;
   let cachedReactContainerKey = null;

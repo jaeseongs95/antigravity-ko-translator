@@ -2,7 +2,7 @@
 
 > 🌐 **Language**: **English** | [한국어 문서 (README.ko.md)](./README.ko.md)
 
-Real-time Korean localization plugin for the Antigravity 2.0 desktop app and **Remote Control web/mobile browser (`https://antigravity.google.com/r/...`)** (`v1.2.39` / `v13.33`). Automatically translates streaming **Thinking blocks** (including Side Question reasoning & Browser Subagent live thoughts), **step progress summaries (`Worked for ...`)**, **conversation navigator & subagent/cron statuses**, and **static UI menus, settings, and widgets** into natural Korean with zero-latency static dictionary lookup and Port & Adapter translation engines.
+Real-time Korean localization plugin for the Antigravity 2.0 desktop app and **Remote Control web/mobile browser (`https://antigravity.google.com/r/...`)** (`v1.3.0` / `v14.0`). Automatically translates streaming **Thinking blocks** (including Side Question reasoning & Browser Subagent live thoughts), **step progress summaries (`Worked for ...`)**, **conversation navigator & subagent/cron statuses**, and **static UI menus, settings, and widgets** into natural Korean with zero-latency static dictionary lookup and Port & Adapter translation engines.
 
 ---
 
@@ -34,7 +34,7 @@ Register a single bookmark on your Chrome bookmarks bar to enable Korean localiz
 3. **URL**: Copy and paste the single-line bookmarklet below and save:
 
 ```javascript
-javascript:(()=>{fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-ko-translator/main/scripts/ko_thought_autoinject.js?t='+Date.now()).then(r=>r.text()).then(c=>{const s=document.createElement('script'),n=document.querySelector('script[nonce]')?.nonce,p=window.trustedTypes?.createPolicy('agy-ko-'+Date.now(),{createScript:x=>x});if(n)s.nonce=n;s.text=p?p.createScript(c):c;document.head.appendChild(s)})})();
+javascript:(()=>{fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-ko-translator/main/scripts/ko_thought_autoinject.js?t='+Date.now()).then(r=>r.ok?r.text():'').then(c=>{if(!c)return;try{const s=document.createElement('script'),n=[...document.querySelectorAll('script,style,link')].map(e=>e.nonce||e.getAttribute('nonce')).find(Boolean);let u=0,p=null;for(const k of['agy-ko-translator-bm','agy-ko-'+Date.now()])try{p=window.trustedTypes?.createPolicy(k,{createScript:x=>{if(u||x!==c)throw new TypeError();u=1;return x}});if(p)break}catch{}if(n){s.nonce=n;s.setAttribute('nonce',n)}s.text=p?p.createScript(c):c;(document.head||document.documentElement).appendChild(s)}catch{}})})();
 ```
 
 4. **How to use**:
@@ -134,14 +134,19 @@ node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_pa
 ## 6. Module Architecture (SOLID)
 
 - **Renderer Layer (`scripts/renderer/`)**:
-  - `01-bootstrap-and-cache.js`: Version guard (`v13.33`), automatic activation of `remove-conversation-history: false` (`대화 기록` menu), read-only inspection of native `verboseConversationSteps`, full DOM restoration on disable, and epoch-guarded translation cache (`memCache` / `localStorage`) persistence.
+  - `01-bootstrap-and-cache.js`: Version guard (`v14.0`), `DisposableRegistry` LIFO resource lifecycle (`register`, `registerInterval`, `registerTimeout`, `registerEvent`, `registerMethodHook`, `registerWindowGlobal`), automatic activation of `remove-conversation-history: false` (`대화 기록` menu), read-only inspection of native `verboseConversationSteps`, full DOM restoration on disable, and epoch-guarded translation cache (`memCache` / `localStorage`) persistence.
   - `02-static-ui-dict.js`: 0ms static UI Korean dictionary (`STATIC_UI_MAP`) and synchronous pattern matcher (`matchStaticUiPatternUncached`).
   - `03-text-tokenizer.js`: Code (`⟦C0⟧`) and identifier/quote (`⟦T0⟧`) protective tokenizer, Korean postposition fixer, and Markdown segment extractor.
   - `04-translation-adapters.js`: Port & Adapter translation engine (`local-llm`, `google-translate`, custom adapters) with concurrency & cancellation queues.
   - `05-fiber-pretranslator.js`: Persistent settings loader and React Fiber background pre-translator.
   - `06-settings-modal-ui.js`: Stylesheet, native Antigravity 2.0 settings modal (`.settings-modal-container`) integration, and quick settings modal (`#agy-ko-translator-modal`).
   - `07-statusbar-adapter.js`: Pure `StatusBarAdapter` bridge (`window.agyStatusBar.registerAdapter` / `unregisterAdapter` / `updateAll`) for `antigravity-statusbar`.
-  - `08-dom-observer.js`: Remote Control `<ga-remote-control>` (`getDebugNode(rcEl).componentInstance`) same-origin `hubFrame` bridge, conditional companion plugin loader, streaming Thinking block renderer, static UI `TreeWalker`, and `MutationObserver` lifecycle manager.
+  - `08-thinking-and-triggers.js`: Streaming Thinking block DOM renderer (`.cursor-edit`, Side Question reasoning, Browser Subagent live thoughts), active/latest-turn React Fiber & DOM predicates, and non-destructive collapsible trigger labels.
+  - `09-static-ui-localizer.js`: Subtree exclusion policy, attribute localizer, dynamic `ask_question`/permission widget translator, and 0ms `TreeWalker` static UI localizer.
+  - `10-remote-security-policy.js`: Trusted Remote Control origin/script allowlist, owned Worker Blob URL registry, non-empty CSP nonce resolver, and one-time gated `TrustedTypes` policy port.
+  - `11-remote-companion-sync.js`: Angular 19 `<ga-remote-control>` component discovery adapter (`getDebugNode` / `ɵgetLContext` / `LView` `TNode`) and conditional host companion plugin synchronizer (`antigravity-statusbar` / `antigravity-mcp-manager`).
+  - `12-remote-workbench-bridge.js`: `WeakMap`-backed Finite State Machine (`IDLE -> PREFLIGHT -> PROMOTING_BLANK -> BOOTING_WORKBENCH -> READY | ROLLED_BACK | EXTERNAL_PROMOTED`) for same-origin `hubFrame` promotion, WHATWG `cd.open(); cd.close();` URL inheritance, `INITIAL_CONFIG` `MessagePort` replay, and multi-plugin promotion coexistence.
+  - `13-dom-observer-lifecycle.js`: Session-switch transition guard, fast/coalesced `MutationObserver` scheduler, periodic rescan, and deterministic `DisposableRegistry` teardown.
 - **Host Layer (`scripts/host/` & `scripts/ensure_ko_thought_patch.js`)**:
   - `paths.js`: Host paths, distributable bundle mirrors (`scripts/`, `dist/`, `plugins/`, `skills/`), and environment constants.
   - `ensure_statusbar_patch.js`: Built-in `app.asar` and Live CDP patcher fallback for standalone installations.

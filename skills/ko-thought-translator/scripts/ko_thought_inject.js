@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Antigravity Korean Thought & UI Translator (Local & Remote Control)
 // @namespace    https://github.com/jaeseongs95/antigravity-ko-translator
-// @version      1.2.39
+// @version      1.3.0
 // @description  Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI on Desktop and Remote Control web.
 // @match        https://antigravity.google.com/*
 // @match        https://*.antigravity.google.com/*
@@ -35,8 +35,8 @@
   window.__agyMountKoThoughtLocalizer = mountKoThoughtLocalizer;
 
 // Module: 01-bootstrap-and-cache.js
-// Responsibility: Version guard, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
-  const KO_LOCALIZER_VERSION = 'v13.33';
+// Responsibility: Version guard, DisposableRegistry resource lifecycle, DOM restoration on full disable, and translation cache (memCache / localStorage) persistence.
+  const KO_LOCALIZER_VERSION = 'v14.0';
   const DEFAULT_SHOW_THINKING_ENABLED = true;
   const SHOW_THINKING_STORAGE_KEY = 'agy-ko-thought-show-thinking';
   const SHOW_THINKING_INIT_STORAGE_KEY = 'agy-ko-thought-show-thinking-init';
@@ -47,6 +47,115 @@
   const DEFAULT_TRANSLATION_PROVIDER = 'google-translate';
   const PROVIDER_STORAGE_KEY = 'agy-ko-thought-provider';
   let disposed = false;
+
+  function createDisposableRegistry() {
+    const stack = [];
+    const windowGlobals = new Set();
+
+    function register(fn) {
+      if (typeof fn === 'function') stack.push(fn);
+      return fn;
+    }
+
+    function registerInterval(id) {
+      if (id !== null && id !== undefined) {
+        stack.push(() => {
+          try {
+            clearInterval(id);
+          } catch (e) {}
+        });
+      }
+      return id;
+    }
+
+    function registerTimeout(id) {
+      if (id !== null && id !== undefined) {
+        stack.push(() => {
+          try {
+            clearTimeout(id);
+          } catch (e) {}
+        });
+      }
+      return id;
+    }
+
+    function registerEvent(target, type, listener, options) {
+      if (!target || typeof target.addEventListener !== 'function' || typeof listener !== 'function') {
+        return () => {};
+      }
+      target.addEventListener(type, listener, options);
+      const off = () => {
+        try {
+          if (typeof target.removeEventListener === 'function') {
+            target.removeEventListener(type, listener, options);
+          }
+        } catch (e) {}
+      };
+      stack.push(off);
+      return off;
+    }
+
+    function registerMethodHook(target, methodName, createWrapper) {
+      if (!target || (typeof target !== 'object' && typeof target !== 'function')) return () => {};
+      const prevFn = target[methodName];
+      if (typeof prevFn !== 'function' || typeof createWrapper !== 'function') return () => {};
+      let active = true;
+      const customFn = createWrapper(prevFn);
+      const wrappedFn = function (...args) {
+        if (!active) return prevFn.apply(this, args);
+        return customFn.apply(this, args);
+      };
+      target[methodName] = wrappedFn;
+      const unhook = () => {
+        if (!active) return;
+        active = false;
+        try {
+          if (target[methodName] === wrappedFn) {
+            target[methodName] = prevFn;
+          }
+        } catch (e) {}
+      };
+      stack.push(unhook);
+      return unhook;
+    }
+
+    function registerWindowGlobal(propName) {
+      if (propName && typeof propName === 'string') {
+        windowGlobals.add(propName);
+      }
+    }
+
+    function disposeAll(fullRestore = false) {
+      while (stack.length > 0) {
+        const fn = stack.pop();
+        try {
+          fn(Boolean(fullRestore));
+        } catch (e) {}
+      }
+      if (fullRestore && window) {
+        for (const prop of windowGlobals) {
+          try {
+            delete window[prop];
+          } catch (e) {}
+        }
+        windowGlobals.clear();
+      }
+    }
+
+    return {
+      register,
+      registerInterval,
+      registerTimeout,
+      registerEvent,
+      registerMethodHook,
+      registerWindowGlobal,
+      disposeAll,
+      get size() {
+        return stack.length;
+      },
+    };
+  }
+  const disposables = createDisposableRegistry();
 
   let cachedReactFiberKey = null;
   let cachedReactContainerKey = null;
@@ -5431,8 +5540,8 @@
     delete window.__agyOpenTranslatorSettingsModal;
   }
 
-// Module: 08-dom-observer.js
-// Responsibility: Streaming Thinking block DOM renderer, static UI DOM tree walker, MutationObserver, and cleanup lifecycle.
+// Module: 08-thinking-and-triggers.js
+// Responsibility: Streaming Thinking block DOM renderer (.cursor-edit, Side Question, Browser Subagent), active-turn predicates, and non-destructive collapsible trigger labels.
   function tryTranslateBlockElementSync(origEl) {
     if (origEl.tagName === 'UL' || origEl.tagName === 'OL') {
       const items = Array.from(origEl.querySelectorAll(':scope > li'));
@@ -5835,6 +5944,651 @@
     }
   }
 
+  function doesWorkedForButtonContainThinking(btn) {
+    if (!btn) return false;
+    if (btn.__agyHasThinking) return true;
+    try {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 12 && cur; i++) {
+        const segSteps = cur.memoizedProps?.segment?.steps;
+        if (Array.isArray(segSteps)) {
+          const found = segSteps.some((s) => {
+            const val = s?.step?.value;
+            return Boolean(val && (val.thinking || val.rawThinking));
+          });
+          if (found) {
+            btn.__agyHasThinking = true;
+            return true;
+          }
+          return false;
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function doesToolGroupButtonContainThinking(btn) {
+    if (!btn) return false;
+    if (btn.__agyHasThinking) return true;
+    try {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 12 && cur; i++) {
+        const grpSteps = cur.memoizedProps?.steps || cur.memoizedProps?.group?.steps;
+        if (Array.isArray(grpSteps)) {
+          const found = grpSteps.some((s) => {
+            const val = s?.step?.value;
+            return Boolean(val && (val.thinking || val.rawThinking));
+          });
+          if (found) {
+            btn.__agyHasThinking = true;
+            return true;
+          }
+          return false;
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function expandTriggerButtonIfNeeded(btn) {
+    if (!btn || btn.getAttribute('aria-expanded') !== 'false' || btn.__agyUserCollapsed) {
+      return false;
+    }
+    btn.__agyAutoExpanded = true;
+    if (typeof btn.setAttribute === 'function') {
+      btn.setAttribute('data-agy-auto-expanded', '1');
+    }
+    btn.__agyProgrammaticClick = true;
+    try {
+      btn.click();
+    } catch (e) {
+    } finally {
+      btn.__agyProgrammaticClick = false;
+    }
+    return true;
+  }
+
+  function collapseTriggerButtonIfNeeded(btn) {
+    if (!btn || btn.getAttribute('aria-expanded') !== 'true') {
+      return false;
+    }
+    delete btn.__agyAutoExpanded;
+    if (typeof btn.removeAttribute === 'function') {
+      btn.removeAttribute('data-agy-auto-expanded');
+    }
+    btn.__agyProgrammaticClick = true;
+    try {
+      btn.click();
+    } catch (e) {
+    } finally {
+      btn.__agyProgrammaticClick = false;
+    }
+    return true;
+  }
+
+  function onTriggerButtonClickCapture(e) {
+    try {
+      if (!e || !e.target || typeof e.target.closest !== 'function') return;
+      const btn = e.target.closest(
+        'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"]'
+      );
+      if (!btn || btn.__agyProgrammaticClick || e.isTrusted === false) return;
+      const expandedBeforeClick = btn.getAttribute('aria-expanded');
+      if (expandedBeforeClick === 'true') {
+        btn.__agyUserCollapsed = true;
+        if (typeof btn.removeAttribute === 'function') {
+          btn.removeAttribute('data-agy-auto-expanded');
+        }
+      } else if (expandedBeforeClick === 'false') {
+        btn.__agyUserCollapsed = false;
+      }
+    } catch (err) {}
+  }
+
+  function isHiddenActiveWorkedForButton(btn) {
+    if (!btn) return false;
+    if (btn.classList && btn.classList.contains('hidden')) return true;
+    try {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 8 && cur; i++) {
+        if (cur.memoizedProps && cur.memoizedProps.triggerVisible === false) {
+          return true;
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function isToolGroupInActiveOrLatestTurn(btn, workedBtns) {
+    if (!btn) return false;
+    let sawLocalActiveFalse = false;
+    try {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 36 && cur; i++) {
+        const mp = cur.memoizedProps;
+        if (mp && typeof mp === 'object') {
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+          }
+          if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
+          if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+          if (mp.container && typeof mp.container === 'object') {
+            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
+            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
+          }
+          // Immediate wrapper (e.g. yhc / G_ at depth <= 6) carries turn/step-local isActive/isRunning,
+          // whereas higher container fibers (Lhc/oic/pCb at depth 16..31) carry conversation-wide isRunning (status === RUNNING).
+          if (i <= 6) {
+            if (mp.isActive === true) return true;
+            if (mp.isActive === false || mp.isRunning === false) {
+              sawLocalActiveFalse = true;
+            }
+          }
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
+      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
+      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
+        return Boolean(latestTurnEl.contains(btn));
+      }
+    }
+    if (
+      typeof document !== 'undefined' &&
+      document &&
+      typeof document.querySelectorAll === 'function' &&
+      typeof btn.compareDocumentPosition === 'function' &&
+      typeof Node !== 'undefined'
+    ) {
+      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
+      for (const ub of userBubbles) {
+        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+          return false;
+        }
+      }
+    }
+    if (Array.isArray(workedBtns) && workedBtns.length > 0) {
+      const lastWorked = workedBtns[workedBtns.length - 1];
+      const lastContainer =
+        lastWorked && typeof lastWorked.closest === 'function' ? lastWorked.closest('.relative') : null;
+      if (lastContainer && typeof lastContainer.contains === 'function' && lastContainer.contains(btn)) {
+        return true;
+      }
+      const anyHistoricalWorkedContains = workedBtns.slice(0, -1).some((wb) => {
+        const c = wb && typeof wb.closest === 'function' ? wb.closest('.relative') : null;
+        return Boolean(c && typeof c.contains === 'function' && c.contains(btn));
+      });
+      if (anyHistoricalWorkedContains) {
+        return false;
+      }
+      if (sawLocalActiveFalse) {
+        return false;
+      }
+      const lastTrigger = workedBtns[workedBtns.length - 1];
+      if (
+        lastTrigger &&
+        typeof lastTrigger.compareDocumentPosition === 'function' &&
+        typeof Node !== 'undefined' &&
+        (lastTrigger.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+      ) {
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
+
+  function isThinkingTriggerInActiveOrLatestTurn(btn, workedBtns, thinkingBtns) {
+    if (!btn) return false;
+    let sawLocalActiveFalse = false;
+    try {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 36 && cur; i++) {
+        const mp = cur.memoizedProps;
+        if (mp && typeof mp === 'object') {
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+          }
+          if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
+          if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+          if (mp.container && typeof mp.container === 'object') {
+            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
+            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
+          }
+          if (i <= 6) {
+            if (mp.isActive === true) return true;
+            if (mp.isActive === false || mp.isRunning === false) {
+              sawLocalActiveFalse = true;
+            }
+          }
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
+      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
+      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
+        return Boolean(latestTurnEl.contains(btn));
+      }
+    }
+    if (
+      typeof document !== 'undefined' &&
+      document &&
+      typeof document.querySelectorAll === 'function' &&
+      typeof btn.compareDocumentPosition === 'function' &&
+      typeof Node !== 'undefined'
+    ) {
+      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
+      for (const ub of userBubbles) {
+        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+          return false;
+        }
+      }
+    }
+    if (Array.isArray(workedBtns) && workedBtns.length > 0) {
+      const lastWorked = workedBtns[workedBtns.length - 1];
+      const lastContainer =
+        lastWorked && typeof lastWorked.closest === 'function' ? lastWorked.closest('.relative') : null;
+      if (lastContainer && typeof lastContainer.contains === 'function' && lastContainer.contains(btn)) {
+        return true;
+      }
+      const anyHistoricalWorkedContains = workedBtns.slice(0, -1).some((wb) => {
+        const c = wb && typeof wb.closest === 'function' ? wb.closest('.relative') : null;
+        return Boolean(c && typeof c.contains === 'function' && c.contains(btn));
+      });
+      if (anyHistoricalWorkedContains) {
+        return false;
+      }
+      if (sawLocalActiveFalse) {
+        return false;
+      }
+      if (
+        lastWorked &&
+        typeof lastWorked.compareDocumentPosition === 'function' &&
+        typeof Node !== 'undefined' &&
+        (lastWorked.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+      ) {
+        return true;
+      }
+      return false;
+    }
+    if (sawLocalActiveFalse) {
+      return false;
+    }
+    if (Array.isArray(thinkingBtns) && thinkingBtns.length > 0) {
+      return btn === thinkingBtns[thinkingBtns.length - 1];
+    }
+    return false;
+  }
+
+  function isWorkedForInActiveOrLatestTurn(btn, isLastInDomList) {
+    if (!btn) return false;
+    let sawLocalActiveFalse = false;
+    try {
+      let cur =
+        typeof getReactFiberFromElement === 'function'
+          ? getReactFiberFromElement(btn)
+          : (() => {
+              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
+              return fk ? btn[fk] : null;
+            })();
+      for (let i = 0; i < 36 && cur; i++) {
+        const mp = cur.memoizedProps;
+        if (mp && typeof mp === 'object') {
+          if (mp.segment && typeof mp.segment === 'object') {
+            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
+            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
+          }
+          if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
+          if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
+          if (mp.container && typeof mp.container === 'object') {
+            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
+            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
+          }
+          if (i <= 6) {
+            if (mp.isActive === true) return true;
+            if (mp.isActive === false || mp.isRunning === false) {
+              sawLocalActiveFalse = true;
+            }
+          }
+        }
+        cur = cur.return;
+      }
+    } catch (e) {}
+    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
+      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
+      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
+        return Boolean(latestTurnEl.contains(btn));
+      }
+    }
+    if (
+      typeof document !== 'undefined' &&
+      document &&
+      typeof document.querySelectorAll === 'function' &&
+      typeof btn.compareDocumentPosition === 'function' &&
+      typeof Node !== 'undefined'
+    ) {
+      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
+      for (const ub of userBubbles) {
+        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+          return false;
+        }
+      }
+    }
+    if (sawLocalActiveFalse) {
+      return false;
+    }
+    return Boolean(isLastInDomList);
+  }
+
+  function scanTriggerButtonsSync(forceCollapseAll = false) {
+    ensureStyle();
+    if (typeof syncShowThinkingDomAttribute === 'function') {
+      syncShowThinkingDomAttribute();
+    }
+    const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
+    const nativeVerboseSteps =
+      typeof isNativeVerboseConversationStepsEnabled === 'function'
+        ? isNativeVerboseConversationStepsEnabled()
+        : true;
+    const workedBtns = Array.from(document.querySelectorAll('button[data-testid="worked-for-collapsible"]'));
+    for (let i = 0; i < workedBtns.length; i++) {
+      const btn = workedBtns[i];
+      const isLastWorked = isWorkedForInActiveOrLatestTurn(btn, i === workedBtns.length - 1);
+      processTriggerButton(btn);
+      if (!nativeVerboseSteps) {
+        continue;
+      }
+      if (isHiddenActiveWorkedForButton(btn)) {
+        if (btn.getAttribute('aria-expanded') === 'false') {
+          btn.__agyUserCollapsed = false;
+          expandTriggerButtonIfNeeded(btn);
+        }
+        continue;
+      }
+      if (isLastWorked) {
+        if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+          expandTriggerButtonIfNeeded(btn);
+        }
+      } else if (
+        forceCollapseAll &&
+        btn.getAttribute('aria-expanded') === 'true' &&
+        (btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
+        doesWorkedForButtonContainThinking(btn)
+      ) {
+        collapseTriggerButtonIfNeeded(btn);
+      }
+    }
+    const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
+    for (const btn of toolGroupBtns) {
+      processTriggerButton(btn);
+      if (
+        nativeVerboseSteps &&
+        btn.getAttribute('aria-expanded') === 'false' &&
+        !btn.__agyUserCollapsed &&
+        isToolGroupInActiveOrLatestTurn(btn, workedBtns)
+      ) {
+        expandTriggerButtonIfNeeded(btn);
+      }
+    }
+    const thinkingBtns = Array.from(document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]'));
+    for (const btn of thinkingBtns) {
+      processTriggerButton(btn);
+      if (autoExpand) {
+        if (
+          btn.getAttribute('aria-expanded') === 'false' &&
+          !btn.__agyUserCollapsed &&
+          isThinkingTriggerInActiveOrLatestTurn(btn, workedBtns, thinkingBtns)
+        ) {
+          expandTriggerButtonIfNeeded(btn);
+        }
+      } else if (btn.getAttribute('aria-expanded') === 'true') {
+        collapseTriggerButtonIfNeeded(btn);
+      }
+    }
+    const sideQuestionBtns = document.querySelectorAll('[data-testid="side-question-answer"] button[aria-expanded]');
+    for (const btn of sideQuestionBtns) {
+      processTriggerButton(btn);
+    }
+  }
+
+  function scanSideQuestionAndBrowserSubagentThoughts() {
+    if (!document || typeof document.querySelectorAll !== 'function') return;
+    const sqBtns = document.querySelectorAll('[data-testid="side-question-answer"] button[aria-expanded]');
+    for (const btn of sqBtns) {
+      processTriggerButton(btn);
+      const panel = btn.nextElementSibling;
+      if (!panel || panel.tagName !== 'DIV') continue;
+      let hostEl = panel.querySelector ? panel.querySelector('.cursor-edit') : null;
+      if (!hostEl && typeof panel.querySelectorAll === 'function') {
+        hostEl = Array.from(panel.querySelectorAll('div')).find(
+          (d) =>
+            String(d.className || '').includes('border-l') &&
+            Array.from(d.children || []).some(
+              (c) => c.tagName === 'DIV' && (!c.classList || !c.classList.contains('agy-ko-thought-wrap'))
+            )
+        );
+      }
+      if (
+        !hostEl &&
+        Array.from(panel.children || []).some(
+          (c) => c.tagName === 'DIV' && (!c.classList || !c.classList.contains('agy-ko-thought-wrap'))
+        )
+      ) {
+        hostEl = panel;
+      }
+      if (hostEl) {
+        if (!hostEl.classList || !hostEl.classList.contains('cursor-edit')) {
+          if (typeof hostEl.setAttribute === 'function') {
+            hostEl.setAttribute('data-agy-ko-thought-host', '1');
+          }
+        }
+        processCursorEdit(hostEl, btn);
+      }
+    }
+
+    const browserThoughtSpans = document.querySelectorAll('[data-testid="browser-subagent-thinking"] span');
+    const translateEnabled = typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true;
+    for (const el of browserThoughtSpans) {
+      if (!el.childNodes || el.childNodes.length !== 1 || el.firstChild.nodeType !== 3) continue;
+      const tn = el.firstChild;
+      if (!translateEnabled) {
+        delete el.__agyDynamicSource;
+        delete el.__agyTranslatingDynamic;
+        if (tn.__agyOrigValue !== undefined) {
+          tn.nodeValue = tn.__agyOrigValue;
+          delete tn.__agyOrigValue;
+          delete tn.__agyKoApplied;
+        }
+        continue;
+      }
+      const liveVal = tn.nodeValue || '';
+      const trimmed = liveVal.trim();
+      if (!trimmed) continue;
+      if (tn.__agyKoApplied && trimmed === tn.__agyKoApplied) continue;
+      tn.__agyOrigValue = liveVal;
+      if (isAlreadyKoreanOrNonEnglish(trimmed)) continue;
+
+      const syncKo = translateStaticUiSync(trimmed);
+      if (syncKo && syncKo !== trimmed) {
+        tn.__agyKoApplied = syncKo;
+        tn.nodeValue = syncKo;
+        continue;
+      }
+      if (memCache.has(trimmed)) {
+        const cached = memCache.get(trimmed);
+        if (!isInvalidCachedOrTranslatedText(cached, trimmed)) {
+          tn.__agyKoApplied = cached;
+          tn.nodeValue = cached;
+          continue;
+        }
+      }
+      if (el.__agyDynamicSource !== trimmed && !el.__agyTranslatingDynamic) {
+        el.__agyDynamicSource = trimmed;
+        el.__agyTranslatingDynamic = true;
+        translateThoughtTextEnToKo(trimmed)
+          .then((ko) => {
+            const wasTranslating = Boolean(el.__agyTranslatingDynamic);
+            delete el.__agyTranslatingDynamic;
+            if (disposed || !wasTranslating || !ko || ko === trimmed || el.isConnected === false) {
+              if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
+              return;
+            }
+            if (!el.firstChild || el.firstChild.nodeType !== 3 || (el.firstChild.nodeValue || '').trim() !== trimmed) {
+              if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
+              return;
+            }
+            el.firstChild.__agyOrigValue = el.firstChild.nodeValue;
+            el.firstChild.__agyKoApplied = ko;
+            el.firstChild.nodeValue = ko;
+          })
+          .catch(() => {
+            delete el.__agyTranslatingDynamic;
+            if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
+          });
+      }
+    }
+  }
+
+  function scanThoughtBlocks() {
+    ensureVerboseConversationStepsEnabled();
+    scanTriggerButtonsSync();
+    const allCursorEdits = document.querySelectorAll('.cursor-edit');
+    for (const cursorEdit of allCursorEdits) {
+      const container = cursorEdit.closest('.relative') || cursorEdit.parentElement;
+      const btn = container
+        ? container.querySelector('button[data-testid="thinking-collapsible-trigger"]')
+        : null;
+      processCursorEdit(cursorEdit, btn);
+    }
+    scanSideQuestionAndBrowserSubagentThoughts();
+    if (isPretranslateEnabled()) {
+      pretranslateCollapsedThoughtsInBackground();
+    }
+  }
+
+  function retranslateVisibleThoughts(clearCache = false, _fromCrossFrame = false) {
+    if (clearCache) {
+      if (typeof clearTranslationCacheState === 'function') {
+        clearTranslationCacheState();
+      } else {
+        if (typeof bumpCacheEpoch === 'function') bumpCacheEpoch();
+        if (typeof saveCacheTimer !== 'undefined' && saveCacheTimer) {
+          clearTimeout(saveCacheTimer);
+          saveCacheTimer = null;
+        }
+        memCache.clear();
+        inflightMap.clear();
+        try {
+          localStorage.removeItem(CACHE_STORAGE_KEY);
+        } catch (e) {}
+      }
+      if (typeof resetPretranslatedHistory === 'function') {
+        resetPretranslatedHistory();
+      }
+    } else if (typeof bumpCacheEpoch === 'function') {
+      bumpCacheEpoch();
+    }
+    document.querySelectorAll('.cursor-edit, [data-agy-ko-thought-host="1"]').forEach((el) => {
+      if (el.__agyAbortCtrl) {
+        try {
+          el.__agyAbortCtrl.abort();
+        } catch (e) {}
+        delete el.__agyAbortCtrl;
+      }
+      if (el.__agyStreamDebounce) {
+        clearTimeout(el.__agyStreamDebounce);
+        delete el.__agyStreamDebounce;
+      }
+      delete el.__agyLastSnapshot;
+      delete el.__agyPendingSnapshot;
+      const wrap = el.querySelector(':scope > .agy-ko-thought-wrap');
+      if (wrap) {
+        Array.from(wrap.children).forEach((ch) => ch.removeAttribute('data-agy-src'));
+      }
+    });
+    document.querySelectorAll('[data-testid="browser-subagent-thinking"] span').forEach((el) => {
+      delete el.__agyDynamicSource;
+      delete el.__agyTranslatingDynamic;
+      if (el.firstChild && el.firstChild.__agyOrigValue !== undefined) {
+        el.firstChild.nodeValue = el.firstChild.__agyOrigValue;
+        delete el.firstChild.__agyKoApplied;
+      }
+    });
+    scanThoughtBlocks();
+    refreshTranslatorSettingsUi();
+    try {
+      document.querySelectorAll('iframe').forEach((ifr) => {
+        try {
+          const cw = ifr.contentWindow;
+          if (cw && cw !== window && typeof cw.__agyRetranslateVisibleThoughts === 'function') {
+            if (!_fromCrossFrame) cw.__agyRetranslateVisibleThoughts(clearCache, true);
+          }
+        } catch (e) {}
+      });
+      if (
+        !_fromCrossFrame &&
+        window.parent &&
+        window.parent !== window &&
+        typeof window.parent.__agyRetranslateVisibleThoughts === 'function'
+      ) {
+        try {
+          window.parent.__agyRetranslateVisibleThoughts(clearCache, true);
+        } catch (e) {}
+      }
+    } catch (e) {}
+    return {
+      clearedCache: Boolean(clearCache),
+      cacheSize: memCache.size,
+      provider: activeTranslationProvider,
+    };
+  }
+  window.__agyRetranslateVisibleThoughts = retranslateVisibleThoughts;
+  if (typeof disposables !== 'undefined' && disposables) {
+    disposables.registerWindowGlobal('__agyRetranslateVisibleThoughts');
+  }
+
+// Module: 09-static-ui-localizer.js
+// Responsibility: Subtree exclusion policy, attribute localizer, dynamic ask_question/permission widget translator, and 0ms TreeWalker static UI localizer.
   // Excludes:
   // 1) Statusbar & custom no-translate roots (`[data-agy-no-translate="true"]`, `.agy-ctx-statusbar`, `.agy-ctx-menu`, `#agy-ctx-debug-modal`, `.agy-ctx-modal-backdrop`)
   // 2) Input box toolbar (`[data-testid="agent-input-box"]`, `[data-testid="model-selector-trigger"]`, `[data-testid="permissions-preset-selector"]`)
@@ -6174,542 +6928,9 @@
     }
   }
 
-  function doesWorkedForButtonContainThinking(btn) {
-    if (!btn) return false;
-    if (btn.__agyHasThinking) return true;
-    try {
-      let cur =
-        typeof getReactFiberFromElement === 'function'
-          ? getReactFiberFromElement(btn)
-          : (() => {
-              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-              return fk ? btn[fk] : null;
-            })();
-      for (let i = 0; i < 12 && cur; i++) {
-        const segSteps = cur.memoizedProps?.segment?.steps;
-        if (Array.isArray(segSteps)) {
-          const found = segSteps.some((s) => {
-            const val = s?.step?.value;
-            return Boolean(val && (val.thinking || val.rawThinking));
-          });
-          if (found) {
-            btn.__agyHasThinking = true;
-            return true;
-          }
-          return false;
-        }
-        cur = cur.return;
-      }
-    } catch (e) {}
-    return false;
-  }
-
-  function doesToolGroupButtonContainThinking(btn) {
-    if (!btn) return false;
-    if (btn.__agyHasThinking) return true;
-    try {
-      let cur =
-        typeof getReactFiberFromElement === 'function'
-          ? getReactFiberFromElement(btn)
-          : (() => {
-              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-              return fk ? btn[fk] : null;
-            })();
-      for (let i = 0; i < 12 && cur; i++) {
-        const grpSteps = cur.memoizedProps?.steps || cur.memoizedProps?.group?.steps;
-        if (Array.isArray(grpSteps)) {
-          const found = grpSteps.some((s) => {
-            const val = s?.step?.value;
-            return Boolean(val && (val.thinking || val.rawThinking));
-          });
-          if (found) {
-            btn.__agyHasThinking = true;
-            return true;
-          }
-          return false;
-        }
-        cur = cur.return;
-      }
-    } catch (e) {}
-    return false;
-  }
-
-  function expandTriggerButtonIfNeeded(btn) {
-    if (!btn || btn.getAttribute('aria-expanded') !== 'false' || btn.__agyUserCollapsed) {
-      return false;
-    }
-    btn.__agyAutoExpanded = true;
-    if (typeof btn.setAttribute === 'function') {
-      btn.setAttribute('data-agy-auto-expanded', '1');
-    }
-    btn.__agyProgrammaticClick = true;
-    try {
-      btn.click();
-    } catch (e) {
-    } finally {
-      btn.__agyProgrammaticClick = false;
-    }
-    return true;
-  }
-
-  function collapseTriggerButtonIfNeeded(btn) {
-    if (!btn || btn.getAttribute('aria-expanded') !== 'true') {
-      return false;
-    }
-    delete btn.__agyAutoExpanded;
-    if (typeof btn.removeAttribute === 'function') {
-      btn.removeAttribute('data-agy-auto-expanded');
-    }
-    btn.__agyProgrammaticClick = true;
-    try {
-      btn.click();
-    } catch (e) {
-    } finally {
-      btn.__agyProgrammaticClick = false;
-    }
-    return true;
-  }
-
-  function onTriggerButtonClickCapture(e) {
-    try {
-      if (!e || !e.target || typeof e.target.closest !== 'function') return;
-      const btn = e.target.closest(
-        'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"]'
-      );
-      if (!btn || btn.__agyProgrammaticClick || e.isTrusted === false) return;
-      const expandedBeforeClick = btn.getAttribute('aria-expanded');
-      if (expandedBeforeClick === 'true') {
-        btn.__agyUserCollapsed = true;
-        if (typeof btn.removeAttribute === 'function') {
-          btn.removeAttribute('data-agy-auto-expanded');
-        }
-      } else if (expandedBeforeClick === 'false') {
-        btn.__agyUserCollapsed = false;
-      }
-    } catch (err) {}
-  }
-
-  function isHiddenActiveWorkedForButton(btn) {
-    if (!btn) return false;
-    if (btn.classList && btn.classList.contains('hidden')) return true;
-    try {
-      let cur =
-        typeof getReactFiberFromElement === 'function'
-          ? getReactFiberFromElement(btn)
-          : (() => {
-              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-              return fk ? btn[fk] : null;
-            })();
-      for (let i = 0; i < 8 && cur; i++) {
-        if (cur.memoizedProps && cur.memoizedProps.triggerVisible === false) {
-          return true;
-        }
-        cur = cur.return;
-      }
-    } catch (e) {}
-    return false;
-  }
-
-  function isToolGroupInActiveOrLatestTurn(btn, workedBtns) {
-    if (!btn) return false;
-    let sawLocalActiveFalse = false;
-    try {
-      let cur =
-        typeof getReactFiberFromElement === 'function'
-          ? getReactFiberFromElement(btn)
-          : (() => {
-              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-              return fk ? btn[fk] : null;
-            })();
-      for (let i = 0; i < 36 && cur; i++) {
-        const mp = cur.memoizedProps;
-        if (mp && typeof mp === 'object') {
-          if (mp.segment && typeof mp.segment === 'object') {
-            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
-            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
-          }
-          if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
-          if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-          if (mp.container && typeof mp.container === 'object') {
-            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
-            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
-          }
-          // Immediate wrapper (e.g. yhc / G_ at depth <= 6) carries turn/step-local isActive/isRunning,
-          // whereas higher container fibers (Lhc/oic/pCb at depth 16..31) carry conversation-wide isRunning (status === RUNNING).
-          if (i <= 6) {
-            if (mp.isActive === true) return true;
-            if (mp.isActive === false || mp.isRunning === false) {
-              sawLocalActiveFalse = true;
-            }
-          }
-        }
-        cur = cur.return;
-      }
-    } catch (e) {}
-    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
-      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
-      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
-        return Boolean(latestTurnEl.contains(btn));
-      }
-    }
-    if (
-      typeof document !== 'undefined' &&
-      document &&
-      typeof document.querySelectorAll === 'function' &&
-      typeof btn.compareDocumentPosition === 'function' &&
-      typeof Node !== 'undefined'
-    ) {
-      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
-      for (const ub of userBubbles) {
-        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
-          return false;
-        }
-      }
-    }
-    if (Array.isArray(workedBtns) && workedBtns.length > 0) {
-      const lastWorked = workedBtns[workedBtns.length - 1];
-      const lastContainer =
-        lastWorked && typeof lastWorked.closest === 'function' ? lastWorked.closest('.relative') : null;
-      if (lastContainer && typeof lastContainer.contains === 'function' && lastContainer.contains(btn)) {
-        return true;
-      }
-      const anyHistoricalWorkedContains = workedBtns.slice(0, -1).some((wb) => {
-        const c = wb && typeof wb.closest === 'function' ? wb.closest('.relative') : null;
-        return Boolean(c && typeof c.contains === 'function' && c.contains(btn));
-      });
-      if (anyHistoricalWorkedContains) {
-        return false;
-      }
-      if (sawLocalActiveFalse) {
-        return false;
-      }
-      const lastTrigger = workedBtns[workedBtns.length - 1];
-      if (
-        lastTrigger &&
-        typeof lastTrigger.compareDocumentPosition === 'function' &&
-        typeof Node !== 'undefined' &&
-        (lastTrigger.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-      ) {
-        return true;
-      }
-      return false;
-    }
-    return false;
-  }
-
-  function isThinkingTriggerInActiveOrLatestTurn(btn, workedBtns, thinkingBtns) {
-    if (!btn) return false;
-    let sawLocalActiveFalse = false;
-    try {
-      let cur =
-        typeof getReactFiberFromElement === 'function'
-          ? getReactFiberFromElement(btn)
-          : (() => {
-              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-              return fk ? btn[fk] : null;
-            })();
-      for (let i = 0; i < 36 && cur; i++) {
-        const mp = cur.memoizedProps;
-        if (mp && typeof mp === 'object') {
-          if (mp.segment && typeof mp.segment === 'object') {
-            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
-            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
-          }
-          if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
-          if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-          if (mp.container && typeof mp.container === 'object') {
-            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
-            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
-          }
-          // Immediate wrapper (<G_> at depth 2) transitions isActive: true -> false as soon as a thinking step finishes
-          // streaming ("Thought for Xs"), while <Lhc> (depth 4..26 in <u_> CascadeStepItem hierarchy) and <pCb> (depth 21..31)
-          // carry turn-level isLastContainer / segment.isLatest / container.isLatest.
-          if (i <= 6) {
-            if (mp.isActive === true) return true;
-            if (mp.isActive === false || mp.isRunning === false) {
-              sawLocalActiveFalse = true;
-            }
-          }
-        }
-        cur = cur.return;
-      }
-    } catch (e) {}
-    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
-      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
-      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
-        return Boolean(latestTurnEl.contains(btn));
-      }
-    }
-    if (
-      typeof document !== 'undefined' &&
-      document &&
-      typeof document.querySelectorAll === 'function' &&
-      typeof btn.compareDocumentPosition === 'function' &&
-      typeof Node !== 'undefined'
-    ) {
-      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
-      for (const ub of userBubbles) {
-        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
-          return false;
-        }
-      }
-    }
-    if (Array.isArray(workedBtns) && workedBtns.length > 0) {
-      const lastWorked = workedBtns[workedBtns.length - 1];
-      const lastContainer =
-        lastWorked && typeof lastWorked.closest === 'function' ? lastWorked.closest('.relative') : null;
-      if (lastContainer && typeof lastContainer.contains === 'function' && lastContainer.contains(btn)) {
-        return true;
-      }
-      const anyHistoricalWorkedContains = workedBtns.slice(0, -1).some((wb) => {
-        const c = wb && typeof wb.closest === 'function' ? wb.closest('.relative') : null;
-        return Boolean(c && typeof c.contains === 'function' && c.contains(btn));
-      });
-      if (anyHistoricalWorkedContains) {
-        return false;
-      }
-      if (sawLocalActiveFalse) {
-        return false;
-      }
-      if (
-        lastWorked &&
-        typeof lastWorked.compareDocumentPosition === 'function' &&
-        typeof Node !== 'undefined' &&
-        (lastWorked.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-      ) {
-        return true;
-      }
-      return false;
-    }
-    if (sawLocalActiveFalse) {
-      return false;
-    }
-    if (Array.isArray(thinkingBtns) && thinkingBtns.length > 0) {
-      return btn === thinkingBtns[thinkingBtns.length - 1];
-    }
-    return false;
-  }
-
-  function isWorkedForInActiveOrLatestTurn(btn, isLastInDomList) {
-    if (!btn) return false;
-    let sawLocalActiveFalse = false;
-    try {
-      let cur =
-        typeof getReactFiberFromElement === 'function'
-          ? getReactFiberFromElement(btn)
-          : (() => {
-              const fk = Object.keys(btn).find((k) => k.startsWith('__reactFiber$'));
-              return fk ? btn[fk] : null;
-            })();
-      for (let i = 0; i < 36 && cur; i++) {
-        const mp = cur.memoizedProps;
-        if (mp && typeof mp === 'object') {
-          if (mp.segment && typeof mp.segment === 'object') {
-            if (mp.segment.isLatest === false || mp.segment.isActive === false) return false;
-            if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-            if (mp.segment.isLatest === true || mp.segment.isActive === true) return true;
-          }
-          if (mp.isLastContainer === true || mp.isLastTurn === true) return true;
-          if (mp.isLastContainer === false || mp.isLastTurn === false) return false;
-          if (mp.container && typeof mp.container === 'object') {
-            if (mp.container.isLatest === true || mp.container.isActive === true) return true;
-            if (mp.container.isLatest === false || mp.container.isActive === false) return false;
-          }
-          if (i <= 6) {
-            if (mp.isActive === true) return true;
-            if (mp.isActive === false || mp.isRunning === false) {
-              sawLocalActiveFalse = true;
-            }
-          }
-        }
-        cur = cur.return;
-      }
-    } catch (e) {}
-    if (typeof document !== 'undefined' && document && typeof document.querySelector === 'function') {
-      const latestTurnEl = document.querySelector('[data-turn-content="latest"]');
-      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
-        return Boolean(latestTurnEl.contains(btn));
-      }
-    }
-    if (
-      typeof document !== 'undefined' &&
-      document &&
-      typeof document.querySelectorAll === 'function' &&
-      typeof btn.compareDocumentPosition === 'function' &&
-      typeof Node !== 'undefined'
-    ) {
-      const userBubbles = document.querySelectorAll('[data-testid="user-message-bubble"]');
-      for (const ub of userBubbles) {
-        if (ub && (btn.compareDocumentPosition(ub) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) {
-          return false;
-        }
-      }
-    }
-    if (sawLocalActiveFalse) {
-      return false;
-    }
-    return Boolean(isLastInDomList);
-  }
-
-  function scanTriggerButtonsSync(forceCollapseAll = false) {
-    ensureStyle();
-    if (typeof syncShowThinkingDomAttribute === 'function') {
-      syncShowThinkingDomAttribute();
-    }
-    const autoExpand = typeof isShowThinkingEnabled === 'function' ? isShowThinkingEnabled() : true;
-    const nativeVerboseSteps =
-      typeof isNativeVerboseConversationStepsEnabled === 'function'
-        ? isNativeVerboseConversationStepsEnabled()
-        : true;
-    const workedBtns = Array.from(document.querySelectorAll('button[data-testid="worked-for-collapsible"]'));
-    for (let i = 0; i < workedBtns.length; i++) {
-      const btn = workedBtns[i];
-      const isLastWorked = isWorkedForInActiveOrLatestTurn(btn, i === workedBtns.length - 1);
-      processTriggerButton(btn);
-      if (!nativeVerboseSteps) {
-        continue;
-      }
-      if (isHiddenActiveWorkedForButton(btn)) {
-        // Active/latest turn has triggerVisible=false (.hidden on the button).
-        // If collapsed, its entire body (all tool & work steps) unmounts while the trigger button itself is hidden!
-        // Always keep it expanded regardless of showThinkingEnabled.
-        if (btn.getAttribute('aria-expanded') === 'false') {
-          btn.__agyUserCollapsed = false;
-          expandTriggerButtonIfNeeded(btn);
-        }
-        continue;
-      }
-      if (isLastWorked) {
-        // D-0005 & D-0013: Keep ONLY the latest/active turn's worked-for-collapsible expanded (unless manually collapsed by the user).
-        // Never force-expand historical completed turns' worked-for-collapsible on session switch (prevents multi-frame height jump & ResizeObserver scroll flicker).
-        if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
-          expandTriggerButtonIfNeeded(btn);
-        }
-      } else if (
-        forceCollapseAll &&
-        btn.getAttribute('aria-expanded') === 'true' &&
-        (btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
-        doesWorkedForButtonContainThinking(btn)
-      ) {
-        collapseTriggerButtonIfNeeded(btn);
-      }
-    }
-    const toolGroupBtns = document.querySelectorAll('button[data-testid="tool-group-collapsible"]');
-    for (const btn of toolGroupBtns) {
-      processTriggerButton(btn);
-      if (
-        nativeVerboseSteps &&
-        btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyUserCollapsed &&
-        isToolGroupInActiveOrLatestTurn(btn, workedBtns)
-      ) {
-        expandTriggerButtonIfNeeded(btn);
-      }
-    }
-    const thinkingBtns = Array.from(document.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]'));
-    for (const btn of thinkingBtns) {
-      processTriggerButton(btn);
-      if (autoExpand) {
-        if (
-          btn.getAttribute('aria-expanded') === 'false' &&
-          !btn.__agyUserCollapsed &&
-          isThinkingTriggerInActiveOrLatestTurn(btn, workedBtns, thinkingBtns)
-        ) {
-          expandTriggerButtonIfNeeded(btn);
-        }
-      } else if (btn.getAttribute('aria-expanded') === 'true') {
-        collapseTriggerButtonIfNeeded(btn);
-      }
-    }
-    const sideQuestionBtns = document.querySelectorAll('[data-testid="side-question-answer"] button[aria-expanded]');
-    for (const btn of sideQuestionBtns) {
-      processTriggerButton(btn);
-    }
-  }
-
-  function retranslateVisibleThoughts(clearCache = false, _fromCrossFrame = false) {
-    if (clearCache) {
-      if (typeof clearTranslationCacheState === 'function') {
-        clearTranslationCacheState();
-      } else {
-        if (typeof bumpCacheEpoch === 'function') bumpCacheEpoch();
-        if (typeof saveCacheTimer !== 'undefined' && saveCacheTimer) {
-          clearTimeout(saveCacheTimer);
-          saveCacheTimer = null;
-        }
-        memCache.clear();
-        inflightMap.clear();
-        try {
-          localStorage.removeItem(CACHE_STORAGE_KEY);
-        } catch (e) {}
-      }
-      if (typeof resetPretranslatedHistory === 'function') {
-        resetPretranslatedHistory();
-      }
-    } else if (typeof bumpCacheEpoch === 'function') {
-      bumpCacheEpoch();
-    }
-    document.querySelectorAll('.cursor-edit, [data-agy-ko-thought-host="1"]').forEach((el) => {
-      if (el.__agyAbortCtrl) {
-        try {
-          el.__agyAbortCtrl.abort();
-        } catch (e) {}
-        delete el.__agyAbortCtrl;
-      }
-      if (el.__agyStreamDebounce) {
-        clearTimeout(el.__agyStreamDebounce);
-        delete el.__agyStreamDebounce;
-      }
-      delete el.__agyLastSnapshot;
-      delete el.__agyPendingSnapshot;
-      const wrap = el.querySelector(':scope > .agy-ko-thought-wrap');
-      if (wrap) {
-        Array.from(wrap.children).forEach((ch) => ch.removeAttribute('data-agy-src'));
-      }
-    });
-    document.querySelectorAll('[data-testid="browser-subagent-thinking"] span').forEach((el) => {
-      delete el.__agyDynamicSource;
-      delete el.__agyTranslatingDynamic;
-      if (el.firstChild && el.firstChild.__agyOrigValue !== undefined) {
-        el.firstChild.nodeValue = el.firstChild.__agyOrigValue;
-        delete el.firstChild.__agyKoApplied;
-      }
-    });
-    scanThoughtBlocks();
-    refreshTranslatorSettingsUi();
-    try {
-      document.querySelectorAll('iframe').forEach((ifr) => {
-        try {
-          const cw = ifr.contentWindow;
-          if (cw && cw !== window && typeof cw.__agyRetranslateVisibleThoughts === 'function') {
-            if (!_fromCrossFrame) cw.__agyRetranslateVisibleThoughts(clearCache, true);
-          }
-        } catch (e) {}
-      });
-      if (
-        !_fromCrossFrame &&
-        window.parent &&
-        window.parent !== window &&
-        typeof window.parent.__agyRetranslateVisibleThoughts === 'function'
-      ) {
-        try {
-          window.parent.__agyRetranslateVisibleThoughts(clearCache, true);
-        } catch (e) {}
-      }
-    } catch (e) {}
-    return {
-      clearedCache: Boolean(clearCache),
-      cacheSize: memCache.size,
-      provider: activeTranslationProvider,
-    };
-  }
-  window.__agyRetranslateVisibleThoughts = retranslateVisibleThoughts;
-
+// Module: 10-remote-security-policy.js
+// Responsibility: Remote Control origin/script allowlist, owned Worker Blob URL registry, CSP nonce resolution, and one-time gated TrustedTypes policy port.
   const ownCreatedWorkerBlobUrls = new Set();
-  const hookedRcPrototypes = new Set();
-  const hookedRcTargets = new Set();
   let cachedRemoteTrustedPolicy = null;
   let pendingCompanionInlineAuth = null;
 
@@ -6797,6 +7018,101 @@
     return null;
   }
 
+  function resolveHostCspNonce(doc) {
+    if (!doc) return '';
+    try {
+      const candidates = typeof doc.querySelectorAll === 'function' ? doc.querySelectorAll('script, style, link') : [];
+      for (let i = 0; i < candidates.length; i++) {
+        const el = candidates[i];
+        const val = (el && (el.nonce || (typeof el.getAttribute === 'function' ? el.getAttribute('nonce') : ''))) || '';
+        if (val) return String(val);
+      }
+      const single = typeof doc.querySelector === 'function' ? doc.querySelector('script[nonce]') : null;
+      const fallbackVal =
+        (single && (single.nonce || (typeof single.getAttribute === 'function' ? single.getAttribute('nonce') : ''))) || '';
+      if (fallbackVal) return String(fallbackVal);
+    } catch (e) {}
+    return '';
+  }
+
+  function canPromoteRemoteScriptUrl(probeUrl) {
+    if (!isTrustedRemoteScriptUrl(probeUrl)) return false;
+    const preflightPolicy = getTrustedPolicyForRemote();
+    try {
+      const probeScript = document.createElement('script');
+      probeScript.src = preflightPolicy ? preflightPolicy.createScriptURL(probeUrl) : probeUrl;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function injectRemoteCompanionScript(code, onDone, companionId = '') {
+    if (!code || !document) return;
+    if (companionId && typeof document.querySelector === 'function') {
+      const existing = document.querySelector(`script[data-agy-companion="${companionId}"]`);
+      if (existing) {
+        if (typeof onDone === 'function') onDone();
+        return;
+      }
+    }
+    const codeStr = String(code);
+    let authTicket = null;
+    try {
+      const s = document.createElement('script');
+      const nonce = resolveHostCspNonce(document);
+      const p = getTrustedPolicyForRemote();
+      if (companionId && typeof s.setAttribute === 'function') {
+        s.setAttribute('data-agy-companion', companionId);
+      }
+      if (nonce) {
+        s.nonce = nonce;
+        if (typeof s.setAttribute === 'function') s.setAttribute('nonce', nonce);
+      }
+      if (p && typeof p.createScript === 'function') {
+        const randPart =
+          typeof crypto !== 'undefined' && crypto && typeof crypto.getRandomValues === 'function'
+            ? Array.from(crypto.getRandomValues(new Uint32Array(2)), (n) => n.toString(16)).join('')
+            : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+        const inlineToken = `/*__agy_ko_inline_${randPart}__*/`;
+        const taggedScript = `${inlineToken}${codeStr}`;
+        authTicket = { token: inlineToken, expectedScript: taggedScript, consumed: false };
+        if (typeof pendingCompanionInlineAuth !== 'undefined') {
+          pendingCompanionInlineAuth = authTicket;
+        }
+        try {
+          s.text = p.createScript(taggedScript);
+        } finally {
+          authTicket.consumed = true;
+          if (typeof pendingCompanionInlineAuth !== 'undefined' && pendingCompanionInlineAuth === authTicket) {
+            pendingCompanionInlineAuth = null;
+          }
+        }
+      } else {
+        s.text = codeStr;
+      }
+      (document.head || document.documentElement).appendChild(s);
+      if (typeof onDone === 'function') onDone();
+    } catch (e) {
+      if (authTicket) authTicket.consumed = true;
+      if (typeof pendingCompanionInlineAuth !== 'undefined' && pendingCompanionInlineAuth === authTicket) {
+        pendingCompanionInlineAuth = null;
+      }
+    }
+  }
+
+  if (typeof disposables !== 'undefined' && disposables) {
+    disposables.register(() => {
+      ownCreatedWorkerBlobUrls.clear();
+      cachedRemoteTrustedPolicy = null;
+      pendingCompanionInlineAuth = null;
+    });
+  }
+
+// Module: 11-remote-companion-sync.js
+// Responsibility: Angular 19 <ga-remote-control> host component discovery adapter and conditional companion plugin synchronizer (statusbar / mcp-manager).
+  const hookedRcPrototypes = new Set();
+
   function getRemoteControlComponentInstance(rcEl) {
     if (window.__agyRemoteControlInstance && !window.__agyRemoteControlInstance.destroyed) {
       return window.__agyRemoteControlInstance;
@@ -6820,7 +7136,12 @@
           const tView = lView[1];
           const nodeIndex = typeof lCtx.nodeIndex === 'number' ? lCtx.nodeIndex : -1;
           const tNode = nodeIndex >= 0 && Array.isArray(tView?.data) ? tView.data[nodeIndex] : null;
-          if (tNode && typeof tNode.directiveStart === 'number' && typeof tNode.componentOffset === 'number' && tNode.componentOffset > -1) {
+          if (
+            tNode &&
+            typeof tNode.directiveStart === 'number' &&
+            typeof tNode.componentOffset === 'number' &&
+            tNode.componentOffset > -1
+          ) {
             const comp = lView[tNode.directiveStart + tNode.componentOffset];
             if (isRcInstance(comp)) return comp;
           }
@@ -6875,11 +7196,19 @@
           }
         } catch (e) {}
       }
-      const ctxKey = Object.keys(rcEl).find((k) => k.startsWith('__ngContext'));
-      const found = searchNgContext(rcEl.__ngContext__ || (ctxKey ? rcEl[ctxKey] : null));
-      if (found) {
-        window.__agyRemoteControlInstance = found;
-        return found;
+      const ngNodes = [
+        rcEl,
+        rcEl.firstElementChild || null,
+        typeof rcEl.querySelector === 'function' ? rcEl.querySelector('iframe') : null,
+      ];
+      for (const candidateNode of ngNodes) {
+        if (!candidateNode || typeof candidateNode !== 'object') continue;
+        const ctxKey = Object.keys(candidateNode).find((k) => k.startsWith('__ngContext'));
+        const found = searchNgContext(candidateNode.__ngContext__ || (ctxKey ? candidateNode[ctxKey] : null));
+        if (found) {
+          window.__agyRemoteControlInstance = found;
+          return found;
+        }
       }
     }
     const gaRootEl = typeof document?.querySelector === 'function' ? document.querySelector('ga-root') : null;
@@ -6949,10 +7278,32 @@
         if (RC && RC.prototype) {
           if (!RC.prototype.__agyKoProbeHooked) {
             RC.prototype.__agyKoProbeHooked = true;
-            RC.prototype.__agyKoOrigMethods = RC.prototype.__agyKoOrigMethods || {};
             if (typeof hookedRcPrototypes !== 'undefined' && hookedRcPrototypes) {
               hookedRcPrototypes.add(RC.prototype);
             }
+            const hookMethod = (mName) => {
+              if (typeof RC.prototype[mName] !== 'function') return;
+              if (typeof disposables !== 'undefined' && disposables && typeof disposables.registerMethodHook === 'function') {
+                disposables.registerMethodHook(RC.prototype, mName, (origFn) =>
+                  function (ev) {
+                    if (this && !this.destroyed) {
+                      window.__agyRemoteControlInstance = this;
+                    }
+                    if (mName === 'handleIframeMessage' && ev && ev.data === '__agy_ko_probe__') return;
+                    return origFn.apply(this, arguments);
+                  }
+                );
+              } else {
+                const origFn = RC.prototype[mName];
+                RC.prototype[mName] = function (ev) {
+                  if (this && !this.destroyed) {
+                    window.__agyRemoteControlInstance = this;
+                  }
+                  if (mName === 'handleIframeMessage' && ev && ev.data === '__agy_ko_probe__') return;
+                  return origFn.apply(this, arguments);
+                };
+              }
+            };
             for (const mName of [
               'handleIframeMessage',
               'handleUrlChanged',
@@ -6973,31 +7324,17 @@
               'instanceInfos',
               'remoteConversationsInfos',
             ]) {
-              if (typeof RC.prototype[mName] === 'function') {
-                const origFn = RC.prototype[mName];
-                RC.prototype.__agyKoOrigMethods[mName] = origFn;
-                RC.prototype[mName] = function (ev) {
-                  if (this && !this.destroyed) {
-                    window.__agyRemoteControlInstance = this;
-                  }
-                  if (mName === 'handleIframeMessage' && ev && ev.data === '__agy_ko_probe__') return;
-                  return origFn.apply(this, arguments);
-                };
-              }
+              hookMethod(mName);
             }
           }
           try {
-            if (!window.__agyRemoteControlInstance && typeof document?.dispatchEvent === 'function') {
+            if (!window.__agyRemoteControlInstance && typeof document?.dispatchEvent === 'function' && typeof Event === 'function') {
               document.dispatchEvent(new Event('visibilitychange'));
             }
             if (!window.__agyRemoteControlInstance && typeof window?.dispatchEvent === 'function' && typeof Event === 'function') {
               window.dispatchEvent(new Event('online'));
             }
             if (!window.__agyRemoteControlInstance && typeof MessageEvent === 'function') {
-              // When RC bound window.addEventListener('message', this.handleIframeMessage.bind(this)) at construction time,
-              // the bound listener still invokes methods on `this` (e.g. this.handleUrlChanged(a.data.path || '') when
-              // a.data.type === 'URL_CHANGED' in boq-jetski m=PGmR6b, or this.onIframeLoad() when a.data.type === 'IFRAME_READY')
-              // when the message comes from iframe.contentWindow.
               const innerIframe = rcEl && typeof rcEl.querySelector === 'function' ? rcEl.querySelector('iframe') : null;
               let innerCw = null;
               try {
@@ -7139,47 +7476,6 @@
     return '';
   }
 
-  function injectRemoteCompanionScript(code, onDone) {
-    if (!code || !document) return;
-    const codeStr = String(code);
-    let authTicket = null;
-    try {
-      const s = document.createElement('script');
-      const nonce = document.querySelector('script[nonce]')?.nonce;
-      const p = getTrustedPolicyForRemote();
-      if (nonce) s.nonce = nonce;
-      if (p && typeof p.createScript === 'function') {
-        const randPart =
-          typeof crypto !== 'undefined' && crypto && typeof crypto.getRandomValues === 'function'
-            ? Array.from(crypto.getRandomValues(new Uint32Array(2)), (n) => n.toString(16)).join('')
-            : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-        const inlineToken = `/*__agy_ko_inline_${randPart}__*/`;
-        const taggedScript = `${inlineToken}${codeStr}`;
-        authTicket = { token: inlineToken, expectedScript: taggedScript, consumed: false };
-        if (typeof pendingCompanionInlineAuth !== 'undefined') {
-          pendingCompanionInlineAuth = authTicket;
-        }
-        try {
-          s.text = p.createScript(taggedScript);
-        } finally {
-          authTicket.consumed = true;
-          if (typeof pendingCompanionInlineAuth !== 'undefined' && pendingCompanionInlineAuth === authTicket) {
-            pendingCompanionInlineAuth = null;
-          }
-        }
-      } else {
-        s.text = codeStr;
-      }
-      (document.head || document.documentElement).appendChild(s);
-      if (typeof onDone === 'function') onDone();
-    } catch (e) {
-      if (authTicket) authTicket.consumed = true;
-      if (typeof pendingCompanionInlineAuth !== 'undefined' && pendingCompanionInlineAuth === authTicket) {
-        pendingCompanionInlineAuth = null;
-      }
-    }
-  }
-
   async function probeHostCompanionPluginsForRemote(rcEl) {
     const info = {
       resolved: false,
@@ -7199,21 +7495,21 @@
       );
       info.statusbarCode = String(override.statusbarCode || override.statusbarBlock || '');
       info.mcpManagerCode = String(override.mcpManagerCode || override.mcpManagerBlock || '');
-      if (info.resolved && (info.statusbarInstalled || info.mcpManagerInstalled || override.statusbar !== undefined || override.mcpManager !== undefined)) {
+      if (
+        info.resolved &&
+        (info.statusbarInstalled || info.mcpManagerInstalled || override.statusbar !== undefined || override.mcpManager !== undefined)
+      ) {
         return info;
       }
     }
 
     const iframe = rcEl && rcEl.querySelector ? rcEl.querySelector('iframe') : null;
-    const cw = iframe && iframe.contentWindow ? iframe.contentWindow : null;
     let cwLsClient = null;
     try {
+      const cw = iframe && iframe.contentWindow ? iframe.contentWindow : null;
       cwLsClient = cw && cw.__agyCapturedLsClient ? cw.__agyCapturedLsClient : null;
     } catch (e) {}
-    const lsClient =
-      window.__agyCapturedLsClient ||
-      cwLsClient ||
-      null;
+    const lsClient = window.__agyCapturedLsClient || cwLsClient || null;
     const rcInst = getRemoteControlComponentInstance(rcEl);
     if (!lsClient && (!rcInst || typeof rcInst.proxyCommand !== 'function')) return info;
 
@@ -7276,15 +7572,12 @@
       let sbCode = extractCompanionBlock(rawText, sbStartMarkers, sbEndMarkers);
       const mcpCode = extractCompanionBlock(rawText, mcpStartMarkers, mcpEndMarkers);
 
-      // In statusbar_autoinject.js, antigravity-statusbar is the base segment before the first companion marker
-      // (it has no BEGIN_AGY_STATUSBAR wrapper). Slice out the base segment before any line-start companion marker.
       const markerPositions = [];
       for (const m of [...mcpStartMarkers, ...koStartMarkers, ...sbStartMarkers]) {
         const idx = findLineStartMarkerIndex(rawText, m, 0);
         if (idx !== -1) markerPositions.push(idx);
       }
-      const firstMarkerIdx =
-        markerPositions.length > 0 ? Math.min(...markerPositions) : rawText.length;
+      const firstMarkerIdx = markerPositions.length > 0 ? Math.min(...markerPositions) : rawText.length;
       const baseSegment = rawText.slice(0, firstMarkerIdx).trim();
 
       if (
@@ -7322,8 +7615,6 @@
         str = decodeURIComponent(str);
       } catch (e) {}
       str = str.replace(/^file:\/\//i, '').replace(/\\/g, '/');
-      // Strip leading slash before Windows drive letters (e.g. "/C:/Users/..." -> "C:/Users/...")
-      // while preserving leading slash on POSIX/Linux/macOS paths ("/home/...", "/Users/...")
       str = str.replace(/^\/+([A-Za-z]:\/)/, '$1').replace(/\/+$/, '');
       return str;
     };
@@ -7478,25 +7769,54 @@
         if (!info || !info.resolved) return;
         window.__agyKoCompanionsSynced = true;
 
-        // Only load antigravity-statusbar when actually installed on the host
-        if (info.statusbarInstalled && !window.agyStatusBar && !window.__agyKoFetchingStatusBar) {
+        const hasSbScript = Boolean(
+          typeof document?.querySelector === 'function' &&
+            document.querySelector('script[data-agy-companion="statusbar"]')
+        );
+        if (
+          info.statusbarInstalled &&
+          !window.agyStatusBar &&
+          !hasSbScript &&
+          !window.__agyKoFetchingStatusBar &&
+          !window.__agyLoadingStatusBarCompanion
+        ) {
           window.__agyKoFetchingStatusBar = true;
+          window.__agyLoadingStatusBarCompanion = true;
           if (info.statusbarCode) {
-            injectRemoteCompanionScript(info.statusbarCode, () => refreshStatusbarTranslatorAdapter());
+            try {
+              injectRemoteCompanionScript(info.statusbarCode, () => refreshStatusbarTranslatorAdapter(), 'statusbar');
+            } finally {
+              delete window.__agyLoadingStatusBarCompanion;
+            }
           } else if (typeof fetch === 'function') {
             fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-statusbar/main/dist/statusbar_autoinject.js?t=' + Date.now())
               .then((r) => (r && r.ok ? r.text() : ''))
               .then((code) => {
                 if (!code || window.agyStatusBar) return;
-                injectRemoteCompanionScript(code, () => refreshStatusbarTranslatorAdapter());
+                injectRemoteCompanionScript(code, () => refreshStatusbarTranslatorAdapter(), 'statusbar');
               })
-              .catch(() => {});
+              .catch(() => {})
+              .finally(() => {
+                delete window.__agyLoadingStatusBarCompanion;
+              });
+          } else {
+            delete window.__agyLoadingStatusBarCompanion;
           }
         }
 
-        // Only load antigravity-mcp-manager when actually installed on the host
-        if (info.mcpManagerInstalled && !window.agyMcpManager && !window.__agyKoFetchingMcpManager) {
+        const hasMcpScript = Boolean(
+          typeof document?.querySelector === 'function' &&
+            document.querySelector('script[data-agy-companion="mcp-manager"]')
+        );
+        if (
+          info.mcpManagerInstalled &&
+          !window.agyMcpManager &&
+          !hasMcpScript &&
+          !window.__agyKoFetchingMcpManager &&
+          !window.__agyLoadingMcpManagerCompanion
+        ) {
           window.__agyKoFetchingMcpManager = true;
+          window.__agyLoadingMcpManagerCompanion = true;
           const mountMcpIntoInnerFrame = () => {
             try {
               const innerFrame = rcEl.querySelector('iframe');
@@ -7511,15 +7831,24 @@
             } catch (e) {}
           };
           if (info.mcpManagerCode) {
-            injectRemoteCompanionScript(info.mcpManagerCode, mountMcpIntoInnerFrame);
+            try {
+              injectRemoteCompanionScript(info.mcpManagerCode, mountMcpIntoInnerFrame, 'mcp-manager');
+            } finally {
+              delete window.__agyLoadingMcpManagerCompanion;
+            }
           } else if (typeof fetch === 'function') {
             fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-mcp-manager/main/dist/mcp_manager_autoinject.js?t=' + Date.now())
               .then((r) => (r && r.ok ? r.text() : ''))
               .then((code) => {
                 if (!code || window.agyMcpManager) return;
-                injectRemoteCompanionScript(code, mountMcpIntoInnerFrame);
+                injectRemoteCompanionScript(code, mountMcpIntoInnerFrame, 'mcp-manager');
               })
-              .catch(() => {});
+              .catch(() => {})
+              .finally(() => {
+                delete window.__agyLoadingMcpManagerCompanion;
+              });
+          } else {
+            delete window.__agyLoadingMcpManagerCompanion;
           }
         }
       })
@@ -7527,6 +7856,155 @@
       .finally(() => {
         window.__agyKoSyncingCompanions = false;
       });
+  }
+
+  if (typeof disposables !== 'undefined' && disposables) {
+    disposables.register(() => {
+      for (const proto of hookedRcPrototypes) {
+        try {
+          delete proto.__agyKoProbeHooked;
+        } catch (e) {}
+      }
+      hookedRcPrototypes.clear();
+    });
+  }
+
+// Module: 12-remote-workbench-bridge.js
+// Responsibility: WeakMap-backed Finite State Machine (IDLE -> PREFLIGHT -> PROMOTING_BLANK -> BOOTING_WORKBENCH -> READY | ROLLED_BACK | EXTERNAL_PROMOTED)
+// for same-origin Remote Control (-v2) workbench promotion, WHATWG cd.open()+cd.close() URL inheritance, MessagePort replay, and multi-plugin coexistence.
+  const REMOTE_BRIDGE_STATES = Object.freeze({
+    IDLE: 'IDLE',
+    PREFLIGHT: 'PREFLIGHT',
+    PROMOTING_BLANK: 'PROMOTING_BLANK',
+    BOOTING_WORKBENCH: 'BOOTING_WORKBENCH',
+    READY: 'READY',
+    ROLLED_BACK: 'ROLLED_BACK',
+    EXTERNAL_PROMOTED: 'EXTERNAL_PROMOTED',
+  });
+
+  const REMOTE_BRIDGE_ALLOWED_TRANSITIONS = Object.freeze({
+    IDLE: ['PREFLIGHT', 'EXTERNAL_PROMOTED', 'READY'],
+    PREFLIGHT: ['PROMOTING_BLANK', 'ROLLED_BACK', 'IDLE'],
+    PROMOTING_BLANK: ['BOOTING_WORKBENCH', 'ROLLED_BACK'],
+    BOOTING_WORKBENCH: ['READY', 'ROLLED_BACK'],
+    READY: ['IDLE', 'ROLLED_BACK'],
+    ROLLED_BACK: ['IDLE'],
+    EXTERNAL_PROMOTED: ['IDLE', 'READY'],
+  });
+
+  const remoteBridgeSessions = new WeakMap();
+  const hookedOnLoadTargets = new Set();
+  const origOnLoadFnMap = new WeakMap();
+
+  function getOrCreateBridgeSession(iframe) {
+    let session = remoteBridgeSessions.get(iframe);
+    if (!session) {
+      session = {
+        state: REMOTE_BRIDGE_STATES.IDLE,
+        rawSrc: '',
+        failedSrc: '',
+        spoofedSrc: '',
+        suppressionHeld: false,
+        rcInst: null,
+      };
+      remoteBridgeSessions.set(iframe, session);
+    }
+    return session;
+  }
+
+  function transitionBridgeSession(session, nextState) {
+    if (!session || session.state === nextState) return true;
+    const allowed = REMOTE_BRIDGE_ALLOWED_TRANSITIONS[session.state] || [];
+    if (!allowed.includes(nextState)) return false;
+    session.state = nextState;
+    return true;
+  }
+
+  function ensureChainedOnIframeLoadHook(target) {
+    if (!target || typeof target.onIframeLoad !== 'function' || hookedOnLoadTargets.has(target)) {
+      return;
+    }
+    const prevFn = target.onIframeLoad;
+    origOnLoadFnMap.set(target, prevFn);
+    hookedOnLoadTargets.add(target);
+    if (typeof disposables !== 'undefined' && disposables && typeof disposables.registerMethodHook === 'function') {
+      disposables.registerMethodHook(target, 'onIframeLoad', (orig) =>
+        function (...args) {
+          if (
+            this &&
+            (this.__agySuppressAutoIframeLoad ||
+              (typeof this.__agySuppressAutoIframeLoadCount === 'number' && this.__agySuppressAutoIframeLoadCount > 0))
+          ) {
+            return Promise.resolve();
+          }
+          return orig.apply(this, args);
+        }
+      );
+    } else {
+      target.onIframeLoad = function (...args) {
+        if (
+          this &&
+          (this.__agySuppressAutoIframeLoad ||
+            (typeof this.__agySuppressAutoIframeLoadCount === 'number' && this.__agySuppressAutoIframeLoadCount > 0))
+        ) {
+          return Promise.resolve();
+        }
+        return prevFn.apply(this, args);
+      };
+    }
+  }
+
+  function acquireAutoLoadSuppression(session, rcInst) {
+    if (!session || !rcInst || session.suppressionHeld) return;
+    session.suppressionHeld = true;
+    session.rcInst = rcInst;
+    const nextCount = (typeof rcInst.__agySuppressAutoIframeLoadCount === 'number' ? rcInst.__agySuppressAutoIframeLoadCount : 0) + 1;
+    rcInst.__agySuppressAutoIframeLoadCount = nextCount;
+    rcInst.__agySuppressAutoIframeLoad = true;
+  }
+
+  function releaseAutoLoadSuppression(session) {
+    if (!session || !session.suppressionHeld || !session.rcInst) return;
+    const rcInst = session.rcInst;
+    session.suppressionHeld = false;
+    const nextCount = Math.max(
+      0,
+      (typeof rcInst.__agySuppressAutoIframeLoadCount === 'number' ? rcInst.__agySuppressAutoIframeLoadCount : 1) - 1
+    );
+    if (nextCount > 0) {
+      rcInst.__agySuppressAutoIframeLoadCount = nextCount;
+      rcInst.__agySuppressAutoIframeLoad = true;
+    } else {
+      delete rcInst.__agySuppressAutoIframeLoadCount;
+      rcInst.__agySuppressAutoIframeLoad = false;
+    }
+  }
+
+  function mountIntoBootedSameOriginChild(cw, cd) {
+    if (cw.__agyKoLocalizerActive !== KO_LOCALIZER_VERSION) {
+      window.__agyMountKoThoughtLocalizer(cw, cd);
+    }
+    if (typeof window.__agyMountMcpManager === 'function') {
+      try {
+        window.__agyMountMcpManager(cw, cd);
+      } catch (e) {}
+    }
+  }
+
+  function isExternallyPromotedIframe(iframe) {
+    if (!iframe) return false;
+    if (iframe.__agyMcpPromoted) return true;
+    if (
+      iframe.__agyRemotePromotionOwner &&
+      iframe.__agyRemotePromotionOwner !== 'ko-thought-translator' &&
+      (iframe.__agyRemotePromotionState === 'promoting' || iframe.__agyRemotePromotionState === 'ready')
+    ) {
+      return true;
+    }
+    if (iframe.__agyPromoted && iframe.__agyRemotePromotionOwner && iframe.__agyRemotePromotionOwner !== 'ko-thought-translator') {
+      return true;
+    }
+    return false;
   }
 
   function bridgeRemoteControlIframe() {
@@ -7539,6 +8017,17 @@
     const iframe = rcEl.querySelector('iframe');
     if (!iframe) return;
 
+    const session = getOrCreateBridgeSession(iframe);
+
+    // 1. Mid-flight FSM guard: never interfere with or reset an in-progress promotion!
+    if (
+      session.state === REMOTE_BRIDGE_STATES.PROMOTING_BLANK ||
+      session.state === REMOTE_BRIDGE_STATES.BOOTING_WORKBENCH
+    ) {
+      return;
+    }
+
+    // 2. Check if child workbench is already same-origin and booted (either READY or EXTERNAL_PROMOTED)
     try {
       const cw = iframe.contentWindow;
       const cd = iframe.contentDocument;
@@ -7555,26 +8044,44 @@
         isSameOriginOrBlank &&
         (cw.__agyMainBooted || (rootEl && rootEl.childElementCount > 0))
       ) {
-        if (cw.__agyKoLocalizerActive !== KO_LOCALIZER_VERSION) {
-          window.__agyMountKoThoughtLocalizer(cw, cd);
+        if (session.state === REMOTE_BRIDGE_STATES.IDLE || session.state === REMOTE_BRIDGE_STATES.EXTERNAL_PROMOTED) {
+          transitionBridgeSession(
+            session,
+            isExternallyPromotedIframe(iframe) ? REMOTE_BRIDGE_STATES.EXTERNAL_PROMOTED : REMOTE_BRIDGE_STATES.READY
+          );
         }
-        if (typeof window.__agyMountMcpManager === 'function') {
-          try {
-            window.__agyMountMcpManager(cw, cd);
-          } catch (e) {}
-        }
+        mountIntoBootedSameOriginChild(cw, cd);
         return;
       }
-      if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION && (!cd || !cd.getElementById || !cd.getElementById('root'))) {
+      if (
+        session.state === REMOTE_BRIDGE_STATES.READY &&
+        (!cd || !cd.getElementById || !cd.getElementById('root'))
+      ) {
+        transitionBridgeSession(session, REMOTE_BRIDGE_STATES.IDLE);
         delete iframe.__agyKoPromoted;
+        delete iframe.__agyPromoted;
+        delete iframe.__agyRemotePromotionOwner;
+        delete iframe.__agyRemotePromotionState;
       }
     } catch (e) {
-      if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION) {
+      if (session.state === REMOTE_BRIDGE_STATES.READY) {
+        transitionBridgeSession(session, REMOTE_BRIDGE_STATES.IDLE);
         delete iframe.__agyKoPromoted;
+        delete iframe.__agyPromoted;
+        delete iframe.__agyRemotePromotionOwner;
+        delete iframe.__agyRemotePromotionState;
       }
     }
 
-    if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION) return;
+    // 3. Multi-plugin coexistence: if a peer plugin (statusbar / mcp-manager) owns promotion, passively attach without re-promoting
+    if (isExternallyPromotedIframe(iframe)) {
+      transitionBridgeSession(session, REMOTE_BRIDGE_STATES.EXTERNAL_PROMOTED);
+      return;
+    }
+    if (iframe.__agyKoPromoted === KO_LOCALIZER_VERSION && session.state === REMOTE_BRIDGE_STATES.READY) {
+      return;
+    }
+
     const rcInst = getRemoteControlComponentInstance(rcEl);
     if (!rcInst) return;
 
@@ -7584,17 +8091,36 @@
       (typeof rcInst.iframeSrc === 'function' ? String(rcInst.iframeSrc() || '') : '') ||
       '';
     const rawSrc = rawCandidate.match(/https?:\/\/[^\s"'<>)+]+/)?.[0] || rawCandidate;
-    if (!rawSrc || !rawSrc.includes('?iframe=true')) return;
+    if (!rawSrc) return;
+
+    // 4. Terminal rollback lock: if this exact rawSrc previously failed preflight or CDN load, never re-enter about:blank loop!
+    if (session.state === REMOTE_BRIDGE_STATES.ROLLED_BACK) {
+      if (session.failedSrc === rawSrc || iframe.__agyKoPromotionFailedSrc === rawSrc) {
+        return;
+      }
+      transitionBridgeSession(session, REMOTE_BRIDGE_STATES.IDLE);
+    }
+    if (iframe.__agyKoPromotionFailedSrc === rawSrc) return;
+
+    // 5. Enter PREFLIGHT state and validate URL, origin allowlist, and detached <script> TrustedTypes capability BEFORE mutating iframe
+    if (!transitionBridgeSession(session, REMOTE_BRIDGE_STATES.PREFLIGHT)) return;
 
     let parsedUrl;
     try {
       parsedUrl = new URL(rawSrc, window.location.href);
     } catch (e) {
+      transitionBridgeSession(session, REMOTE_BRIDGE_STATES.IDLE);
       return;
     }
-    if (!isTrustedRemoteOriginUrlObject(parsedUrl)) return;
+    if (parsedUrl.searchParams.get('iframe') !== 'true' || !isTrustedRemoteOriginUrlObject(parsedUrl)) {
+      transitionBridgeSession(session, REMOTE_BRIDGE_STATES.IDLE);
+      return;
+    }
     const basePath = parsedUrl.pathname.replace(/^\/antigravity/, '').replace(/\/+$/, '');
-    if (!basePath || /(?:\.\.|\\|\/\/|[\s"'<>])/.test(basePath)) return;
+    if (!basePath || /(?:\.\.|\\|\/\/|[\s"'<>])/.test(basePath)) {
+      transitionBridgeSession(session, REMOTE_BRIDGE_STATES.IDLE);
+      return;
+    }
     const verMatch = basePath.match(/\/web\/([^/]+)/);
     const appVersion = verMatch ? verMatch[1] : '2.28.2';
     // Host CSP on antigravity.google.com blocks script-src from antigravity.static.usercontent.goog
@@ -7604,9 +8130,23 @@
         ? 'https://www.gstatic.com/antigravity'
         : parsedUrl.origin;
     const cdnBaseUrl = `${cdnOrigin}${basePath}`;
-    if (!isTrustedRemoteScriptUrl(`${cdnBaseUrl}/main.js`)) return;
+    if (!canPromoteRemoteScriptUrl(`${cdnBaseUrl}/main.js`)) {
+      session.failedSrc = rawSrc;
+      iframe.__agyKoPromotionFailedSrc = rawSrc;
+      transitionBridgeSession(session, REMOTE_BRIDGE_STATES.ROLLED_BACK);
+      return;
+    }
 
+    // 6. Transition PREFLIGHT -> PROMOTING_BLANK and claim multi-plugin promotion ownership
+    if (!transitionBridgeSession(session, REMOTE_BRIDGE_STATES.PROMOTING_BLANK)) return;
+    session.rawSrc = rawSrc;
     iframe.__agyKoPromoted = KO_LOCALIZER_VERSION;
+    iframe.__agyKoPromoting = true;
+    iframe.__agyPromoted = true;
+    iframe.__agyRemotePromotionOwner = 'ko-thought-translator';
+    iframe.__agyRemotePromotionState = 'promoting';
+
+    const hostThemeParam = parsedUrl.searchParams.get('hostTheme');
     const savedChildPath = String(
       new URLSearchParams(window.location.search || '').get('p') ||
         rcInst.lastSyncedChildPath ||
@@ -7618,13 +8158,17 @@
     }
 
     const buildInitialIframeHistoryUrl = () => {
-      if (!savedChildPath) return `${basePath}/?iframe=true`;
+      const extraQuery =
+        hostThemeParam === 'dark' || hostThemeParam === 'light'
+          ? `hostTheme=${encodeURIComponent(hostThemeParam)}&iframe=true`
+          : 'iframe=true';
+      if (!savedChildPath) return `${basePath}/?${extraQuery}`;
       const qIdx = savedChildPath.indexOf('?');
       const subPath = qIdx >= 0 ? savedChildPath.slice(0, qIdx) : savedChildPath;
       const subQuery = qIdx >= 0 ? savedChildPath.slice(qIdx + 1) : '';
       const cleanSubPath = subPath.replace(/^\/+/, '');
       const fullPath = cleanSubPath ? `${basePath}/${cleanSubPath}` : `${basePath}/`;
-      return subQuery ? `${fullPath}?${subQuery}&iframe=true` : `${fullPath}?iframe=true`;
+      return subQuery ? `${fullPath}?${subQuery}&${extraQuery}` : `${fullPath}?${extraQuery}`;
     };
 
     const origSrcDesc =
@@ -7632,38 +8176,28 @@
         ? Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src')
         : null;
     const spoofedSrc = `${window.location.origin}${basePath}/?iframe=true`;
+    session.spoofedSrc = spoofedSrc;
 
-    // Suppress Angular's automatic (load)="onIframeLoad()" during about:blank & document.write transitions
-    // so teardownProxyPort() is NEVER called while main.js is booting or after INITIAL_CONFIG is delivered.
     const rcProto = Object.getPrototypeOf(rcInst);
-    if (rcProto && typeof rcProto.onIframeLoad === 'function' && !rcProto.__agyOrigOnIframeLoad) {
-      rcProto.__agyOrigOnIframeLoad = rcProto.onIframeLoad;
-      rcProto.onIframeLoad = function (...args) {
-        if (this.__agySuppressAutoIframeLoad) return Promise.resolve();
-        return rcProto.__agyOrigOnIframeLoad.apply(this, args);
-      };
-      if (typeof hookedRcTargets !== 'undefined' && hookedRcTargets) {
-        hookedRcTargets.add(rcProto);
-      }
+    if (rcProto && typeof rcProto.onIframeLoad === 'function') {
+      ensureChainedOnIframeLoadHook(rcProto);
     }
-    if (typeof rcInst.onIframeLoad === 'function' && !rcInst.__agyOrigOnIframeLoad) {
-      rcInst.__agyOrigOnIframeLoad = rcInst.onIframeLoad;
-      rcInst.onIframeLoad = function (...args) {
-        if (this.__agySuppressAutoIframeLoad) return Promise.resolve();
-        return this.__agyOrigOnIframeLoad.apply(this, args);
-      };
+    if (typeof rcInst.onIframeLoad === 'function') {
+      ensureChainedOnIframeLoadHook(rcInst);
     }
-    if (typeof hookedRcTargets !== 'undefined' && hookedRcTargets) {
-      hookedRcTargets.add(rcInst);
-    }
-    rcInst.__agySuppressAutoIframeLoad = true;
+    acquireAutoLoadSuppression(session, rcInst);
 
-    let promotionRolledBack = false;
     const rollbackIframePromotion = () => {
-      if (promotionRolledBack) return;
-      promotionRolledBack = true;
-      rcInst.__agySuppressAutoIframeLoad = false;
+      if (session.state === REMOTE_BRIDGE_STATES.ROLLED_BACK) return;
+      transitionBridgeSession(session, REMOTE_BRIDGE_STATES.ROLLED_BACK);
+      session.failedSrc = rawSrc;
+      iframe.__agyKoPromoting = false;
+      iframe.__agyKoPromotionFailedSrc = rawSrc;
+      iframe.__agyRemotePromotionState = 'rolled_back';
       delete iframe.__agyKoPromoted;
+      delete iframe.__agyPromoted;
+      delete iframe.__agyRemotePromotionOwner;
+      releaseAutoLoadSuppression(session);
       try {
         delete iframe.src;
       } catch (e) {}
@@ -7677,15 +8211,29 @@
     };
 
     const onBlankLoad = () => {
+      if (!transitionBridgeSession(session, REMOTE_BRIDGE_STATES.BOOTING_WORKBENCH)) return;
       try {
-        const cw = iframe.contentWindow;
-        const cd = iframe.contentDocument;
+        let cw = iframe.contentWindow;
+        let cd = iframe.contentDocument;
         if (!cw || !cd) {
           rollbackIframePromotion();
           return;
         }
 
-        const nonce = document.querySelector('script[nonce]')?.nonce || '';
+        // WHATWG HTML Standard § 8.4 Step 12: calling cd.open(); cd.close(); (0 string args, 0 TrustedHTML sinks)
+        // on a same-origin about:blank document transitions cw.location.href from 'about:blank' ('about:' scheme)
+        // to the entry document's https://antigravity.google.com/r/... URL ('https:' scheme), preventing
+        // TanStack Router inside 2.33.0/main.js from crashing with an uncaught History.replaceState SecurityError.
+        if (cw.location && cw.location.href === 'about:blank' && typeof cd.open === 'function') {
+          try {
+            cd.open();
+            if (typeof cd.close === 'function') cd.close();
+            cw = iframe.contentWindow || cw;
+            cd = iframe.contentDocument || cd;
+          } catch (e) {}
+        }
+
+        const nonce = resolveHostCspNonce(document);
         const ttPolicy = getTrustedPolicyForRemote();
         const safeCdnBase =
           /^https:\/\/[a-z0-9.-]+(?::\d+)?(?:\/[^\s"'<>]*)?$/i.test(cdnBaseUrl) &&
@@ -7712,6 +8260,49 @@
         const bodyEl = ensureSection('body', 'body');
         headEl.textContent = '';
         bodyEl.textContent = '';
+
+        try {
+          if (typeof cd.createElement === 'function' && !cd.__agyCreateElPatched) {
+            const origCreateEl = cd.createElement.bind(cd);
+            cd.createElement = function (tagName, options) {
+              const el = options !== undefined ? origCreateEl(tagName, options) : origCreateEl(tagName);
+              if (nonce && el && typeof tagName === 'string') {
+                const upper = tagName.toUpperCase();
+                if (upper === 'SCRIPT' || upper === 'STYLE' || upper === 'LINK') {
+                  try {
+                    el.nonce = nonce;
+                    if (typeof el.setAttribute === 'function') el.setAttribute('nonce', nonce);
+                  } catch (e) {}
+                }
+              }
+              return el;
+            };
+            cd.__agyCreateElPatched = true;
+          }
+          const scriptProto = cw.HTMLScriptElement && cw.HTMLScriptElement.prototype;
+          const scriptSrcDesc = scriptProto ? Object.getOwnPropertyDescriptor(scriptProto, 'src') : null;
+          if (scriptProto && scriptSrcDesc && typeof scriptSrcDesc.set === 'function' && !scriptProto.__agyScriptSrcPatched) {
+            Object.defineProperty(scriptProto, 'src', {
+              configurable: true,
+              enumerable: true,
+              get: scriptSrcDesc.get,
+              set(val) {
+                if (typeof val === 'string') {
+                  let nextUrl = val;
+                  if (basePath && nextUrl.startsWith(basePath + '/')) {
+                    nextUrl = `${cdnBaseUrl}${nextUrl.slice(basePath.length)}`;
+                  }
+                  if (ttPolicy && isTrustedRemoteScriptUrl(nextUrl)) {
+                    return scriptSrcDesc.set.call(this, ttPolicy.createScriptURL(nextUrl));
+                  }
+                  return scriptSrcDesc.set.call(this, nextUrl);
+                }
+                return scriptSrcDesc.set.call(this, val);
+              },
+            });
+            scriptProto.__agyScriptSrcPatched = true;
+          }
+        } catch (e) {}
 
         const metaCharset = cd.createElement('meta');
         metaCharset.setAttribute('charset', 'UTF-8');
@@ -7760,6 +8351,21 @@
         } catch (e) {}
 
         try {
+          if (cw.history && !cw.history.__agyHistoryGuarded) {
+            for (const hMethod of ['replaceState', 'pushState']) {
+              const origHistFn = cw.history[hMethod];
+              if (typeof origHistFn === 'function') {
+                cw.history[hMethod] = function (state, title, url) {
+                  try {
+                    return origHistFn.call(this, state, title, url);
+                  } catch (histErr) {
+                    return undefined;
+                  }
+                };
+              }
+            }
+            cw.history.__agyHistoryGuarded = true;
+          }
           cw.history.replaceState(null, '', buildInitialIframeHistoryUrl());
         } catch (e) {}
         try {
@@ -7771,7 +8377,7 @@
 
         cw.__APP_CONFIG__ = {
           productName: 'antigravity',
-          csrfToken: 'csrf_token',
+          csrfToken: String(window?.__APP_CONFIG__?.csrfToken || rcInst?.csrfToken || 'csrf_token'),
           appVersion,
           isRemoteControl: true,
         };
@@ -7832,13 +8438,9 @@
           elProto.__agySetAttrPatched = true;
         }
         try {
-          cw.document.documentElement.style.colorScheme = 'dark';
+          cw.document.documentElement.style.colorScheme = hostThemeParam === 'light' ? 'light' : 'dark';
         } catch (e) {}
 
-        // Buffer INITIAL_CONFIG messages sent to cw before main.js registers its XChannelTransport(qYc) message listener,
-        // and replay the cached event immediately when addEventListener('message', fn) is called.
-        // This guarantees main.js receives the very first MessagePort without ever calling rcInst.onIframeLoad() twice
-        // (which would run teardownProxyPort() and close the active MessagePort).
         const msgListeners = new Set();
         try {
           if (typeof cw.addEventListener === 'function' && !cw.__agyMsgBufferInstalled) {
@@ -7881,12 +8483,20 @@
           }
         } catch (e) {}
 
-        // Wrap cw.Worker so relative worker paths (e.g. '/diff_worker.js?v=...') resolve against cdnBaseUrl via Blob importScripts
         try {
           if (typeof cw.Worker === 'function' && !cw.Worker.__agyWorkerPatched) {
             const OrigWorker = cw.Worker;
+            const makeInertWorkerStub = () => ({
+              postMessage() {},
+              terminate() {},
+              addEventListener() {},
+              removeEventListener() {},
+              dispatchEvent: () => false,
+              onmessage: null,
+              onerror: null,
+            });
             const PatchedWorker = function (scriptURL, options) {
-              let urlStr = String(scriptURL || '');
+              const urlStr = String(scriptURL || '');
               if (urlStr.startsWith('/') && !urlStr.startsWith('//')) {
                 const targetWorkerUrl = `${cdnBaseUrl}${urlStr}`;
                 if (isTrustedRemoteScriptUrl(targetWorkerUrl)) {
@@ -7918,13 +8528,19 @@
                         return worker;
                       } catch (workerErr) {
                         revokeBlobUrl();
-                        throw workerErr;
+                        return makeInertWorkerStub();
                       }
                     }
-                  } catch (e) {}
+                  } catch (e) {
+                    return makeInertWorkerStub();
+                  }
                 }
               }
-              return new OrigWorker(scriptURL, options);
+              try {
+                return new OrigWorker(scriptURL, options);
+              } catch (e) {
+                return makeInertWorkerStub();
+              }
             };
             PatchedWorker.prototype = OrigWorker.prototype;
             PatchedWorker.__agyWorkerPatched = true;
@@ -7945,12 +8561,15 @@
         mainScript.src = ttPolicy ? ttPolicy.createScriptURL(mainUrl) : mainUrl;
 
         mainScript.onload = () => {
+          transitionBridgeSession(session, REMOTE_BRIDGE_STATES.READY);
+          iframe.__agyKoPromoting = false;
+          iframe.__agyRemotePromotionState = 'ready';
           cw.__agyMainBooted = true;
-          rcInst.__agySuppressAutoIframeLoad = false;
+          releaseAutoLoadSuppression(session);
           if (savedChildPath) rcInst.initialChildPath = savedChildPath;
           const origLoad =
-            rcInst.__agyOrigOnIframeLoad ||
-            rcProto?.__agyOrigOnIframeLoad ||
+            origOnLoadFnMap.get(rcInst) ||
+            (rcProto ? origOnLoadFnMap.get(rcProto) : null) ||
             rcInst.onIframeLoad;
           let initialConfigInFlight = false;
           const replayBufferedInitialConfig = () => {
@@ -8002,19 +8621,14 @@
               rcInst.iframeUiReady?.set?.(true);
             }
           } catch (e) {}
-          window.__agyMountKoThoughtLocalizer(cw, cd);
-          if (typeof window.__agyMountMcpManager === 'function') {
-            try {
-              window.__agyMountMcpManager(cw, cd);
-            } catch (e) {}
-          }
+          mountIntoBootedSameOriginChild(cw, cd);
         };
         mainScript.onerror = () => {
           rollbackIframePromotion();
         };
 
-        cd.head.appendChild(prismScript);
-        cd.head.appendChild(mainScript);
+        headEl.appendChild(prismScript);
+        headEl.appendChild(mainScript);
       } catch (e) {
         rollbackIframePromotion();
       }
@@ -8025,7 +8639,7 @@
     } catch (e) {}
     let blankLoadHandled = false;
     const triggerBlankLoadOnce = () => {
-      if (blankLoadHandled) return;
+      if (blankLoadHandled || session.state !== REMOTE_BRIDGE_STATES.PROMOTING_BLANK) return;
       try {
         const cd = iframe.contentDocument;
         const cw = iframe.contentWindow;
@@ -8046,11 +8660,32 @@
       Object.defineProperty(iframe, 'src', {
         configurable: true,
         get: () => spoofedSrc,
-        set: () => {},
+        set(nextVal) {
+          const nextStr = String(nextVal ?? '');
+          if (!nextStr || nextStr === spoofedSrc) return;
+          try {
+            delete iframe.src;
+          } catch (e) {}
+          session.state = REMOTE_BRIDGE_STATES.IDLE;
+          session.rawSrc = '';
+          session.failedSrc = '';
+          delete iframe.__agyKoPromoted;
+          delete iframe.__agyPromoted;
+          delete iframe.__agyRemotePromotionOwner;
+          delete iframe.__agyRemotePromotionState;
+          iframe.__agyKoPromoting = false;
+          delete iframe.__agyKoPromotionFailedSrc;
+          releaseAutoLoadSuppression(session);
+          if (origSrcDesc && typeof origSrcDesc.set === 'function') {
+            origSrcDesc.set.call(iframe, nextStr);
+          } else {
+            iframe.setAttribute?.('src', nextStr);
+          }
+        },
       });
     } catch (e) {}
     setTimeout(() => {
-      if (!blankLoadHandled) {
+      if (!blankLoadHandled && session.state === REMOTE_BRIDGE_STATES.PROMOTING_BLANK) {
         try {
           if (iframe.contentDocument && iframe.contentDocument.readyState === 'complete') {
             triggerBlankLoadOnce();
@@ -8060,121 +8695,46 @@
     }, 60);
   }
 
-  function scanSideQuestionAndBrowserSubagentThoughts() {
-    if (!document || typeof document.querySelectorAll !== 'function') return;
-    const sqBtns = document.querySelectorAll('[data-testid="side-question-answer"] button[aria-expanded]');
-    for (const btn of sqBtns) {
-      processTriggerButton(btn);
-      const panel = btn.nextElementSibling;
-      if (!panel || panel.tagName !== 'DIV') continue;
-      let hostEl = panel.querySelector ? panel.querySelector('.cursor-edit') : null;
-      if (!hostEl && typeof panel.querySelectorAll === 'function') {
-        hostEl = Array.from(panel.querySelectorAll('div')).find(
-          (d) =>
-            String(d.className || '').includes('border-l') &&
-            Array.from(d.children || []).some(
-              (c) => c.tagName === 'DIV' && (!c.classList || !c.classList.contains('agy-ko-thought-wrap'))
-            )
-        );
+  if (typeof disposables !== 'undefined' && disposables) {
+    disposables.register((fullRestore) => {
+      for (const target of hookedOnLoadTargets) {
+        try {
+          delete target.__agySuppressAutoIframeLoad;
+          delete target.__agySuppressAutoIframeLoadCount;
+        } catch (e) {}
       }
-      if (
-        !hostEl &&
-        Array.from(panel.children || []).some(
-          (c) => c.tagName === 'DIV' && (!c.classList || !c.classList.contains('agy-ko-thought-wrap'))
-        )
-      ) {
-        hostEl = panel;
-      }
-      if (hostEl) {
-        if (!hostEl.classList || !hostEl.classList.contains('cursor-edit')) {
-          if (typeof hostEl.setAttribute === 'function') {
-            hostEl.setAttribute('data-agy-ko-thought-host', '1');
+      hookedOnLoadTargets.clear();
+      try {
+        const rcFrame = document.querySelector && document.querySelector('ga-remote-control');
+        const innerIframe = rcFrame && rcFrame.querySelector ? rcFrame.querySelector('iframe') : null;
+        if (innerIframe) {
+          const session = remoteBridgeSessions.get(innerIframe);
+          if (session) releaseAutoLoadSuppression(session);
+          const cw = innerIframe.contentWindow;
+          if (cw && cw !== window && typeof cw.__agyKoThoughtCleanup === 'function') {
+            cw.__agyKoThoughtCleanup(fullRestore);
+          }
+          if (fullRestore) {
+            remoteBridgeSessions.delete(innerIframe);
+            delete innerIframe.__agyKoPromoted;
+            delete innerIframe.__agyKoPromoting;
+            delete innerIframe.__agyKoPromotionFailedSrc;
+            if (innerIframe.__agyRemotePromotionOwner === 'ko-thought-translator') {
+              delete innerIframe.__agyPromoted;
+              delete innerIframe.__agyRemotePromotionOwner;
+              delete innerIframe.__agyRemotePromotionState;
+            }
+            try {
+              delete innerIframe.src;
+            } catch (e) {}
           }
         }
-        processCursorEdit(hostEl, btn);
-      }
-    }
-
-    const browserThoughtSpans = document.querySelectorAll('[data-testid="browser-subagent-thinking"] span');
-    const translateEnabled = typeof isTranslateThinkingEnabled === 'function' ? isTranslateThinkingEnabled() : true;
-    for (const el of browserThoughtSpans) {
-      if (!el.childNodes || el.childNodes.length !== 1 || el.firstChild.nodeType !== 3) continue;
-      const tn = el.firstChild;
-      if (!translateEnabled) {
-        delete el.__agyDynamicSource;
-        delete el.__agyTranslatingDynamic;
-        if (tn.__agyOrigValue !== undefined) {
-          tn.nodeValue = tn.__agyOrigValue;
-          delete tn.__agyOrigValue;
-          delete tn.__agyKoApplied;
-        }
-        continue;
-      }
-      const liveVal = tn.nodeValue || '';
-      const trimmed = liveVal.trim();
-      if (!trimmed) continue;
-      if (tn.__agyKoApplied && trimmed === tn.__agyKoApplied) continue;
-      tn.__agyOrigValue = liveVal;
-      if (isAlreadyKoreanOrNonEnglish(trimmed)) continue;
-
-      const syncKo = translateStaticUiSync(trimmed);
-      if (syncKo && syncKo !== trimmed) {
-        tn.__agyKoApplied = syncKo;
-        tn.nodeValue = syncKo;
-        continue;
-      }
-      if (memCache.has(trimmed)) {
-        const cached = memCache.get(trimmed);
-        if (!isInvalidCachedOrTranslatedText(cached, trimmed)) {
-          tn.__agyKoApplied = cached;
-          tn.nodeValue = cached;
-          continue;
-        }
-      }
-      if (el.__agyDynamicSource !== trimmed && !el.__agyTranslatingDynamic) {
-        el.__agyDynamicSource = trimmed;
-        el.__agyTranslatingDynamic = true;
-        translateThoughtTextEnToKo(trimmed)
-          .then((ko) => {
-            const wasTranslating = Boolean(el.__agyTranslatingDynamic);
-            delete el.__agyTranslatingDynamic;
-            if (disposed || !wasTranslating || !ko || ko === trimmed || el.isConnected === false) {
-              if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
-              return;
-            }
-            if (!el.firstChild || el.firstChild.nodeType !== 3 || (el.firstChild.nodeValue || '').trim() !== trimmed) {
-              if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
-              return;
-            }
-            el.firstChild.__agyOrigValue = el.firstChild.nodeValue;
-            el.firstChild.__agyKoApplied = ko;
-            el.firstChild.nodeValue = ko;
-          })
-          .catch(() => {
-            delete el.__agyTranslatingDynamic;
-            if (el.__agyDynamicSource === trimmed) delete el.__agyDynamicSource;
-          });
-      }
-    }
+      } catch (e) {}
+    });
   }
 
-  function scanThoughtBlocks() {
-    ensureVerboseConversationStepsEnabled();
-    scanTriggerButtonsSync();
-    const allCursorEdits = document.querySelectorAll('.cursor-edit');
-    for (const cursorEdit of allCursorEdits) {
-      const container = cursorEdit.closest('.relative') || cursorEdit.parentElement;
-      const btn = container
-        ? container.querySelector('button[data-testid="thinking-collapsible-trigger"]')
-        : null;
-      processCursorEdit(cursorEdit, btn);
-    }
-    scanSideQuestionAndBrowserSubagentThoughts();
-    if (isPretranslateEnabled()) {
-      pretranslateCollapsedThoughtsInBackground();
-    }
-  }
-
+// Module: 13-dom-observer-lifecycle.js
+// Responsibility: Session-switch transition guard, fast/coalesced MutationObserver scheduler, periodic rescan, and deterministic DisposableRegistry teardown.
   function scanAll() {
     ensureStyle();
     registerStatusbarTranslatorAdapter();
@@ -8197,6 +8757,7 @@
     }
   }
   window.__agyForceRescanAll = scanAll;
+  disposables.registerWindowGlobal('__agyForceRescanAll');
 
   // Fast pre-paint pass for Thinking/Worked triggers and .cursor-edit blocks (prevents session-switch FOUC)
   // paired with microtask deduplication and a 16ms coalesced timer for full-document static UI localization.
@@ -8342,9 +8903,6 @@
         }
         armFreezeTimer(views, 650);
       } else {
-        // When IEc finishes async trajectorySlice load after the spinner (tEc), turns mount into the view.
-        // Extend or re-arm the transition-suppression window by 250ms on that first turn mount (even if async load took >650ms)
-        // without ever shortening an active 650ms freeze timer.
         for (const v of views) {
           if (!v || typeof v.querySelector !== 'function') continue;
           const cid = v.getAttribute ? v.getAttribute('data-cascade-id') : null;
@@ -8492,7 +9050,6 @@
           return;
         }
         if (m.attributeName === 'aria-expanded') {
-          // Ignore self-induced programmatic expand/collapse or rAF transition state inside an already auto-expanded collapsible
           if (
             m.target.__agyProgrammaticClick ||
             (m.target.getAttribute &&
@@ -8526,11 +9083,11 @@
   function startObserver() {
     const root = document.body || document.documentElement;
     if (!root) {
-      window.addEventListener('DOMContentLoaded', startObserver, { once: true });
+      disposables.registerEvent(window, 'DOMContentLoaded', startObserver, { once: true });
       return;
     }
     if (document.addEventListener) {
-      document.addEventListener('click', onTriggerButtonClickCapture, true);
+      disposables.registerEvent(document, 'click', onTriggerButtonClickCapture, true);
     }
     observer.observe(root, {
       childList: true,
@@ -8548,8 +9105,45 @@
   }
 
   startObserver();
-  const intervalId = setInterval(scanAll, 2500);
+  const intervalId = disposables.registerInterval(setInterval(scanAll, 2500));
   window.__agyKoLocalizerActive = KO_LOCALIZER_VERSION;
+
+  const OWN_WINDOW_GLOBALS = [
+    '__agyMountKoThoughtLocalizer',
+    '__agyKoLocalizerActive',
+    '__agyKoThoughtCleanup',
+    '__agyTranslateStaticUiSync',
+    '__agyGetTranslationProvider',
+    '__agyListTranslationProviders',
+    '__agyRegisterTranslationAdapter',
+    '__agySetTranslationProvider',
+    '__agySyncPersistentSettings',
+    '__agyPretranslateStats',
+    '__agyGetShowThinking',
+    '__agySetShowThinking',
+    '__agyGetTranslateThinking',
+    '__agySetTranslateThinking',
+    '__agyGetPretranslate',
+    '__agySetPretranslate',
+    '__agyOpenTranslatorSettingsModal',
+    '__agyRetranslateVisibleThoughts',
+    '__agyForceRescanAll',
+    '__agyLastDefaultPretranslate',
+    '__agyLastDefaultProvider',
+    '__agyKoTrustedPolicy',
+    '__agyRemoteControlInstance',
+    '__agyKoSyncingCompanions',
+    '__agyKoCompanionsSynced',
+    '__agyLastHostInstalledPluginsRef',
+    '__agyKoFetchingStatusBar',
+    '__agyKoFetchingMcpManager',
+    '__agyLoadingStatusBarCompanion',
+    '__agyLoadingMcpManagerCompanion',
+    '__agySharedKoMemCache',
+  ];
+  for (const prop of OWN_WINDOW_GLOBALS) {
+    disposables.registerWindowGlobal(prop);
+  }
 
   window.__agyKoThoughtCleanup = (fullRestore = false) => {
     disposed = true;
@@ -8565,48 +9159,9 @@
     if (settingsFeedbackTimer) clearTimeout(settingsFeedbackTimer);
     if (sessionSwitchFreezeTimer) clearTimeout(sessionSwitchFreezeTimer);
     observer.disconnect();
-    if (typeof window.removeEventListener === 'function') {
-      window.removeEventListener('DOMContentLoaded', startObserver);
-    }
-    if (document.removeEventListener) {
-      document.removeEventListener('click', onTriggerButtonClickCapture, true);
-    }
     if (typeof cleanupNativeSettingsModalIntegration === 'function') {
       cleanupNativeSettingsModalIntegration();
     }
-    for (const proto of hookedRcPrototypes) {
-      try {
-        if (proto && proto.__agyKoOrigMethods) {
-          for (const [mName, origFn] of Object.entries(proto.__agyKoOrigMethods)) {
-            proto[mName] = origFn;
-          }
-        }
-        delete proto.__agyKoOrigMethods;
-        delete proto.__agyKoProbeHooked;
-      } catch (e) {}
-    }
-    hookedRcPrototypes.clear();
-    for (const target of hookedRcTargets) {
-      try {
-        if (target && target.__agyOrigOnIframeLoad) {
-          target.onIframeLoad = target.__agyOrigOnIframeLoad;
-        }
-        delete target.__agyOrigOnIframeLoad;
-        delete target.__agySuppressAutoIframeLoad;
-      } catch (e) {}
-    }
-    hookedRcTargets.clear();
-    ownCreatedWorkerBlobUrls.clear();
-    cachedRemoteTrustedPolicy = null;
-    pendingCompanionInlineAuth = null;
-    try {
-      const rcFrame = document.querySelector && document.querySelector('ga-remote-control');
-      const innerIframe = rcFrame && rcFrame.querySelector ? rcFrame.querySelector('iframe') : null;
-      const cw = innerIframe && innerIframe.contentWindow;
-      if (cw && cw !== window && typeof cw.__agyKoThoughtCleanup === 'function') {
-        cw.__agyKoThoughtCleanup(fullRestore);
-      }
-    } catch (e) {}
     delete window.__agyKoLocalizerActive;
     unregisterStatusbarTranslatorAdapter(fullRestore);
     document.querySelectorAll('.cursor-edit, [data-agy-ko-thought-host="1"]').forEach((el) => {
@@ -8663,47 +9218,12 @@
         document.documentElement.removeAttribute('data-agy-hide-thinking');
       }
       restoreAllMutatedNodes();
-      const OWN_WINDOW_GLOBALS = [
-        '__agyMountKoThoughtLocalizer',
-        '__agyKoLocalizerActive',
-        '__agyKoThoughtCleanup',
-        '__agyTranslateStaticUiSync',
-        '__agyGetTranslationProvider',
-        '__agyListTranslationProviders',
-        '__agyRegisterTranslationAdapter',
-        '__agySetTranslationProvider',
-        '__agySyncPersistentSettings',
-        '__agyPretranslateStats',
-        '__agyGetShowThinking',
-        '__agySetShowThinking',
-        '__agyGetTranslateThinking',
-        '__agySetTranslateThinking',
-        '__agyGetPretranslate',
-        '__agySetPretranslate',
-        '__agyOpenTranslatorSettingsModal',
-        '__agyRetranslateVisibleThoughts',
-        '__agyForceRescanAll',
-        '__agyLastDefaultPretranslate',
-        '__agyLastDefaultProvider',
-        '__agyKoTrustedPolicy',
-        '__agyRemoteControlInstance',
-        '__agyKoSyncingCompanions',
-        '__agyKoCompanionsSynced',
-        '__agyLastHostInstalledPluginsRef',
-        '__agyKoFetchingStatusBar',
-        '__agyKoFetchingMcpManager',
-        '__agySharedKoMemCache',
-      ];
-      for (const prop of OWN_WINDOW_GLOBALS) {
-        try {
-          delete window[prop];
-        } catch (e) {}
-      }
       if (!window.agyStatusBar && !window.__agyMountMcpManager) {
         try {
           delete window.__agyCapturedLsClient;
         } catch (e) {}
       }
     }
+    disposables.disposeAll(fullRestore);
   };
 })(typeof window !== 'undefined' ? window : undefined, typeof document !== 'undefined' ? document : undefined);

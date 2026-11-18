@@ -1,10 +1,11 @@
 {
   "name": "antigravity-ko-translator",
-  "version": "1.2.39",
+  "version": "1.3.0",
   "description": "Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI with modular SOLID architecture and pure StatusBarAdapter integration.",
   "private": true,
   "scripts": {
-    "test": "node --test test/ko-translator.test.js",
+    "test": "node --test test/ko-translator.test.js test/rc-browser-e2e.js",
+    "test:browser": "node --test test/rc-browser-e2e.js",
     "sync:mirrors": "node ./scripts/ensure_ko_thought_patch.js --sync-mirrors",
     "patch": "node ./scripts/ensure_ko_thought_patch.js --worker",
     "status": "node ./scripts/ensure_ko_thought_patch.js --status"

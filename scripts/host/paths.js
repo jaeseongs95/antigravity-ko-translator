@@ -56,7 +56,12 @@ const RENDERER_MODULE_FILES = [
   '05-fiber-pretranslator.js',
   '06-settings-modal-ui.js',
   '07-statusbar-adapter.js',
-  '08-dom-observer.js',
+  '08-thinking-and-triggers.js',
+  '09-static-ui-localizer.js',
+  '10-remote-security-policy.js',
+  '11-remote-companion-sync.js',
+  '12-remote-workbench-bridge.js',
+  '13-dom-observer-lifecycle.js',
 ];
 
 module.exports = {
