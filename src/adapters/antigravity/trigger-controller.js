@@ -186,7 +186,7 @@ function createAntigravityTriggerController({
     for (let i = 0; i < thinkingBtns.length; i++) {
       const btn = thinkingBtns[i];
       processTriggerButton(btn);
-      const isLatest = isElementInLatestTurn(btn, doc, NodeCtor) || i === thinkingBtns.length - 1;
+      const isLatest = isElementInLatestTurn(btn, doc, NodeCtor);
       if (showThinking && !forceCollapse) {
         if (isLatest && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
           expandIfNeeded(btn);

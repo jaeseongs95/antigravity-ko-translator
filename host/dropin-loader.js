@@ -218,7 +218,14 @@ function attach(contents) {
             const sp = path.join(agyDir, 'ko_translator_settings.json');
             try {
               if (fs.existsSync(sp)) {
-                prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__=' + fs.readFileSync(sp, 'utf8') + ';\\n';
+                const parsedSettings = JSON.parse(fs.readFileSync(sp, 'utf8'));
+                if (parsedSettings && typeof parsedSettings === 'object' && !Array.isArray(parsedSettings)) {
+                  const safeJson = JSON.stringify(parsedSettings)
+                    .replace(/</g, '\\\\u003c')
+                    .replace(/\\u2028/g, '\\\\u2028')
+                    .replace(/\\u2029/g, '\\\\u2029');
+                  prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__=' + safeJson + ';\\n';
+                }
               }
             } catch (_e) {}
           }
@@ -299,7 +306,12 @@ function isPureUnpatchedArchive(archive) {
   const utilsText = archive.fileMap.get('dist/utils.js')?.toString('utf8') || '';
   const preloadText = archive.fileMap.get('dist/preload.js')?.toString('utf8') || '';
   const all = mainText + '\n' + utilsText + '\n' + preloadText;
-  return !all.includes(PATCH_MARKER);
+  return (
+    !all.includes(PATCH_MARKER) &&
+    !all.includes('AGY_STATUSBAR') &&
+    !all.includes('AGY_KO_THOUGHT') &&
+    !all.includes('ui-extensions-loader')
+  );
 }
 
 function transformExactSize(origBuf, targetStr, replacementStr) {
@@ -364,10 +376,18 @@ function writeBinaryAtomicStrictSync(targetPath, buf) {
 
 function registerPluginManifest(pathOverrides = null) {
   const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+  const pluginId = p.PLUGIN_ID || PLUGIN_ID;
+  let entryScript = p.RENDERER_BUNDLE_PATH;
+  if (!pathOverrides || !pathOverrides.RENDERER_BUNDLE_PATH) {
+    const installedEntry = path.join(p.PLUGINS_ROOT_DIR, pluginId, 'dist', 'renderer.js');
+    if (fs.existsSync(installedEntry)) {
+      entryScript = installedEntry;
+    }
+  }
   const manifest = {
     schemaVersion: 1,
-    pluginId: p.PLUGIN_ID || PLUGIN_ID,
-    entryScript: p.RENDERER_BUNDLE_PATH,
+    pluginId,
+    entryScript,
   };
   writeFileAtomicSync(p.MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n');
   writeFileAtomicSync(p.LOADER_SCRIPT_PATH, buildHostLoaderScriptSource());
@@ -484,47 +504,63 @@ function installAsarDropinLoader(pathOverrides = null) {
 
 function rollbackAsarDropinLoader(pathOverrides = null) {
   const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
-  const manifestRemoved = unregisterPluginManifest(p);
+  const ownManifestName = path.basename(p.MANIFEST_PATH);
 
   if (!fs.existsSync(p.ASAR_PATH)) {
+    const manifestRemoved = unregisterPluginManifest(p);
     return { status: 'SKIPPED_NO_ASAR', manifestRemoved };
   }
 
   // If other plugins still have registered manifests in `ui-extensions.d`, keep the shared loader intact.
-  const remainingManifests = fs.existsSync(p.UI_EXTENSIONS_DIR)
-    ? fs.readdirSync(p.UI_EXTENSIONS_DIR).filter((f) => f.endsWith('.json'))
+  const siblingManifests = fs.existsSync(p.UI_EXTENSIONS_DIR)
+    ? fs.readdirSync(p.UI_EXTENSIONS_DIR).filter((f) => f.endsWith('.json') && f !== ownManifestName)
     : [];
-  if (remainingManifests.length > 0) {
+  if (siblingManifests.length > 0) {
+    const manifestRemoved = unregisterPluginManifest(p);
     return {
       status: 'MANIFEST_REMOVED_SHARED_LOADER_PRESERVED',
       manifestRemoved,
-      remainingManifests,
+      remainingManifests: siblingManifests,
     };
   }
 
   const lockTok = acquireExclusiveLock(p.ASAR_LOCK_PATH, 60000);
   if (!lockTok) {
-    return { status: 'LOCK_BUSY', manifestRemoved };
+    return { status: 'LOCK_BUSY', manifestRemoved: false };
   }
   try {
     const cur = readAsarArchive(p.ASAR_PATH);
     if (isPureUnpatchedArchive(cur)) {
+      const manifestRemoved = unregisterPluginManifest(p);
       return { status: 'ALREADY_UNPATCHED', appVersion: cur.appVersion, manifestRemoved };
     }
     const backupPath = `${p.ASAR_PATH}.v${cur.appVersion}.orig`;
+    const metaPath = `${backupPath}.json`;
     if (!fs.existsSync(backupPath)) {
-      return { status: 'ERR_ORIG_MISSING', appVersion: cur.appVersion, manifestRemoved };
+      return { status: 'ERR_ORIG_MISSING', appVersion: cur.appVersion, manifestRemoved: false };
     }
     const origArchive = readAsarArchive(backupPath);
     if (!isPureUnpatchedArchive(origArchive) || origArchive.appVersion !== cur.appVersion) {
-      return { status: 'ERR_ORIG_INVALID', appVersion: cur.appVersion, manifestRemoved };
+      return { status: 'ERR_ORIG_INVALID', appVersion: cur.appVersion, manifestRemoved: false };
+    }
+    const origHash = sha256Hex(origArchive.buf);
+    if (fs.existsSync(metaPath)) {
+      try {
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+        if (!meta || meta.sha256 !== origHash || meta.bytes !== origArchive.buf.length) {
+          return { status: 'ERR_ORIG_META_MISMATCH', appVersion: cur.appVersion, manifestRemoved: false };
+        }
+      } catch (_err) {
+        return { status: 'ERR_ORIG_META_MISMATCH', appVersion: cur.appVersion, manifestRemoved: false };
+      }
     }
     writeBinaryAtomicStrictSync(p.ASAR_PATH, origArchive.buf);
+    const manifestRemoved = unregisterPluginManifest(p);
     return {
       status: 'ROLLED_BACK',
       appVersion: cur.appVersion,
       manifestRemoved,
-      sha256: sha256Hex(origArchive.buf),
+      sha256: origHash,
     };
   } finally {
     releaseExclusiveLock(p.ASAR_LOCK_PATH, lockTok);

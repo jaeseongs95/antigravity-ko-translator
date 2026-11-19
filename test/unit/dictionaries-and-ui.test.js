@@ -14,6 +14,7 @@ const {
   isExcludedByFontMonoInheritance,
   createAntigravityUiLocalizer,
 } = require('../../src/adapters/antigravity/ui-localizer');
+const { createAntigravityTriggerController } = require('../../src/adapters/antigravity/trigger-controller');
 
 test('Workbench static UI dictionary translates exact and patterned phrases without companion-ui coupling', () => {
   const catalog = createAntigravityDictionaryCatalog();
@@ -76,4 +77,52 @@ test('createAntigravityUiLocalizer skips code-viewer/diff elements and localizes
     parentElement: null,
   };
   assert.equal(localizer.isExcludedFromStaticUiLocalization(excludedEl), true);
+});
+
+test('F3 (D-0016/D-0023): trigger-controller does NOT force-expand previous completed turn Thinking when latest turn is text-only', () => {
+  let prevBtnClicked = false;
+  const latestUserBubble = {
+    compareDocumentPosition: () => 0,
+  };
+  const prevThinkingBtn = {
+    attrs: new Map([
+      ['data-testid', 'thinking-collapsible-trigger'],
+      ['aria-expanded', 'false'],
+    ]),
+    getAttribute(k) {
+      return this.attrs.has(k) ? this.attrs.get(k) : null;
+    },
+    setAttribute(k, v) {
+      this.attrs.set(k, String(v));
+    },
+    removeAttribute(k) {
+      this.attrs.delete(k);
+    },
+    closest: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    compareDocumentPosition: (other) => (other === latestUserBubble ? 4 : 0),
+    click() {
+      prevBtnClicked = true;
+    },
+  };
+
+  const doc = {
+    documentElement: { setAttribute() {}, removeAttribute() {}, getAttribute: () => null },
+    querySelectorAll(sel) {
+      if (sel === '[data-testid="user-message-bubble"]') return [latestUserBubble];
+      if (sel === 'button[data-testid="thinking-collapsible-trigger"]') return [prevThinkingBtn];
+      return [];
+    },
+  };
+
+  const ctrl = createAntigravityTriggerController({
+    targetDoc: doc,
+    targetWin: { Node: { DOCUMENT_POSITION_FOLLOWING: 4 } },
+    catalog: createAntigravityDictionaryCatalog(),
+    getShowThinkingEnabled: () => true,
+  });
+
+  ctrl.scanTriggerButtonsSync(false);
+  assert.equal(prevBtnClicked, false, 'Previous turn Thinking button must NOT be force-expanded');
 });

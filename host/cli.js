@@ -65,10 +65,15 @@ async function runCli(argv = process.argv.slice(2), pathOverrides = null) {
 
   if (argv.includes('--rollback')) {
     const rollback = rollbackAsarDropinLoader(p);
-    const settingsRemoved = removeTranslatorSettings(p);
+    const succeeded =
+      rollback.status === 'ROLLED_BACK' ||
+      rollback.status === 'ALREADY_UNPATCHED' ||
+      rollback.status === 'SKIPPED_NO_ASAR' ||
+      rollback.status === 'MANIFEST_REMOVED_SHARED_LOADER_PRESERVED';
+    const settingsRemoved = succeeded ? removeTranslatorSettings(p) : false;
     const out = { ...rollback, settingsRemoved };
     process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-    if (rollback.status !== 'ROLLED_BACK' && rollback.status !== 'ALREADY_UNPATCHED' && rollback.status !== 'SKIPPED_NO_ASAR' && rollback.status !== 'MANIFEST_REMOVED_SHARED_LOADER_PRESERVED') {
+    if (!succeeded) {
       process.exitCode = 1;
     }
     return out;

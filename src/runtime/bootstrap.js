@@ -116,6 +116,7 @@ function createKoTranslator({
   };
 
   let started = false;
+  let runtimeActive = false;
   let disposed = false;
   let lastError = null;
 
@@ -213,21 +214,20 @@ function createKoTranslator({
     parent.appendChild(styleEl);
   }
 
-  function scanAll() {
+  function scanAll(activeObserver = null) {
     if (disposed || !state.enabled) return;
     try {
       ensureStyleElement();
       triggerController.scanTriggerButtonsSync(false);
       if (state.translateThinking) {
         thinkingTranslator.scanThoughtBlocks();
-        thinkingTranslator.scanSideQuestionAndBrowserThoughts();
       } else {
         thinkingTranslator.restoreOriginalCursorEdits();
       }
       if (state.translateStaticUi) {
         const root = targetDoc.body || targetDoc.documentElement;
         if (root) {
-          uiLocalizer.localizeStaticUiDom(root);
+          uiLocalizer.localizeStaticUiInRoot(root, activeObserver || (scheduler ? scheduler.getObserver() : null));
         }
       } else {
         uiLocalizer.restoreAllMutatedNodes();
@@ -242,37 +242,63 @@ function createKoTranslator({
     }
   }
 
+  function activateRuntime() {
+    if (disposed || runtimeActive || !state.enabled) return;
+    runtimeActive = true;
+    ensureStyleElement();
+    triggerController.attachListeners();
+    if (!scheduler) {
+      scheduler = createObserverScheduler({
+        targetWin,
+        targetDoc,
+        disposables,
+        uiLocalizer,
+        triggerController,
+        thinkingTranslator,
+        isEnabled: () => !disposed && state.enabled,
+        isTranslateThinkingEnabled: () => state.translateThinking,
+        isTranslateStaticUiEnabled: () => state.translateStaticUi,
+        onEnsureStyle: ensureStyleElement,
+        onScanAll: scanAll,
+        onError: (err) => {
+          lastError = err && err.message ? err.message : String(err);
+          emitStatus();
+        },
+        periodicIntervalMs: 2500,
+      });
+      disposables.register(() => {
+        if (scheduler) {
+          scheduler.dispose();
+          scheduler = null;
+        }
+      });
+    }
+    scheduler.start();
+  }
+
+  function deactivateRuntime() {
+    if (!runtimeActive) return;
+    runtimeActive = false;
+    if (scheduler) {
+      scheduler.stop();
+    }
+    triggerController.detachListeners();
+    thinkingTranslator.restoreOriginalCursorEdits();
+    uiLocalizer.restoreAllMutatedNodes();
+    triggerController.restoreTriggerButtons();
+  }
+
   function start() {
     if (disposed) {
       throw new Error('Cannot start a disposed ko-thought-translator instance');
     }
     if (started) return getStatus();
     started = true;
-
-    if (!state.enabled) {
-      emitStatus();
-      return getStatus();
-    }
-
-    ensureStyleElement();
-    triggerController.attachListeners();
     disposables.register(() => triggerController.detachListeners());
 
-    scheduler = createObserverScheduler({
-      targetWin,
-      targetDoc,
-      onScanAll: scanAll,
-      scanIntervalMs: 2500,
-    });
-    scheduler.start();
-    disposables.register(() => {
-      if (scheduler) {
-        scheduler.stop();
-        scheduler = null;
-      }
-    });
-
-    scanAll();
+    if (state.enabled) {
+      activateRuntime();
+    }
     emitStatus();
     return getStatus();
   }
@@ -320,11 +346,11 @@ function createKoTranslator({
     }
 
     if (!state.enabled && prevEnabled) {
-      thinkingTranslator.restoreOriginalCursorEdits();
-      uiLocalizer.restoreAllMutatedNodes();
-      triggerController.restoreTriggerButtons();
+      deactivateRuntime();
     } else if (state.enabled && started) {
-      if (state.provider !== prevProvider || next.clearCache === true) {
+      if (!runtimeActive) {
+        activateRuntime();
+      } else if (state.provider !== prevProvider || next.clearCache === true) {
         translationService.bumpEpoch();
         thinkingTranslator.retranslateVisibleThoughts(false);
       } else if (state.translateThinking !== prevTranslateThinking || state.translateStaticUi !== prevTranslateStaticUi) {

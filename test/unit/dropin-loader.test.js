@@ -12,6 +12,7 @@ const {
   isAllowedHubUrl,
   validateDropinManifest,
   collectExecutableExtensions,
+  buildHostLoaderScriptSource,
   registerPluginManifest,
   installAsarDropinLoader,
   rollbackAsarDropinLoader,
@@ -19,6 +20,7 @@ const {
   isPureUnpatchedArchive,
   readAsarArchive,
 } = require('../../host/dropin-loader');
+const vm = require('node:vm');
 
 function buildSyntheticAsar(filePath, version = '2.33.0') {
   const pkgBuf = Buffer.from(JSON.stringify({ name: 'antigravity', version }), 'utf8');
@@ -170,6 +172,111 @@ test('installAsarDropinLoader patches dist/main.js exact-size and rollbackAsarDr
     assert.equal(isPureUnpatchedArchive(readAsarArchive(asarPath)), true);
     const restoredHash = crypto.createHash('sha256').update(fs.readFileSync(asarPath)).digest('hex');
     assert.equal(restoredHash, origHash);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('F4+F5: buildHostLoaderScriptSource executes cleanly, safely handles corrupted settings JSON, and honors config.json enabled gate', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-loader-exec-'));
+  try {
+    const agyDir = path.join(dir, '.gemini', 'antigravity');
+    const extDir = path.join(agyDir, 'ui-extensions.d');
+    const cfgDir = path.join(dir, '.gemini', 'config');
+    const pluginDir = path.join(cfgDir, 'plugins', 'ko-thought-translator', 'dist');
+    fs.mkdirSync(extDir, { recursive: true });
+    fs.mkdirSync(pluginDir, { recursive: true });
+
+    const entryScript = path.join(pluginDir, 'renderer.js');
+    fs.writeFileSync(entryScript, 'window.__KO_EXECUTED__ = true;\n', 'utf8');
+    fs.writeFileSync(
+      path.join(extDir, 'ko-thought-translator.json'),
+      JSON.stringify({ schemaVersion: 1, pluginId: 'ko-thought-translator', entryScript }),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(cfgDir, 'config.json'),
+      JSON.stringify({ plugins: { 'ko-thought-translator': { enabled: true } } }),
+      'utf8'
+    );
+    // Write intentionally corrupted settings JSON to prove F5 #3 cannot break JS syntax
+    fs.writeFileSync(path.join(agyDir, 'ko_translator_settings.json'), '{corrupted-json', 'utf8');
+
+    const loaderMod = { exports: {} };
+    const sandbox = {
+      require,
+      module: loaderMod,
+      exports: loaderMod.exports,
+      process: { env: { USERPROFILE: dir, HOME: dir } },
+    };
+    vm.runInNewContext(buildHostLoaderScriptSource(), sandbox);
+    assert.equal(typeof loaderMod.exports.attach, 'function');
+
+    const executedScripts = [];
+    const handlers = {};
+    const mockContents = {
+      getType: () => 'window',
+      isDestroyed: () => false,
+      getURL: () => 'http://127.0.0.1:4173/index.html',
+      on: (evt, fn) => {
+        handlers[evt] = fn;
+      },
+      executeJavaScript: async (code) => {
+        executedScripts.push(code);
+        // Verify injected wrapper is syntactically valid JS and runs cleanly
+        const winCtx = { window: {} };
+        vm.runInNewContext(code, winCtx);
+        return winCtx.window.__KO_EXECUTED__;
+      },
+    };
+
+    loaderMod.exports.attach(mockContents);
+    handlers['dom-ready']();
+    assert.equal(executedScripts.length, 1);
+
+    // Flip enabled -> false and fire again -> must execute 0 new scripts
+    fs.writeFileSync(
+      path.join(cfgDir, 'config.json'),
+      JSON.stringify({ plugins: { 'ko-thought-translator': { enabled: false } } }),
+      'utf8'
+    );
+    handlers['did-finish-load']();
+    assert.equal(executedScripts.length, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('F5: isPureUnpatchedArchive rejects legacy v1.x ASAR patches and rollback fails closed on tampered .orig.json without deleting manifest', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-asar-sec-'));
+  try {
+    const asarPath = path.join(dir, 'app.asar');
+    buildSyntheticAsar(asarPath, '2.33.0');
+    const overrides = {
+      ASAR_PATH: asarPath,
+      ASAR_LOCK_PATH: path.join(dir, 'asar.lock'),
+      UI_EXTENSIONS_DIR: path.join(dir, 'ui-extensions.d'),
+      MANIFEST_PATH: path.join(dir, 'ui-extensions.d', 'ko-thought-translator.json'),
+      LOADER_SCRIPT_PATH: path.join(dir, 'ui-extensions-loader.js'),
+      RENDERER_BUNDLE_PATH: path.join(dir, 'renderer.js'),
+    };
+    registerPluginManifest(overrides);
+    const inst = installAsarDropinLoader(overrides);
+    assert.equal(inst.status, 'INSTALLED');
+
+    // Tamper .orig.json sha256 -> rollback must fail closed AND keep manifest intact
+    const metaPath = `${asarPath}.v2.33.0.orig.json`;
+    fs.writeFileSync(metaPath, JSON.stringify({ sha256: '0'.repeat(64), bytes: 1 }), 'utf8');
+    const rbFail = rollbackAsarDropinLoader(overrides);
+    assert.equal(rbFail.status, 'ERR_ORIG_META_MISMATCH');
+    assert.equal(rbFail.manifestRemoved, false);
+    assert.equal(fs.existsSync(overrides.MANIFEST_PATH), true);
+
+    // Legacy v1.x patched archive check
+    const fakeLegacyArchive = {
+      fileMap: new Map([['dist/main.js', Buffer.from('// AGY_STATUSBAR_V6\n', 'utf8')]]),
+    };
+    assert.equal(isPureUnpatchedArchive(fakeLegacyArchive), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

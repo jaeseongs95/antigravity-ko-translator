@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="ko-csrf-token" content="__KO_CSRF_TOKEN__" />
   <title>한글 번역 설정 — Antigravity</title>
   <style>
     :root {
@@ -211,6 +212,13 @@
 
     <div id="llm-fields" class="hidden">
       <div class="field">
+        <label for="opt-llm-format">API 형식</label>
+        <select id="opt-llm-format">
+          <option value="ollama">Ollama (/api/generate)</option>
+          <option value="openai">OpenAI 호환 (/v1/chat/completions)</option>
+        </select>
+      </div>
+      <div class="field">
         <label for="opt-llm-url">로컬 LLM 주소 (기본: http://127.0.0.1:11434)</label>
         <input type="text" id="opt-llm-url" placeholder="http://127.0.0.1:11434" />
       </div>
@@ -234,10 +242,13 @@
       const elTranslateStaticUi = document.getElementById('opt-translate-static-ui');
       const elProvider = document.getElementById('opt-provider');
       const elLlmFields = document.getElementById('llm-fields');
+      const elLlmFormat = document.getElementById('opt-llm-format');
       const elLlmUrl = document.getElementById('opt-llm-url');
       const elLlmModel = document.getElementById('opt-llm-model');
       const elSaveBtn = document.getElementById('btn-save');
       const elFeedback = document.getElementById('feedback');
+      const csrfMeta = document.querySelector('meta[name="ko-csrf-token"]');
+      let csrfToken = csrfMeta ? csrfMeta.getAttribute('content') || '' : '';
 
       function setBadge(boxId, valId, ok, okText, warnText) {
         const box = document.getElementById(boxId);
@@ -250,13 +261,36 @@
         elLlmFields.classList.toggle('hidden', elProvider.value !== 'local-llm');
       }
 
+      function ensureProviderOption(providerId, customProviders) {
+        if (!providerId) return;
+        const exists = Array.from(elProvider.options).some((opt) => opt.value === providerId);
+        if (!exists) {
+          const match = Array.isArray(customProviders)
+            ? customProviders.find((p) => p && p.id === providerId)
+            : null;
+          const opt = document.createElement('option');
+          opt.value = providerId;
+          opt.textContent = match && match.label ? `${match.label} (${providerId})` : `사용자 지정 (${providerId})`;
+          elProvider.appendChild(opt);
+        }
+      }
+
       function renderPayload(data) {
         if (!data || !data.settings) return;
+        if (typeof data.csrfToken === 'string' && data.csrfToken) {
+          csrfToken = data.csrfToken;
+        }
         const s = data.settings;
         elTranslateThinking.checked = s.translateThinking !== false;
         elShowThinking.checked = s.showThinking !== false;
         elTranslateStaticUi.checked = s.translateStaticUi !== false;
-        elProvider.value = s.provider === 'local-llm' ? 'local-llm' : 'google-translate';
+        const targetProvider = typeof s.provider === 'string' && s.provider.trim() ? s.provider.trim() : 'google-translate';
+        ensureProviderOption(targetProvider, s.customProviders);
+        elProvider.value = targetProvider;
+        elLlmFormat.value =
+          s.llmConfig && (s.llmConfig.apiFormat === 'openai' || s.llmConfig.apiFormat === 'openai-compat')
+            ? 'openai'
+            : 'ollama';
         elLlmUrl.value = (s.llmConfig && s.llmConfig.baseUrl) || 'http://127.0.0.1:11434';
         elLlmModel.value = (s.llmConfig && s.llmConfig.model) || 'gemma3:4b';
         syncLlmVisibility();
@@ -293,13 +327,17 @@
             translateStaticUi: elTranslateStaticUi.checked,
             provider: elProvider.value,
             llmConfig: {
+              apiFormat: elLlmFormat.value,
               baseUrl: elLlmUrl.value.trim() || 'http://127.0.0.1:11434',
               model: elLlmModel.value.trim() || 'gemma3:4b',
             },
           };
           const res = await fetch('/api/settings', {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: {
+              'content-type': 'application/json',
+              'x-ko-csrf-token': csrfToken,
+            },
             body: JSON.stringify(payload),
           });
           const data = await res.json();

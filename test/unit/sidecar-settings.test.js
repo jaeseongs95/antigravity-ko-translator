@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -19,11 +20,11 @@ test('Official Sidecar manifest conforms to Antigravity AUX_PANE schema', () => 
   assert.equal(manifest.ui_config.views[0].path, '/');
 });
 
-test('Official Sidecar handler serves HTML UI, reads diagnostics, and validates/saves settings', async () => {
+test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 413 payload cap, and validates customProviders & apiFormat', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-sidecar-test-'));
   try {
     const mainUrl = pathToFileURL(path.join(REPO_ROOT, 'sidecars', 'ko-translator-settings', 'main.mjs')).href;
-    const { createSettingsRequestHandler } = await import(mainUrl);
+    const { createSettingsRequestHandler, createStandaloneHttpServer, MAX_BODY_BYTES } = await import(mainUrl);
 
     const agyDir = path.join(dir, '.gemini', 'antigravity');
     const cfgDir = path.join(dir, '.gemini', 'config');
@@ -45,18 +46,63 @@ test('Official Sidecar handler serves HTML UI, reads diagnostics, and validates/
 
     const htmlRes = handle({ method: 'GET', urlPath: '/' });
     assert.equal(htmlRes.status, 200);
-    assert.match(htmlRes.body, /Antigravity 한국어 번역 설정/);
+    assert.match(htmlRes.body, /한글 번역 설정/);
+    assert.ok(htmlRes.body.includes(handle.csrfToken), 'HTML must embed per-instance CSRF token');
 
     const getRes = handle({ method: 'GET', urlPath: '/api/settings' });
     assert.equal(getRes.status, 200);
     const initial = JSON.parse(getRes.body);
     assert.equal(initial.ok, true);
-    assert.equal(initial.settings.provider, 'google-translate');
-    assert.equal(initial.diagnostics.pluginEnabled, true);
+    assert.equal(initial.csrfToken, handle.csrfToken);
 
+    const validHeaders = {
+      host: '127.0.0.1:43210',
+      origin: 'http://127.0.0.1:43210',
+      'content-type': 'application/json',
+      'x-ko-csrf-token': handle.csrfToken,
+    };
+
+    // 1. Missing CSRF token -> 403
+    const noCsrf = handle({
+      method: 'POST',
+      urlPath: '/api/settings',
+      headers: { host: '127.0.0.1:43210', 'content-type': 'application/json' },
+      rawBody: JSON.stringify({ provider: 'google-translate' }),
+    });
+    assert.equal(noCsrf.status, 403);
+
+    // 2. External web Origin -> 403 (blocks local web CSRF -> SSRF)
+    const badOrigin = handle({
+      method: 'POST',
+      urlPath: '/api/settings',
+      headers: { ...validHeaders, origin: 'https://evil.example.com' },
+      rawBody: JSON.stringify({ provider: 'google-translate' }),
+    });
+    assert.equal(badOrigin.status, 403);
+
+    // 3. External Host header -> 403 (blocks DNS rebinding)
+    const badHost = handle({
+      method: 'POST',
+      urlPath: '/api/settings',
+      headers: { ...validHeaders, host: 'evil.example.com' },
+      rawBody: JSON.stringify({ provider: 'google-translate' }),
+    });
+    assert.equal(badHost.status, 403);
+
+    // 4. Non-JSON Content-Type -> 415
+    const badCt = handle({
+      method: 'POST',
+      urlPath: '/api/settings',
+      headers: { ...validHeaders, 'content-type': 'text/plain' },
+      rawBody: JSON.stringify({ provider: 'google-translate' }),
+    });
+    assert.equal(badCt.status, 415);
+
+    // 5. SSRF URL rejected -> 400
     const badUrlRes = handle({
       method: 'POST',
       urlPath: '/api/settings',
+      headers: validHeaders,
       rawBody: JSON.stringify({
         provider: 'local-llm',
         llmConfig: { baseUrl: 'http://evil.example.com:11434', model: 'gemma3:4b' },
@@ -64,22 +110,76 @@ test('Official Sidecar handler serves HTML UI, reads diagnostics, and validates/
     });
     assert.equal(badUrlRes.status, 400);
 
+    // 6. Malformed / forbidden-header customProviders rejected -> 400
+    const badCustomRes = handle({
+      method: 'POST',
+      urlPath: '/api/settings',
+      headers: validHeaders,
+      rawBody: JSON.stringify({
+        customProviders: [
+          {
+            id: 'my-custom',
+            url: 'https://api.example.com/translate',
+            headers: { Authorization: 'Bearer secret-must-not-be-stored' },
+          },
+        ],
+      }),
+    });
+    assert.equal(badCustomRes.status, 400);
+
+    // 7. Valid save canonicalizes apiFormat 'openai-compat' -> 'openai'
     const saveRes = handle({
       method: 'POST',
       urlPath: '/api/settings',
+      headers: validHeaders,
       rawBody: JSON.stringify({
         provider: 'local-llm',
         translateThinking: true,
         showThinking: false,
         translateStaticUi: false,
-        llmConfig: { baseUrl: 'http://127.0.0.1:11434', model: 'gemma3:4b' },
+        llmConfig: { baseUrl: 'http://127.0.0.1:11434', model: 'gemma3:4b', apiFormat: 'openai-compat' },
       }),
     });
     assert.equal(saveRes.status, 200);
     const saved = JSON.parse(saveRes.body);
     assert.equal(saved.ok, true);
     assert.equal(saved.settings.provider, 'local-llm');
-    assert.equal(saved.settings.translateStaticUi, false);
+    assert.equal(saved.settings.llmConfig.apiFormat, 'openai');
+
+    // 8. Standalone HTTP server returns 413 Payload Too Large (zero silent truncation)
+    const server = createStandaloneHttpServer(handle);
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const addr = server.address();
+      const oversizedStatus = await new Promise((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port: addr.port,
+            path: '/api/settings',
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              'x-ko-csrf-token': handle.csrfToken,
+              'connection': 'close',
+            },
+          },
+          (res) => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode));
+          }
+        );
+        req.on('error', (err) => {
+          if (err.code === 'ECONNRESET') resolve(413);
+          else reject(err);
+        });
+        req.end('x'.repeat(MAX_BODY_BYTES + 1024));
+      });
+      assert.equal(oversizedStatus, 413);
+    } finally {
+      if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+      server.close();
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -132,8 +132,15 @@ function sanitizeLlmConfig(raw, existing = DEFAULT_LLM_CONFIG) {
     raw.model !== undefined && String(raw.model).trim()
       ? String(raw.model).trim().slice(0, 128)
       : base.model;
+  const rawFormat = String(raw.apiFormat || '').trim().toLowerCase();
   const apiFormat =
-    raw.apiFormat === 'openai-compat' || raw.apiFormat === 'ollama' ? raw.apiFormat : base.apiFormat;
+    rawFormat === 'openai' || rawFormat === 'openai-compat'
+      ? 'openai'
+      : rawFormat === 'ollama'
+        ? 'ollama'
+        : base.apiFormat === 'openai-compat'
+          ? 'openai'
+          : base.apiFormat;
   const timeoutMs =
     typeof raw.timeoutMs === 'number' && Number.isFinite(raw.timeoutMs) && raw.timeoutMs >= 1000 && raw.timeoutMs <= 120000
       ? Math.floor(raw.timeoutMs)
@@ -146,6 +153,56 @@ function sanitizeLlmConfig(raw, existing = DEFAULT_LLM_CONFIG) {
     allowRemoteHttps,
     timeoutMs,
   };
+}
+
+const FORBIDDEN_HEADER_RE = /^(?:cookie|host|origin|referer|sec-|proxy-|content-length|transfer-encoding|connection|authorization)$/i;
+
+function sanitizeCustomProviders(rawList, { strict = false } = {}) {
+  if (!Array.isArray(rawList)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const item of rawList.slice(0, 16)) {
+    try {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error('INVALID_CUSTOM_PROVIDER_SPEC');
+      }
+      const id = normalizeProviderId(item.id);
+      if (id === 'google-translate' || id === 'local-llm' || seen.has(id)) {
+        throw new Error(`INVALID_CUSTOM_PROVIDER_ID:${id}`);
+      }
+      const parsedUrl = validateTranslationEndpointUrl(String(item.url || '').trim(), {
+        allowRemoteHttps: true,
+      });
+      const method = String(item.method || 'POST').trim().toUpperCase();
+      if (method !== 'POST' && method !== 'GET') {
+        throw new Error(`INVALID_CUSTOM_PROVIDER_METHOD:${method}`);
+      }
+      const headers = {};
+      if (item.headers && typeof item.headers === 'object' && !Array.isArray(item.headers)) {
+        for (const [k, v] of Object.entries(item.headers)) {
+          const hk = String(k || '').trim();
+          const hv = String(v ?? '');
+          if (!hk || FORBIDDEN_HEADER_RE.test(hk) || /[\r\n]/.test(hk) || /[\r\n]/.test(hv)) {
+            throw new Error(`FORBIDDEN_CUSTOM_PROVIDER_HEADER:${hk}`);
+          }
+          headers[hk] = hv;
+        }
+      }
+      seen.add(id);
+      out.push({
+        id,
+        label: typeof item.label === 'string' && item.label.trim() ? item.label.trim().slice(0, 64) : id,
+        url: parsedUrl.href,
+        method,
+        headers,
+        bodyTemplate: item.bodyTemplate !== undefined ? item.bodyTemplate : null,
+        responsePath: typeof item.responsePath === 'string' ? item.responsePath.trim().slice(0, 128) : '',
+      });
+    } catch (err) {
+      if (strict) throw err;
+    }
+  }
+  return out;
 }
 
 function isPluginEnabled(configJsonPath) {
@@ -179,7 +236,7 @@ function readTranslatorSettings(pathOverrides = null) {
       translateStaticUi: parsed.translateStaticUi !== false,
       provider: normalizeProviderId(parsed.provider),
       llmConfig: sanitizeLlmConfig(parsed.llmConfig, DEFAULT_LLM_CONFIG),
-      customProviders: Array.isArray(parsed.customProviders) ? parsed.customProviders : [],
+      customProviders: sanitizeCustomProviders(parsed.customProviders, { strict: false }),
     };
   } catch (_err) {
     return {
@@ -210,7 +267,10 @@ function saveTranslatorSettings(patch, pathOverrides = null) {
         patch.llmConfig !== undefined
           ? sanitizeLlmConfig(patch.llmConfig, current.llmConfig)
           : current.llmConfig,
-      customProviders: Array.isArray(patch.customProviders) ? patch.customProviders : current.customProviders,
+      customProviders:
+        patch.customProviders !== undefined
+          ? sanitizeCustomProviders(patch.customProviders, { strict: true })
+          : current.customProviders,
     };
     writeFileAtomicSync(p.SETTINGS_PATH, JSON.stringify(next, null, 2) + '\n');
     return next;

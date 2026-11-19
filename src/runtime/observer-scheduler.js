@@ -1,26 +1,37 @@
 'use strict';
 
+/**
+ * Clean-Slate Desktop-Only DOM MutationObserver & Periodic Scan Scheduler.
+ *
+ * - Zero v1.x remnants (no pretranslator, native settingsUi, statusbarPort, workbenchPromoter, or companion modals).
+ * - Coalesces DOM mutations into a 0ms microtask fast-pass and 16ms full-pass while draining self-induced records.
+ * - Guards session-switch transitions (D-0015) to prevent scroll/animation flashes.
+ */
+
 const NO_TRANSLATE_SUBTREE_SELECTOR =
-  '.agy-ctx-statusbar, .agy-ctx-menu, #agy-ctx-debug-modal, .agy-ctx-modal-backdrop, ' +
-  '.agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, ' +
-  '[data-agy-no-translate="true"]';
+  '.agy-ko-thought-wrap, [data-agy-no-translate="true"]';
 
 function createObserverScheduler({
   targetWin,
   targetDoc,
-  disposables,
-  uiLocalizer,
-  triggerController,
-  thinkingTranslator,
-  pretranslator,
-  settingsUi,
-  statusbarPort,
-  workbenchPromoter,
-  onSyncPersistentSettings = null,
+  disposables = null,
+  uiLocalizer = null,
+  triggerController = null,
+  thinkingTranslator = null,
+  isEnabled = () => true,
+  isTranslateThinkingEnabled = () => true,
+  isTranslateStaticUiEnabled = () => true,
+  onEnsureStyle = null,
+  onScanAll = null,
+  onError = null,
   periodicIntervalMs = 2500,
+  scanIntervalMs = null,
 } = {}) {
   const win = targetWin || (typeof window !== 'undefined' ? window : null);
   const doc = targetDoc || (typeof document !== 'undefined' ? document : null);
+  const effectiveIntervalMs =
+    typeof scanIntervalMs === 'number' && Number.isFinite(scanIntervalMs) ? scanIntervalMs : periodicIntervalMs;
+
   const setTimer =
     win && typeof win.setTimeout === 'function' ? win.setTimeout.bind(win) : setTimeout;
   const clearTimer =
@@ -31,15 +42,23 @@ function createObserverScheduler({
     win && typeof win.clearInterval === 'function' ? win.clearInterval.bind(win) : clearInterval;
 
   let disposed = false;
+  let running = false;
   let inFastScan = false;
   let fastScanMicrotaskScheduled = false;
   let fullScanTimer = null;
-  let pretranslateTimer = null;
   let periodicTimer = null;
   let lastObservedCascadeId = null;
   let sessionSwitchFreezeTimer = null;
   let sessionSwitchFreezeUntil = 0;
   let observer = null;
+
+  function reportError(err) {
+    if (typeof onError === 'function') {
+      try {
+        onError(err);
+      } catch (_ignored) {}
+    }
+  }
 
   function drainObserverRecords() {
     if (observer && typeof observer.takeRecords === 'function') {
@@ -115,16 +134,6 @@ function createObserverScheduler({
                 v.setAttribute('data-agy-added-no-animations', '1');
               }
             }
-          }
-          if (typeof v.getAnimations === 'function') {
-            try {
-              const anims = v.getAnimations({ subtree: true });
-              if (Array.isArray(anims)) {
-                for (const anim of anims) {
-                  if (anim && typeof anim.cancel === 'function') anim.cancel();
-                }
-              }
-            } catch (_err) {}
           }
         }
         const now = Date.now();
@@ -205,16 +214,16 @@ function createObserverScheduler({
   // D-0014: 0ms microtask fast-pass for Thinking/Worked triggers and active conversation view
   function runFastPass() {
     guardSessionSwitchTransitions();
-    if (disposed || inFastScan || !doc) return;
+    if (disposed || !running || inFastScan || !doc || !isEnabled()) return;
     inFastScan = true;
     try {
+      if (typeof onEnsureStyle === 'function') {
+        onEnsureStyle();
+      }
       if (triggerController) {
-        triggerController.scanTriggerButtonsSync();
+        triggerController.scanTriggerButtonsSync(false);
       }
-      if (settingsUi) {
-        settingsUi.ensureThinkingDisplayMenuIntegration();
-      }
-      if (uiLocalizer) {
+      if (uiLocalizer && isTranslateStaticUiEnabled()) {
         if (typeof doc.querySelectorAll === 'function') {
           doc
             .querySelectorAll(
@@ -228,67 +237,47 @@ function createObserverScheduler({
             doc.querySelector('[data-testid="side-question-tab-conversation"]');
           if (convEl) uiLocalizer.localizeStaticUiInRoot(convEl, observer);
         }
-        if (typeof doc.getElementById === 'function') {
-          for (const companionId of [
-            'agy-mcp-manager-modal-backdrop',
-            'agy-mcp-edit-popup-backdrop',
-            'agy-mcp-oauth-connect-backdrop',
-            'agy-mcp-settings-pane',
-          ]) {
-            const el = doc.getElementById(companionId);
-            if (el) uiLocalizer.localizeStaticUiInRoot(el, observer);
-          }
-        }
-        if (typeof doc.querySelectorAll === 'function') {
-          doc
-            .querySelectorAll('[data-agy-custom-mcp-btn]')
-            .forEach((el) => uiLocalizer.localizeStaticUiInRoot(el, observer));
-        }
       }
-      if (thinkingTranslator) {
+      if (thinkingTranslator && isTranslateThinkingEnabled()) {
         thinkingTranslator.scanThoughtBlocks();
       }
       drainObserverRecords();
+    } catch (err) {
+      reportError(err);
     } finally {
       inFastScan = false;
     }
   }
 
   function scanAll() {
-    if (disposed || !doc) return;
-    if (settingsUi) settingsUi.ensureStyle();
-    if (statusbarPort) statusbarPort.register();
-    if (workbenchPromoter) workbenchPromoter.scanAndPromoteAll();
-    if (doc.body && uiLocalizer) {
-      uiLocalizer.localizeStaticUiInRoot(doc.body, observer);
-    }
-    if (doc.body && settingsUi) {
-      settingsUi.ensureNativeSettingsModalIntegration();
-      settingsUi.ensureThinkingDisplayMenuIntegration();
-    }
-    if (thinkingTranslator) {
-      thinkingTranslator.scanThoughtBlocks();
-    }
-    drainObserverRecords();
-  }
-
-  function schedulePretranslateDebounce() {
-    if (disposed || !pretranslator || !pretranslator.isEnabled() || pretranslateTimer) return;
-    pretranslateTimer = setTimer(() => {
-      pretranslateTimer = null;
-      if (!disposed && pretranslator.isEnabled()) {
-        pretranslator.runPretranslatePass().catch(() => {});
+    if (disposed || !doc || !isEnabled()) return;
+    try {
+      if (typeof onScanAll === 'function') {
+        onScanAll(observer);
+      } else {
+        if (typeof onEnsureStyle === 'function') onEnsureStyle();
+        if (triggerController) triggerController.scanTriggerButtonsSync(false);
+        const root = doc.body || doc.documentElement;
+        if (root && uiLocalizer && isTranslateStaticUiEnabled()) {
+          uiLocalizer.localizeStaticUiInRoot(root, observer);
+        }
+        if (thinkingTranslator && isTranslateThinkingEnabled()) {
+          thinkingTranslator.scanThoughtBlocks();
+        }
       }
-    }, 120);
+      drainObserverRecords();
+    } catch (err) {
+      reportError(err);
+    }
   }
 
   function scheduleCoalescedScan() {
-    if (disposed) return;
+    if (disposed || !running || !isEnabled()) return;
     if (!fastScanMicrotaskScheduled) {
       fastScanMicrotaskScheduled = true;
       Promise.resolve().then(() => {
         fastScanMicrotaskScheduled = false;
-        if (!disposed) {
+        if (!disposed && running) {
           runFastPass();
         }
       });
@@ -296,29 +285,22 @@ function createObserverScheduler({
     if (!fullScanTimer) {
       fullScanTimer = setTimer(() => {
         fullScanTimer = null;
-        if (disposed || !doc) return;
-        if (workbenchPromoter) workbenchPromoter.scanAndPromoteAll();
-        if (doc.body && uiLocalizer) {
-          uiLocalizer.localizeStaticUiInRoot(doc.body, observer);
-        }
-        if (doc.body && settingsUi) {
-          settingsUi.ensureNativeSettingsModalIntegration();
-          settingsUi.ensureThinkingDisplayMenuIntegration();
-        }
-        runFastPass();
-        drainObserverRecords();
+        if (disposed || !running || !doc || !isEnabled()) return;
+        scanAll();
       }, 16);
     }
-    schedulePretranslateDebounce();
   }
 
   function createMutationObserver() {
     const ObsCtor = (win && win.MutationObserver) || (typeof MutationObserver !== 'undefined' ? MutationObserver : null);
     if (typeof ObsCtor !== 'function') return null;
     return new ObsCtor((mutations) => {
-      if (disposed) return;
+      if (disposed || !running || !isEnabled()) return;
       for (const m of mutations) {
-        if (m.type === 'childList' && ((m.addedNodes && m.addedNodes.length > 0) || (m.removedNodes && m.removedNodes.length > 0))) {
+        if (
+          m.type === 'childList' &&
+          ((m.addedNodes && m.addedNodes.length > 0) || (m.removedNodes && m.removedNodes.length > 0))
+        ) {
           const tEl = m.target && m.target.nodeType === 1 ? m.target : m.target && m.target.parentElement;
           if (
             tEl &&
@@ -372,20 +354,13 @@ function createObserverScheduler({
             scheduleCoalescedScan();
             return;
           }
-          if (
-            !m.target.closest('.agy-ko-settings-root') &&
-            m.target.closest('.settings-modal-container, [role="dialog"]')
-          ) {
-            scheduleCoalescedScan();
-            return;
-          }
         }
       }
     });
   }
 
   function start() {
-    if (disposed || !doc) return;
+    if (disposed || running || !doc) return;
     const root = doc.body || doc.documentElement;
     if (!root) {
       if (win && disposables && typeof disposables.registerEvent === 'function') {
@@ -393,6 +368,7 @@ function createObserverScheduler({
       }
       return;
     }
+    running = true;
     if (!observer) {
       observer = createMutationObserver();
     }
@@ -405,27 +381,17 @@ function createObserverScheduler({
         attributeFilter: ['style', 'aria-expanded', 'class', 'data-cascade-id', 'aria-hidden'],
       });
     }
-    if (typeof onSyncPersistentSettings === 'function') {
-      Promise.resolve(onSyncPersistentSettings()).catch(() => {});
-    }
     scanAll();
-    if (!periodicTimer && periodicIntervalMs > 0) {
-      periodicTimer = setPeriodic(scanAll, periodicIntervalMs);
-      if (disposables && typeof disposables.registerInterval === 'function') {
-        disposables.registerInterval(periodicTimer, clearPeriodic);
-      }
+    if (!periodicTimer && effectiveIntervalMs > 0) {
+      periodicTimer = setPeriodic(scanAll, effectiveIntervalMs);
     }
   }
 
   function stop() {
-    disposed = true;
+    running = false;
     if (fullScanTimer) {
       clearTimer(fullScanTimer);
       fullScanTimer = null;
-    }
-    if (pretranslateTimer) {
-      clearTimer(pretranslateTimer);
-      pretranslateTimer = null;
     }
     if (sessionSwitchFreezeTimer) {
       clearTimer(sessionSwitchFreezeTimer);
@@ -442,15 +408,22 @@ function createObserverScheduler({
     }
   }
 
+  function dispose() {
+    disposed = true;
+    stop();
+  }
+
   return {
     start,
     stop,
+    dispose,
     scanAll,
     runFastPass,
     scheduleCoalescedScan,
-    schedulePretranslateDebounce,
     guardSessionSwitchTransitions,
+    takeRecords: drainObserverRecords,
     getObserver: () => observer,
+    isRunning: () => running,
   };
 }
 
