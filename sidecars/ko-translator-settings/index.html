@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>한글 번역 설정 — Antigravity</title>
+  <style>
+    :root {
+      color-scheme: dark light;
+      --bg: #141518;
+      --card: #1d1f24;
+      --border: rgba(255, 255, 255, 0.12);
+      --text: #eceef2;
+      --muted: #9aa1ad;
+      --accent: #4c9aff;
+      --ok: #3fb950;
+      --warn: #d29922;
+      --err: #f85149;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f7f9;
+        --card: #ffffff;
+        --border: rgba(0, 0, 0, 0.12);
+        --text: #181a1f;
+        --muted: #5a6270;
+        --accent: #1a66d9;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      background: var(--bg);
+      color: var(--text);
+    }
+    h1 {
+      margin: 0 0 4px 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .subtitle {
+      margin: 0 0 14px 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+    .card h2 {
+      margin: 0 0 10px 0;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .badge {
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-size: 11.5px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .badge strong { font-size: 12px; }
+    .badge.ok strong { color: var(--ok); }
+    .badge.warn strong { color: var(--warn); }
+    .row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 0;
+      border-top: 1px solid var(--border);
+    }
+    .row:first-of-type { border-top: none; padding-top: 0; }
+    .row-desc { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+    label.toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 8px;
+    }
+    select, input[type="text"] {
+      width: 100%;
+      padding: 7px 9px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 12.5px;
+    }
+    select:focus, input:focus, button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+    }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.primary:disabled { opacity: 0.6; cursor: wait; }
+    .feedback {
+      margin-top: 10px;
+      min-height: 18px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .feedback.ok { color: var(--ok); }
+    .feedback.err { color: var(--err); }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Antigravity 한국어 번역 설정</h1>
+    <p class="subtitle">데스크톱 네이티브 앱 전용 · 순수 읽기 전용 DOM 오버레이 (호스트 통신·스토리지 불간섭)</p>
+  </header>
+
+  <section class="card" aria-label="상태 진단">
+    <h2>실행 상태</h2>
+    <div class="status-grid">
+      <div class="badge" id="diag-plugin">
+        <span>플러그인 활성</span>
+        <strong id="diag-plugin-val">확인 중…</strong>
+      </div>
+      <div class="badge" id="diag-manifest">
+        <span>드롭인 등록</span>
+        <strong id="diag-manifest-val">확인 중…</strong>
+      </div>
+      <div class="badge" id="diag-asar">
+        <span>네이티브 로더</span>
+        <strong id="diag-asar-val">확인 중…</strong>
+      </div>
+    </div>
+  </section>
+
+  <form id="settings-form" class="card" aria-label="번역 설정">
+    <h2>표시 및 번역 동작</h2>
+
+    <div class="row">
+      <div>
+        <div><strong>Thinking(추론 과정) 한국어 번역</strong></div>
+        <div class="row-desc">영문 추론 블록을 한국어로 번역합니다. 코드·파일 경로·식별자는 원형을 보존합니다.</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="opt-translate-thinking" />
+        <span>사용</span>
+      </label>
+    </div>
+
+    <div class="row">
+      <div>
+        <div><strong>Thinking 블록 표시</strong></div>
+        <div class="row-desc">끄면 작업 내역은 유지하고 추론 블록만 숨깁니다.</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="opt-show-thinking" />
+        <span>표시</span>
+      </label>
+    </div>
+
+    <div class="row">
+      <div>
+        <div><strong>영문 고정 UI 한글화</strong></div>
+        <div class="row-desc">메뉴·버튼·설정 문구를 한국어로 표시합니다. 코드 에디터·diff·터미널·입력창은 제외됩니다.</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="opt-translate-static-ui" />
+        <span>사용</span>
+      </label>
+    </div>
+
+    <div class="field">
+      <label for="opt-provider"><strong>번역 엔진</strong></label>
+      <select id="opt-provider">
+        <option value="google-translate">Google 번역 (기본 · 별도 서버 불필요)</option>
+        <option value="local-llm">로컬 LLM (Ollama / OpenAI 호환 서버)</option>
+      </select>
+    </div>
+
+    <div id="llm-fields" class="hidden">
+      <div class="field">
+        <label for="opt-llm-url">로컬 LLM 주소 (기본: http://127.0.0.1:11434)</label>
+        <input type="text" id="opt-llm-url" placeholder="http://127.0.0.1:11434" />
+      </div>
+      <div class="field">
+        <label for="opt-llm-model">모델 이름 (예: gemma3:4b)</label>
+        <input type="text" id="opt-llm-model" placeholder="gemma3:4b" />
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="primary" id="btn-save">설정 저장</button>
+    </div>
+    <div id="feedback" class="feedback" role="status" aria-live="polite"></div>
+  </form>
+
+  <script>
+    (function () {
+      const form = document.getElementById('settings-form');
+      const elTranslateThinking = document.getElementById('opt-translate-thinking');
+      const elShowThinking = document.getElementById('opt-show-thinking');
+      const elTranslateStaticUi = document.getElementById('opt-translate-static-ui');
+      const elProvider = document.getElementById('opt-provider');
+      const elLlmFields = document.getElementById('llm-fields');
+      const elLlmUrl = document.getElementById('opt-llm-url');
+      const elLlmModel = document.getElementById('opt-llm-model');
+      const elSaveBtn = document.getElementById('btn-save');
+      const elFeedback = document.getElementById('feedback');
+
+      function setBadge(boxId, valId, ok, okText, warnText) {
+        const box = document.getElementById(boxId);
+        const val = document.getElementById(valId);
+        box.className = 'badge ' + (ok ? 'ok' : 'warn');
+        val.textContent = ok ? okText : warnText;
+      }
+
+      function syncLlmVisibility() {
+        elLlmFields.classList.toggle('hidden', elProvider.value !== 'local-llm');
+      }
+
+      function renderPayload(data) {
+        if (!data || !data.settings) return;
+        const s = data.settings;
+        elTranslateThinking.checked = s.translateThinking !== false;
+        elShowThinking.checked = s.showThinking !== false;
+        elTranslateStaticUi.checked = s.translateStaticUi !== false;
+        elProvider.value = s.provider === 'local-llm' ? 'local-llm' : 'google-translate';
+        elLlmUrl.value = (s.llmConfig && s.llmConfig.baseUrl) || 'http://127.0.0.1:11434';
+        elLlmModel.value = (s.llmConfig && s.llmConfig.model) || 'gemma3:4b';
+        syncLlmVisibility();
+
+        if (data.diagnostics) {
+          setBadge('diag-plugin', 'diag-plugin-val', data.diagnostics.pluginEnabled, '활성', '비활성');
+          setBadge('diag-manifest', 'diag-manifest-val', data.diagnostics.manifestRegistered, '등록됨', '미등록');
+          setBadge('diag-asar', 'diag-asar-val', data.diagnostics.asarLoaderInstalled, '설치됨', '미설치');
+        }
+      }
+
+      elProvider.addEventListener('change', syncLlmVisibility);
+
+      async function loadSettings() {
+        try {
+          const res = await fetch('/api/settings', { cache: 'no-store' });
+          const data = await res.json();
+          renderPayload(data);
+        } catch (err) {
+          elFeedback.className = 'feedback err';
+          elFeedback.textContent = '설정을 불러오지 못했습니다: ' + (err && err.message ? err.message : String(err));
+        }
+      }
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        elSaveBtn.disabled = true;
+        elFeedback.className = 'feedback';
+        elFeedback.textContent = '저장 중…';
+        try {
+          const payload = {
+            translateThinking: elTranslateThinking.checked,
+            showThinking: elShowThinking.checked,
+            translateStaticUi: elTranslateStaticUi.checked,
+            provider: elProvider.value,
+            llmConfig: {
+              baseUrl: elLlmUrl.value.trim() || 'http://127.0.0.1:11434',
+              model: elLlmModel.value.trim() || 'gemma3:4b',
+            },
+          };
+          const res = await fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            throw new Error(data.error || ('HTTP ' + res.status));
+          }
+          renderPayload(data);
+          elFeedback.className = 'feedback ok';
+          elFeedback.textContent = '저장되었습니다. 창 새로고침(Ctrl+R) 시 즉시 반영됩니다.';
+        } catch (err) {
+          elFeedback.className = 'feedback err';
+          elFeedback.textContent = '저장 실패: ' + (err && err.message ? err.message : String(err));
+        } finally {
+          elSaveBtn.disabled = false;
+        }
+      });
+
+      void loadSettings();
+    })();
+  </script>
+</body>
+</html>

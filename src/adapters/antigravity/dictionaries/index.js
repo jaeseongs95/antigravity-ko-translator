@@ -7,7 +7,6 @@ const {
   translateToolClause,
   createWorkbenchPatternMatcher,
 } = require('./workbench-ui');
-const { COMPANION_UI_ENTRIES } = require('./companion-ui');
 
 function createAntigravityDictionaryCatalog() {
   let catalogRef = null;
@@ -15,10 +14,7 @@ function createAntigravityDictionaryCatalog() {
   const patternMatcher = createWorkbenchPatternMatcher(lookupFn);
 
   catalogRef = createDictionaryCatalog({
-    exactEntries: [
-      { source: 'workbench-ui', entries: WORKBENCH_UI_ENTRIES },
-      { source: 'companion-ui', entries: COMPANION_UI_ENTRIES },
-    ],
+    exactEntries: [{ source: 'workbench-ui', entries: WORKBENCH_UI_ENTRIES }],
     patternMatcher,
     maxCacheSize: 512,
   });

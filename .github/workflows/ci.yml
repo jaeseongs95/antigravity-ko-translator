@@ -2,11 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop, 'fix/**', 'feature/**', 'release/**', 'hotfix/**']
-    tags: ['v*']
+    branches: [main, develop, 'feature/**']
   pull_request:
-    branches: [main, develop, 'fix/**', 'feature/**', 'release/**', 'hotfix/**']
-  workflow_dispatch:
+    branches: [main, develop]
 
 jobs:
   test:
@@ -16,26 +14,9 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout antigravity-ko-translator
-        uses: actions/checkout@v4
-        with:
-          path: ko-thought-translator
-      - name: Checkout sibling antigravity-statusbar (real companion bundle)
-        uses: actions/checkout@v4
-        with:
-          repository: jaeseongs95/antigravity-statusbar
-          ref: develop
-          path: antigravity-statusbar
-      - name: Checkout sibling antigravity-mcp-manager (real companion bundle)
-        uses: actions/checkout@v4
-        with:
-          repository: jaeseongs95/antigravity-mcp-manager
-          ref: develop
-          path: antigravity-mcp-manager
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Verify deterministic bundle parity and run unit & real Chromium CDP E2E suites
-        working-directory: ko-thought-translator
+      - name: Verify deterministic bundle and run full test suite
         run: npm test

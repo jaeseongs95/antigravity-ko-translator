@@ -1,102 +1,62 @@
 'use strict';
 
+/**
+ * Clean-Slate Host Filesystem Paths for Antigravity Desktop ko-thought-translator.
+ *
+ * Strictly isolated from Antigravity host internal storage and sibling plugin files.
+ */
+
 const os = require('os');
 const path = require('path');
 
+const PLUGIN_ID = 'ko-thought-translator';
+const PLUGIN_ROOT = path.resolve(__dirname, '..');
+const RENDERER_BUNDLE_PATH = path.join(PLUGIN_ROOT, 'dist', 'renderer.js');
+
 function resolveHostPaths(env = process.env) {
-  const homeDir = env.USERPROFILE || env.HOME || os.homedir();
-  const localAppData = env.LOCALAPPDATA || path.join(homeDir, 'AppData', 'Local');
-  const appData = env.APPDATA || path.join(homeDir, 'AppData', 'Roaming');
+  const HOME_DIR = (env && (env.USERPROFILE || env.HOME)) || os.homedir();
+  const LOCAL_APPDATA = (env && env.LOCALAPPDATA) || path.join(HOME_DIR, 'AppData', 'Local');
+  const GEMINI_DIR = path.join(HOME_DIR, '.gemini');
+  const AGY_DIR = path.join(GEMINI_DIR, 'antigravity');
+  const CONFIG_DIR = path.join(GEMINI_DIR, 'config');
+  const PLUGINS_ROOT_DIR = path.join(CONFIG_DIR, 'plugins');
+  const CONFIG_JSON_PATH = path.join(CONFIG_DIR, 'config.json');
 
-  const appStoragePath = env.AGY_KO_APP_STORAGE_PATH || path.join(appData, 'Antigravity', 'app_storage.json');
-  const devtoolsPortFile = env.AGY_KO_DEVTOOLS_PORT_FILE || path.join(appData, 'Antigravity', 'DevToolsActivePort');
-  const asarPath = env.AGY_KO_ASAR_PATH || path.join(localAppData, 'Programs', 'antigravity', 'resources', 'app.asar');
-  const agyDir = env.AGY_KO_AGY_DIR || path.join(homeDir, '.gemini', 'antigravity');
-  const configJsonPath = env.AGY_KO_CONFIG_JSON_PATH || path.join(homeDir, '.gemini', 'config', 'config.json');
+  const UI_EXTENSIONS_DIR = path.join(AGY_DIR, 'ui-extensions.d');
+  const MANIFEST_PATH = path.join(UI_EXTENSIONS_DIR, `${PLUGIN_ID}.json`);
+  const LOADER_SCRIPT_PATH = path.join(AGY_DIR, 'ui-extensions-loader.js');
+  const SETTINGS_PATH = path.join(AGY_DIR, 'ko_translator_settings.json');
+  const SETTINGS_LOCK_PATH = path.join(AGY_DIR, 'ko_translator_settings.lock');
+  const ASAR_LOCK_PATH = path.join(AGY_DIR, 'ui_extensions_asar.lock');
 
-  const settingsSsotPath = env.AGY_KO_SETTINGS_SSOT_PATH || path.join(agyDir, 'ko_translator_settings.json');
-  const settingsSsotLockPath = `${settingsSsotPath}.lock`;
-
-  const statusbarAutoinjectPath = env.AGY_KO_AUTOINJECT_PATH || path.join(agyDir, 'statusbar_autoinject.js');
-  const statusbarAutoinjectLockPath = path.join(agyDir, 'statusbar_autoinject.lock');
-  const statusbarPatchLockPath = path.join(agyDir, 'statusbar_patch.lock');
-  const appStorageLockPath = path.join(agyDir, 'app_storage_sync.lock');
-  const statusbarPatchStatusPath = path.join(agyDir, 'statusbar_patch_status.json');
-  const ensureStatusbarPatchPath = path.join(agyDir, 'ensure_statusbar_patch.js');
-
-  const watcherPidPath = env.AGY_KO_WATCHER_PID_PATH || path.join(agyDir, 'ko_thought_watcher.pid');
-  const watcherLockPath = `${watcherPidPath}.lock`;
-  const llmPidPath = env.AGY_KO_LLM_PID_PATH || path.join(agyDir, 'ko_thought_llm.pid');
-  const llmLockPath = `${llmPidPath}.lock`;
+  const ASAR_PATH =
+    (env && env.AGY_ASAR_PATH) ||
+    path.join(LOCAL_APPDATA, 'Programs', 'antigravity', 'resources', 'app.asar');
 
   return {
-    HOME_DIR: homeDir,
-    LOCAL_APPDATA: localAppData,
-    APPDATA: appData,
-    APP_STORAGE_PATH: appStoragePath,
-    DEVTOOLS_PORT_FILE: devtoolsPortFile,
-    ASAR_PATH: asarPath,
-    AGY_DIR: agyDir,
-    CONFIG_JSON_PATH: configJsonPath,
-    SETTINGS_SSOT_PATH: settingsSsotPath,
-    SETTINGS_SSOT_LOCK_PATH: settingsSsotLockPath,
-    STATUSBAR_AUTOINJECT_PATH: statusbarAutoinjectPath,
-    STATUSBAR_AUTOINJECT_LOCK_PATH: statusbarAutoinjectLockPath,
-    LOCK_PATH: statusbarPatchLockPath,
-    APP_STORAGE_LOCK_PATH: appStorageLockPath,
-    STATUS_PATH: statusbarPatchStatusPath,
-    ENSURE_STATUSBAR_PATCH_PATH: ensureStatusbarPatchPath,
-    WATCHER_PID_PATH: watcherPidPath,
-    WATCHER_LOCK_PATH: watcherLockPath,
-    LLM_PID_PATH: llmPidPath,
-    LLM_LOCK_PATH: llmLockPath,
+    PLUGIN_ID,
+    PLUGIN_ROOT,
+    RENDERER_BUNDLE_PATH,
+    HOME_DIR,
+    LOCAL_APPDATA,
+    GEMINI_DIR,
+    AGY_DIR,
+    CONFIG_DIR,
+    PLUGINS_ROOT_DIR,
+    CONFIG_JSON_PATH,
+    UI_EXTENSIONS_DIR,
+    MANIFEST_PATH,
+    LOADER_SCRIPT_PATH,
+    SETTINGS_PATH,
+    SETTINGS_LOCK_PATH,
+    ASAR_LOCK_PATH,
+    ASAR_PATH,
   };
 }
 
-const DEFAULT_PATHS = resolveHostPaths(process.env);
-
-const PLUGIN_ROOT = path.resolve(__dirname, '..');
-const SCRIPTS_DIR = path.join(PLUGIN_ROOT, 'scripts');
-const KO_SCRIPT_PATH = path.join(SCRIPTS_DIR, 'ko_thought_autoinject.js');
-const DIST_KO_SCRIPT_PATH = path.join(PLUGIN_ROOT, 'dist', 'ko_thought_autoinject.js');
-const LEGACY_PLUGIN_KO_SCRIPT_PATH = path.join(
-  PLUGIN_ROOT,
-  'plugins',
-  'ko-thought-translator',
-  'scripts',
-  'ko_thought_autoinject.js'
-);
-const LEGACY_SKILL_KO_SCRIPT_PATH = path.join(
-  PLUGIN_ROOT,
-  'skills',
-  'ko-thought-translator',
-  'scripts',
-  'ko_thought_inject.js'
-);
-const BUNDLED_ENSURE_STATUSBAR_PATCH_PATH = path.join(__dirname, 'ensure_statusbar_patch.js');
-const CLI_ENTRY_SCRIPT_PATH = path.join(SCRIPTS_DIR, 'ensure_ko_thought_patch.js');
-
-const DEFAULT_LLM_BASE_URL = process.env.AGY_LOCAL_LLM_BASE_URL || 'http://127.0.0.1:11434';
-
-const BEGIN_MARKER = '// === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 ===';
-const END_MARKER = '// === END_AGY_KO_THOUGHT_LOCALIZER_V2 ===';
-const BEGIN_BLOCK_MARKER = '/* === BEGIN_AGY_KO_THOUGHT_LOCALIZER_V2 === */';
-const END_BLOCK_MARKER = '/* === END_AGY_KO_THOUGHT_LOCALIZER_V2 === */';
-
 module.exports = {
-  ...DEFAULT_PATHS,
-  resolveHostPaths,
+  PLUGIN_ID,
   PLUGIN_ROOT,
-  SCRIPTS_DIR,
-  KO_SCRIPT_PATH,
-  DIST_KO_SCRIPT_PATH,
-  LEGACY_PLUGIN_KO_SCRIPT_PATH,
-  LEGACY_SKILL_KO_SCRIPT_PATH,
-  BUNDLED_ENSURE_STATUSBAR_PATCH_PATH,
-  CLI_ENTRY_SCRIPT_PATH,
-  DEFAULT_LLM_BASE_URL,
-  BEGIN_MARKER,
-  END_MARKER,
-  BEGIN_BLOCK_MARKER,
-  END_BLOCK_MARKER,
+  RENDERER_BUNDLE_PATH,
+  resolveHostPaths,
 };

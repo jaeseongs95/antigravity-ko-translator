@@ -1,0 +1,552 @@
+'use strict';
+
+/**
+ * Shared Zero-Conflict Drop-In UI Extension Loader (`ui-extensions.d/<plugin-id>.json`).
+ *
+ * Security & Coexistence Invariants (aligned across Antigravity desktop plugin owners):
+ * 1. `schemaVersion: 1`, `pluginId` (`^[a-z0-9][a-z0-9_-]{0,63}$`), `entryScript` whose
+ *    `fs.realpathSync` MUST stay strictly inside `fs.realpathSync(<pluginsRoot>/<pluginId>)`.
+ *    Symlink escapes and `..` traversal are unconditionally rejected.
+ * 2. Live `~/.gemini/config/config.json` check (`plugins[pluginId]?.enabled !== false`) on
+ *    every window load: disabling or uninstalling a plugin immediately executes 0 bytes.
+ * 3. Top-frame Hub URL filter ONLY (`http(s)://127.0.0.1` or `http(s)://localhost`):
+ *    NEVER injects into `devtools://`, `about:`, `data:`, `file://`, or child iframes/Sidecars.
+ * 4. Per-plugin isolated IIFE + independent `try/catch`.
+ * 5. Patches ONLY ONE anchor in `dist/main.js` (`app.on('web-contents-created', ...)`) with
+ *    exact-size preservation, verified `.orig` backup, and atomic rename (ZERO `copyFileSync` fallback).
+ */
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+const { resolveHostPaths, PLUGIN_ID } = require('./paths');
+const {
+  acquireExclusiveLock,
+  releaseExclusiveLock,
+  writeFileAtomicSync,
+  readTranslatorSettings,
+} = require('./config-store');
+
+const PATCH_MARKER = 'AGY_UI_EXTENSIONS_LOADER_V1';
+const MAIN_ANCHOR_TARGET = "electron_1.app.on('web-contents-created', (_event, contents) => {";
+const MAIN_ANCHOR_REPLACEMENT =
+  "electron_1.app.on('web-contents-created', (_event, contents) => {\n" +
+  `    // ${PATCH_MARKER}\n` +
+  "    try { const _p = require('path').join(require('os').homedir(), '.gemini', 'antigravity', 'ui-extensions-loader.js'); if (require('fs').existsSync(_p)) require(_p).attach(contents); } catch (_e) {}";
+
+const BLOCK_SIZE = 4 * 1024 * 1024;
+const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const ALLOWED_HUB_URL_RE = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/i;
+
+function sha256Hex(buf) {
+  return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+function isAllowedHubUrl(rawUrl) {
+  if (typeof rawUrl !== 'string' || !rawUrl) return false;
+  return ALLOWED_HUB_URL_RE.test(rawUrl.trim());
+}
+
+function isPathStrictlyInside(parentDir, candidatePath) {
+  const rel = path.relative(parentDir, candidatePath);
+  return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function validateDropinManifest(manifest, pluginsRootDir) {
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    return { ok: false, reason: 'MANIFEST_NOT_OBJECT' };
+  }
+  if (manifest.schemaVersion !== 1) {
+    return { ok: false, reason: 'UNSUPPORTED_SCHEMA_VERSION' };
+  }
+  const pluginId = typeof manifest.pluginId === 'string' ? manifest.pluginId.trim() : '';
+  if (!PLUGIN_ID_RE.test(pluginId)) {
+    return { ok: false, reason: 'INVALID_PLUGIN_ID' };
+  }
+  if (typeof manifest.entryScript !== 'string' || !manifest.entryScript.trim()) {
+    return { ok: false, reason: 'MISSING_ENTRY_SCRIPT' };
+  }
+  if (!pluginsRootDir || !fs.existsSync(pluginsRootDir)) {
+    return { ok: false, reason: 'PLUGINS_ROOT_MISSING' };
+  }
+
+  const pluginDir = path.join(pluginsRootDir, pluginId);
+  if (!fs.existsSync(pluginDir)) {
+    return { ok: false, reason: 'PLUGIN_DIR_MISSING' };
+  }
+
+  let realPluginDir;
+  let realEntryPath;
+  try {
+    realPluginDir = fs.realpathSync(pluginDir);
+    const resolvedCandidate = path.isAbsolute(manifest.entryScript)
+      ? path.resolve(manifest.entryScript)
+      : path.resolve(pluginDir, manifest.entryScript);
+    if (!fs.existsSync(resolvedCandidate)) {
+      return { ok: false, reason: 'ENTRY_SCRIPT_MISSING' };
+    }
+    realEntryPath = fs.realpathSync(resolvedCandidate);
+  } catch (_err) {
+    return { ok: false, reason: 'REALPATH_RESOLUTION_FAILED' };
+  }
+
+  if (!isPathStrictlyInside(realPluginDir, realEntryPath)) {
+    return { ok: false, reason: 'ENTRY_SCRIPT_ESCAPES_PLUGIN_DIR' };
+  }
+
+  return {
+    ok: true,
+    pluginId,
+    entryScript: realEntryPath,
+  };
+}
+
+function readDropinManifest(manifestPath) {
+  try {
+    if (!manifestPath || !fs.existsSync(manifestPath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function isPluginEnabledInConfig(configJsonPath, pluginId) {
+  try {
+    if (!configJsonPath || !fs.existsSync(configJsonPath)) return true;
+    const cfg = JSON.parse(fs.readFileSync(configJsonPath, 'utf8'));
+    const entry = cfg && cfg.plugins && cfg.plugins[pluginId];
+    if (entry && entry.enabled === false) return false;
+    return true;
+  } catch (_err) {
+    return true;
+  }
+}
+
+function collectExecutableExtensions({ uiExtensionsDir, pluginsRootDir, configJsonPath, settingsPath }) {
+  const results = [];
+  if (!uiExtensionsDir || !fs.existsSync(uiExtensionsDir)) return results;
+  let entries = [];
+  try {
+    entries = fs.readdirSync(uiExtensionsDir).filter((f) => f.endsWith('.json')).sort();
+  } catch (_err) {
+    return results;
+  }
+
+  for (const fileName of entries) {
+    const manifest = readDropinManifest(path.join(uiExtensionsDir, fileName));
+    const check = validateDropinManifest(manifest, pluginsRootDir);
+    if (!check.ok) continue;
+    if (!isPluginEnabledInConfig(configJsonPath, check.pluginId)) continue;
+
+    let code = '';
+    try {
+      code = fs.readFileSync(check.entryScript, 'utf8');
+    } catch (_err) {
+      continue;
+    }
+    if (!code.trim()) continue;
+
+    let initialSettingsPrelude = '';
+    if (check.pluginId === PLUGIN_ID && settingsPath) {
+      try {
+        const settings = readTranslatorSettings({ SETTINGS_PATH: settingsPath });
+        initialSettingsPrelude = `window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ = ${JSON.stringify(settings)};\n`;
+      } catch (_err) {}
+    }
+
+    const wrapped = `(function(){try{\n${initialSettingsPrelude}${code}\n}catch(_e){}})();`;
+    results.push({
+      pluginId: check.pluginId,
+      entryScript: check.entryScript,
+      wrappedCode: wrapped,
+    });
+  }
+  return results;
+}
+
+function buildHostLoaderScriptSource() {
+  return `'use strict';
+// ${PATCH_MARKER} — Shared Drop-In UI Extensions Loader (Zero-Daemon, Top-Frame Hub Only)
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const ALLOWED_HUB_URL_RE = /^https?:\\/\\/(?:127\\.0\\.0\\.1|localhost)(?::\\d+)?(?:\\/|$)/i;
+
+function isInside(parentDir, childPath) {
+  const rel = path.relative(parentDir, childPath);
+  return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function attach(contents) {
+  if (!contents || typeof contents.getType !== 'function' || contents.getType() !== 'window') return;
+  const run = () => {
+    try {
+      if (contents.isDestroyed()) return;
+      const url = typeof contents.getURL === 'function' ? String(contents.getURL() || '') : '';
+      if (!ALLOWED_HUB_URL_RE.test(url)) return;
+
+      const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
+      const agyDir = path.join(home, '.gemini', 'antigravity');
+      const extDir = path.join(agyDir, 'ui-extensions.d');
+      const pluginsRoot = path.join(home, '.gemini', 'config', 'plugins');
+      const configPath = path.join(home, '.gemini', 'config', 'config.json');
+      if (!fs.existsSync(extDir) || !fs.existsSync(pluginsRoot)) return;
+
+      let cfg = {};
+      try { if (fs.existsSync(configPath)) cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_e) {}
+
+      const files = fs.readdirSync(extDir).filter((f) => f.endsWith('.json')).sort();
+      for (const f of files) {
+        try {
+          const m = JSON.parse(fs.readFileSync(path.join(extDir, f), 'utf8'));
+          if (!m || m.schemaVersion !== 1 || typeof m.pluginId !== 'string' || !PLUGIN_ID_RE.test(m.pluginId)) continue;
+          if (cfg && cfg.plugins && cfg.plugins[m.pluginId] && cfg.plugins[m.pluginId].enabled === false) continue;
+          const pDir = path.join(pluginsRoot, m.pluginId);
+          if (!fs.existsSync(pDir)) continue;
+          const realPDir = fs.realpathSync(pDir);
+          const cand = path.isAbsolute(m.entryScript) ? path.resolve(m.entryScript) : path.resolve(pDir, String(m.entryScript || ''));
+          if (!fs.existsSync(cand)) continue;
+          const realEntry = fs.realpathSync(cand);
+          if (!isInside(realPDir, realEntry)) continue;
+          const rawCode = fs.readFileSync(realEntry, 'utf8');
+          let prelude = '';
+          if (m.pluginId === 'ko-thought-translator') {
+            const sp = path.join(agyDir, 'ko_translator_settings.json');
+            try {
+              if (fs.existsSync(sp)) {
+                prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__=' + fs.readFileSync(sp, 'utf8') + ';\\n';
+              }
+            } catch (_e) {}
+          }
+          const wrapped = '(function(){try{\\n' + prelude + rawCode + '\\n}catch(_e){}})();';
+          void contents.executeJavaScript(wrapped).catch(() => {});
+        } catch (_e) {}
+      }
+    } catch (_e) {}
+  };
+  contents.on('dom-ready', run);
+  contents.on('did-finish-load', run);
+}
+
+module.exports = { attach };
+`;
+}
+
+function readAsarArchive(filePath) {
+  const buf = fs.readFileSync(filePath);
+  const u0 = buf.readUInt32LE(0);
+  const u4 = buf.readUInt32LE(4);
+  const strSize = buf.readUInt32LE(12);
+  const dataOffset = 8 + u4;
+  const header = JSON.parse(buf.toString('utf8', 16, 16 + strSize).replace(/\0+$/, ''));
+
+  const fileMap = new Map();
+  function walk(node, relPath) {
+    if (node.files) {
+      for (const [name, child] of Object.entries(node.files)) {
+        walk(child, relPath ? `${relPath}/${name}` : name);
+      }
+    } else if (!node.unpacked && node.offset !== undefined && node.size !== undefined) {
+      const start = dataOffset + Number(node.offset);
+      fileMap.set(relPath, buf.subarray(start, start + node.size));
+    }
+  }
+  walk(header, '');
+
+  let appVersion = 'unknown';
+  try {
+    const pkgBuf = fileMap.get('package.json');
+    if (pkgBuf) {
+      const pkg = JSON.parse(pkgBuf.toString('utf8'));
+      if (pkg && pkg.version) appVersion = String(pkg.version);
+    }
+  } catch (_err) {}
+
+  return { buf, u0, u4, strSize, dataOffset, header, fileMap, appVersion };
+}
+
+function computeIntegrity(buf) {
+  const blocks = [];
+  for (let i = 0; i < buf.length; i += BLOCK_SIZE) {
+    blocks.push(sha256Hex(buf.subarray(i, Math.min(i + BLOCK_SIZE, buf.length))));
+  }
+  if (blocks.length === 0) blocks.push(sha256Hex(Buffer.alloc(0)));
+  return {
+    algorithm: 'SHA256',
+    hash: sha256Hex(buf),
+    blockSize: BLOCK_SIZE,
+    blocks,
+  };
+}
+
+function isAsarLoaderInstalled(asarPath) {
+  try {
+    if (!asarPath || !fs.existsSync(asarPath)) return false;
+    const archive = readAsarArchive(asarPath);
+    const mainBuf = archive.fileMap.get('dist/main.js');
+    return Boolean(mainBuf && mainBuf.toString('utf8').includes(PATCH_MARKER));
+  } catch (_err) {
+    return false;
+  }
+}
+
+function isPureUnpatchedArchive(archive) {
+  const mainText = archive.fileMap.get('dist/main.js')?.toString('utf8') || '';
+  const utilsText = archive.fileMap.get('dist/utils.js')?.toString('utf8') || '';
+  const preloadText = archive.fileMap.get('dist/preload.js')?.toString('utf8') || '';
+  const all = mainText + '\n' + utilsText + '\n' + preloadText;
+  return !all.includes(PATCH_MARKER);
+}
+
+function transformExactSize(origBuf, targetStr, replacementStr) {
+  const origText = origBuf.toString('utf8');
+  const firstIdx = origText.indexOf(targetStr);
+  if (firstIdx === -1) {
+    throw new Error('ANCHOR_NOT_FOUND');
+  }
+  if (origText.indexOf(targetStr, firstIdx + 1) !== -1) {
+    throw new Error('ANCHOR_NOT_UNIQUE');
+  }
+
+  let nextText = origText.slice(0, firstIdx) + replacementStr + origText.slice(firstIdx + targetStr.length);
+  let delta = Buffer.byteLength(nextText, 'utf8') - origBuf.length;
+
+  if (delta > 0) {
+    // Strip pure single-line `//` comment lines outside the injected marker line to reclaim exact bytes.
+    const lines = nextText.split('\n');
+    const kept = [];
+    for (const line of lines) {
+      if (delta > 0 && /^\s*\/\/(?!.*AGY_UI_EXTENSIONS_LOADER_V1)/.test(line)) {
+        delta -= Buffer.byteLength(line, 'utf8') + 1;
+        continue;
+      }
+      kept.push(line);
+    }
+    nextText = kept.join('\n');
+  }
+
+  const finalDiff = origBuf.length - Buffer.byteLength(nextText, 'utf8');
+  if (finalDiff < 0) {
+    throw new Error(`INSUFFICIENT_BYTE_HEADROOM:${-finalDiff}`);
+  }
+  if (finalDiff > 0) {
+    nextText = nextText + ' '.repeat(finalDiff);
+  }
+  const outBuf = Buffer.from(nextText, 'utf8');
+  if (outBuf.length !== origBuf.length) {
+    throw new Error('EXACT_SIZE_MISMATCH');
+  }
+  return outBuf;
+}
+
+function writeBinaryAtomicStrictSync(targetPath, buf) {
+  const tmpPath = `${targetPath}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmpPath, buf);
+    const verify = fs.readFileSync(tmpPath);
+    if (sha256Hex(verify) !== sha256Hex(buf)) {
+      throw new Error('ATOMIC_TEMP_HASH_MISMATCH');
+    }
+    // Strict atomic rename ONLY — never fall back to `fs.copyFileSync` on live/locked `app.asar`!
+    fs.renameSync(tmpPath, targetPath);
+  } finally {
+    if (fs.existsSync(tmpPath)) {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch (_err) {}
+    }
+  }
+}
+
+function registerPluginManifest(pathOverrides = null) {
+  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+  const manifest = {
+    schemaVersion: 1,
+    pluginId: p.PLUGIN_ID || PLUGIN_ID,
+    entryScript: p.RENDERER_BUNDLE_PATH,
+  };
+  writeFileAtomicSync(p.MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n');
+  writeFileAtomicSync(p.LOADER_SCRIPT_PATH, buildHostLoaderScriptSource());
+  return manifest;
+}
+
+function unregisterPluginManifest(pathOverrides = null) {
+  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+  let removed = false;
+  if (fs.existsSync(p.MANIFEST_PATH)) {
+    fs.unlinkSync(p.MANIFEST_PATH);
+    removed = true;
+  }
+  return removed;
+}
+
+function installAsarDropinLoader(pathOverrides = null) {
+  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+  if (!fs.existsSync(p.ASAR_PATH)) {
+    return { status: 'SKIPPED_NO_ASAR' };
+  }
+  const lockTok = acquireExclusiveLock(p.ASAR_LOCK_PATH, 60000);
+  if (!lockTok) {
+    return { status: 'LOCK_BUSY' };
+  }
+  try {
+    let archive = readAsarArchive(p.ASAR_PATH);
+    if (isAsarLoaderInstalled(p.ASAR_PATH)) {
+      return { status: 'ALREADY_INSTALLED', appVersion: archive.appVersion };
+    }
+    const backupPath = `${p.ASAR_PATH}.v${archive.appVersion}.orig`;
+    const metaPath = `${backupPath}.json`;
+
+    if (isPureUnpatchedArchive(archive)) {
+      if (!fs.existsSync(backupPath)) {
+        writeBinaryAtomicStrictSync(backupPath, archive.buf);
+        writeFileAtomicSync(
+          metaPath,
+          JSON.stringify(
+            {
+              appVersion: archive.appVersion,
+              bytes: archive.buf.length,
+              sha256: sha256Hex(archive.buf),
+              createdAt: new Date().toISOString(),
+            },
+            null,
+            2
+          ) + '\n'
+        );
+      }
+    } else if (fs.existsSync(backupPath)) {
+      archive = readAsarArchive(backupPath);
+      if (!isPureUnpatchedArchive(archive)) {
+        return { status: 'ERR_ORIG_NOT_PURE', appVersion: archive.appVersion };
+      }
+    } else {
+      return { status: 'ERR_ORIG_MISSING_FOR_PATCHED_ASAR', appVersion: archive.appVersion };
+    }
+
+    const mainBuf = archive.fileMap.get('dist/main.js');
+    if (!mainBuf) {
+      return { status: 'ERR_MAIN_MISSING', appVersion: archive.appVersion };
+    }
+
+    const patchedMainBuf = transformExactSize(mainBuf, MAIN_ANCHOR_TARGET, MAIN_ANCHOR_REPLACEMENT);
+    archive.fileMap.set('dist/main.js', patchedMainBuf);
+
+    const chunks = [];
+    let currentOffset = 0n;
+    function rebuild(node, relPath) {
+      if (node.files) {
+        for (const [name, child] of Object.entries(node.files)) {
+          rebuild(child, relPath ? `${relPath}/${name}` : name);
+        }
+      } else if (!node.unpacked && node.offset !== undefined && node.size !== undefined) {
+        const data = archive.fileMap.get(relPath);
+        node.size = data.length;
+        node.offset = currentOffset.toString();
+        node.integrity = computeIntegrity(data);
+        chunks.push(data);
+        currentOffset += BigInt(data.length);
+      }
+    }
+    rebuild(archive.header, '');
+
+    const headerStrBuf = Buffer.from(JSON.stringify(archive.header), 'utf8');
+    const alignedStrSize = Math.ceil(headerStrBuf.length / 4) * 4;
+    const newU8 = 4 + alignedStrSize;
+    const newU4 = 4 + newU8;
+    const headerBuf = Buffer.alloc(8 + newU4, 0);
+    headerBuf.writeUInt32LE(archive.u0, 0);
+    headerBuf.writeUInt32LE(newU4, 4);
+    headerBuf.writeUInt32LE(newU8, 8);
+    headerBuf.writeUInt32LE(headerStrBuf.length, 12);
+    headerStrBuf.copy(headerBuf, 16);
+
+    const outBuf = Buffer.concat([headerBuf, ...chunks]);
+    if (outBuf.length !== archive.buf.length) {
+      return { status: 'ERR_ARCHIVE_SIZE_DRIFT', appVersion: archive.appVersion };
+    }
+
+    writeBinaryAtomicStrictSync(p.ASAR_PATH, outBuf);
+    return {
+      status: 'INSTALLED',
+      patchMarker: PATCH_MARKER,
+      appVersion: archive.appVersion,
+      backupPath,
+      sha256: sha256Hex(outBuf),
+    };
+  } finally {
+    releaseExclusiveLock(p.ASAR_LOCK_PATH, lockTok);
+  }
+}
+
+function rollbackAsarDropinLoader(pathOverrides = null) {
+  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+  const manifestRemoved = unregisterPluginManifest(p);
+
+  if (!fs.existsSync(p.ASAR_PATH)) {
+    return { status: 'SKIPPED_NO_ASAR', manifestRemoved };
+  }
+
+  // If other plugins still have registered manifests in `ui-extensions.d`, keep the shared loader intact.
+  const remainingManifests = fs.existsSync(p.UI_EXTENSIONS_DIR)
+    ? fs.readdirSync(p.UI_EXTENSIONS_DIR).filter((f) => f.endsWith('.json'))
+    : [];
+  if (remainingManifests.length > 0) {
+    return {
+      status: 'MANIFEST_REMOVED_SHARED_LOADER_PRESERVED',
+      manifestRemoved,
+      remainingManifests,
+    };
+  }
+
+  const lockTok = acquireExclusiveLock(p.ASAR_LOCK_PATH, 60000);
+  if (!lockTok) {
+    return { status: 'LOCK_BUSY', manifestRemoved };
+  }
+  try {
+    const cur = readAsarArchive(p.ASAR_PATH);
+    if (isPureUnpatchedArchive(cur)) {
+      return { status: 'ALREADY_UNPATCHED', appVersion: cur.appVersion, manifestRemoved };
+    }
+    const backupPath = `${p.ASAR_PATH}.v${cur.appVersion}.orig`;
+    if (!fs.existsSync(backupPath)) {
+      return { status: 'ERR_ORIG_MISSING', appVersion: cur.appVersion, manifestRemoved };
+    }
+    const origArchive = readAsarArchive(backupPath);
+    if (!isPureUnpatchedArchive(origArchive) || origArchive.appVersion !== cur.appVersion) {
+      return { status: 'ERR_ORIG_INVALID', appVersion: cur.appVersion, manifestRemoved };
+    }
+    writeBinaryAtomicStrictSync(p.ASAR_PATH, origArchive.buf);
+    return {
+      status: 'ROLLED_BACK',
+      appVersion: cur.appVersion,
+      manifestRemoved,
+      sha256: sha256Hex(origArchive.buf),
+    };
+  } finally {
+    releaseExclusiveLock(p.ASAR_LOCK_PATH, lockTok);
+  }
+}
+
+module.exports = {
+  PATCH_MARKER,
+  MAIN_ANCHOR_TARGET,
+  MAIN_ANCHOR_REPLACEMENT,
+  isAllowedHubUrl,
+  validateDropinManifest,
+  readDropinManifest,
+  isPluginEnabledInConfig,
+  collectExecutableExtensions,
+  buildHostLoaderScriptSource,
+  readAsarArchive,
+  isAsarLoaderInstalled,
+  isPureUnpatchedArchive,
+  transformExactSize,
+  registerPluginManifest,
+  unregisterPluginManifest,
+  installAsarDropinLoader,
+  rollbackAsarDropinLoader,
+};

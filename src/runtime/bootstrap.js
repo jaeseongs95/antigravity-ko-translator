@@ -1,598 +1,385 @@
 'use strict';
 
+/**
+ * Clean-Slate Desktop-Only Pure Read-Only DOM Overlay Bootstrap.
+ *
+ * Exports `createKoTranslator({ win, doc, settings, onStatus }) -> { start(), updateSettings(next), dispose(), getStatus() }`.
+ * - ZERO host `fetch` / `lsClient` / Protobuf interception
+ * - ZERO React Fiber / Angular inspection
+ * - ZERO `Worker` / `iframe` / TrustedTypes hijacking
+ * - ZERO cross-plugin coupling (no sibling plugin files or shared host storage)
+ * - ZERO native Settings modal DOM hacking (settings live in the official Sidecar AUX_PANE)
+ */
+
 const { createDisposableRegistry } = require('../core/disposable-registry');
 const { createProviderRegistry } = require('../core/provider-registry');
 const { createTranslationService } = require('../core/translation-service');
-
-const { createStatusbarAdapterPort } = require('../adapters/statusbar-port');
 const { createGoogleTranslateAdapter } = require('../adapters/translators/google-translate');
 const { createLocalLlmAdapter } = require('../adapters/translators/local-llm');
-
-const {
-  ANTIGRAVITY_PROVIDER_ALIASES,
-  DEFAULT_ANTIGRAVITY_LLM_CONFIG,
-  resolveAntigravityHostConfig,
-} = require('../adapters/antigravity/host-config-preset');
-const {
-  STORAGE_KEYS,
-  createAntigravityStorageAdapter,
-  createNativeStorageBridge,
-  createAntigravityLlmConfigAdapter,
-  createOriginLocalCustomProviderStore,
-} = require('../adapters/antigravity/storage-port');
-const { createAntigravityDictionaryCatalog } = require('../adapters/antigravity/dictionaries/index');
+const { createCustomProviderAdapter } = require('../adapters/translators/custom-provider');
+const { createAntigravityDictionaryCatalog } = require('../adapters/antigravity/dictionaries');
+const { createStoragePort, STORAGE_KEYS } = require('../adapters/antigravity/storage-port');
 const { createAntigravityUiLocalizer } = require('../adapters/antigravity/ui-localizer');
 const { createAntigravityTriggerController } = require('../adapters/antigravity/trigger-controller');
 const { createAntigravityThinkingTranslator } = require('../adapters/antigravity/thinking-translator');
-const { createAntigravityPretranslator } = require('../adapters/antigravity/pretranslator');
-const { createAntigravitySettingsUi } = require('../adapters/antigravity/settings-ui');
-const { createAntigravityRemoteCompanionSync } = require('../adapters/antigravity/remote-companion-sync');
-
-const { createCspSecurityPort } = require('../remote/csp-security-policy');
-const { createWorkbenchPromoter } = require('../remote/workbench-promoter');
 const { createObserverScheduler } = require('./observer-scheduler');
 
-function normalizeAntigravityProviderAlias(rawId, registry) {
-  const trimmed = String(rawId || '')
-    .trim()
-    .toLowerCase();
-  if (!trimmed) return '';
-  if (Object.prototype.hasOwnProperty.call(ANTIGRAVITY_PROVIDER_ALIASES, trimmed)) {
-    return ANTIGRAVITY_PROVIDER_ALIASES[trimmed];
+const DEFAULT_LLM_CONFIG = Object.freeze({
+  baseUrl: 'http://127.0.0.1:11434',
+  model: 'gemma3:4b',
+  apiFormat: 'ollama',
+  allowRemoteHttps: false,
+  timeoutMs: 15000,
+});
+
+const STYLE_ID = 'agy-ko-thought-localizer-style';
+
+function buildMinimalOverlayCss() {
+  return `
+.cursor-edit[data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap),
+[data-agy-ko-thought-host="1"][data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap) {
+  display: none !important;
+}
+.agy-ko-thought-wrap {
+  display: block;
+}
+[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"],
+[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"] + div {
+  display: none !important;
+}
+`.trim();
+}
+
+function resolveBooleanOption(overrideVal, storedVal, fallback) {
+  if (typeof overrideVal === 'boolean') return overrideVal;
+  if (storedVal === '1' || storedVal === 'true' || storedVal === true) return true;
+  if (storedVal === '0' || storedVal === 'false' || storedVal === false) return false;
+  return Boolean(fallback);
+}
+
+function createKoTranslator({
+  win = typeof window !== 'undefined' ? window : null,
+  doc = null,
+  settings = null,
+  version = '2.0.0',
+  fetchFn = null,
+  onStatus = null,
+} = {}) {
+  const targetWin = win;
+  const targetDoc = doc || (targetWin && targetWin.document) || null;
+  if (!targetWin || !targetDoc) {
+    throw new Error('createKoTranslator requires valid window and document objects');
   }
-  return registry ? registry.normalizeId(trimmed) : trimmed;
-}
 
-function isUnsupportedDocumentEnvironment(targetWin, targetDoc) {
-  if (!targetWin || !targetDoc) return true;
-  // D-0034: Skip data:, devtools:, chrome-extension:, blob:, file:, and non-HTML (XML/SVG) documents!
-  try {
-    const proto = String((targetWin.location && targetWin.location.protocol) || '').toLowerCase();
-    if (
-      proto &&
-      proto !== 'https:' &&
-      proto !== 'http:' &&
-      proto !== 'about:'
-    ) {
-      return true;
-    }
-  } catch (_err) {
-    return true;
-  }
-  try {
-    const contentType = String(targetDoc.contentType || '').toLowerCase();
-    if (contentType && !contentType.includes('html')) {
-      return true;
-    }
-    const rootTag = String((targetDoc.documentElement && targetDoc.documentElement.tagName) || '').toUpperCase();
-    if (rootTag && rootTag !== 'HTML') {
-      return true;
-    }
-  } catch (_err) {}
-  return false;
-}
-
-function isRemoteControlRuntimeEnvironment(targetWin, targetDoc, hostCfg) {
-  try {
-    if (targetWin && targetWin.__APP_CONFIG__ && targetWin.__APP_CONFIG__.isRemoteControl === true) {
-      return true;
-    }
-  } catch (_err) {}
-  try {
-    const sel = (hostCfg && hostCfg.remoteControlSelector) || 'ga-remote-control';
-    if (targetDoc && typeof targetDoc.querySelector === 'function' && targetDoc.querySelector(sel)) {
-      return true;
-    }
-  } catch (_err) {}
-  try {
-    const pathname = String((targetWin && targetWin.location && targetWin.location.pathname) || '');
-    if (pathname.startsWith('/r/') || pathname.startsWith('/web/')) {
-      return true;
-    }
-  } catch (_err) {}
-  return false;
-}
-
-function propagateToAccessibleSameOriginFrames(targetWin, targetDoc, fn) {
-  // D-0017: Cross-frame propagation wrapped in try/catch per frame!
-  if (!targetDoc || typeof targetDoc.querySelectorAll !== 'function') return;
-  try {
-    const iframes = targetDoc.querySelectorAll('iframe');
-    for (let i = 0; i < iframes.length; i++) {
-      try {
-        const cw = iframes[i] && iframes[i].contentWindow;
-        if (cw && cw !== targetWin) {
-          fn(cw);
-        }
-      } catch (_err) {}
-    }
-  } catch (_err) {}
-}
-
-function createRuntimeBootstrapper(defaults = {}) {
-  const version = String(defaults.version || 'v2.0.0');
-  const defaultPretranslateEnabled = Boolean(defaults.defaultPretranslateEnabled);
-  const defaultProviderRaw = String(defaults.defaultTranslationProvider || 'google-translate');
-  const defaultLlmConfig = defaults.defaultLlmConfig || DEFAULT_ANTIGRAVITY_LLM_CONFIG;
-
-  // Rev7-F3: Parameterized `mount(targetWin, targetDoc)` wiring ALL adapters against `(targetWin, targetDoc)`!
-  function mount(rawWin, rawDoc) {
-    const targetWin = rawWin || (typeof window !== 'undefined' ? window : null);
-    const targetDoc = rawDoc || (targetWin && targetWin.document) || (typeof document !== 'undefined' ? document : null);
-    if (isUnsupportedDocumentEnvironment(targetWin, targetDoc)) {
-      return { mounted: false, reason: 'UNSUPPORTED_DOCUMENT' };
-    }
-
-    // If same version is already mounted, sync host defaults if changed and force rescan
-    if (targetWin.__agyKoLocalizerActive === version && typeof targetWin.__agyForceRescanAll === 'function') {
-      if (targetWin.__agyLastDefaultProvider !== defaultProviderRaw && typeof targetWin.__agySetTranslationProvider === 'function') {
-        targetWin.__agyLastDefaultProvider = defaultProviderRaw;
-        try {
-          targetWin.__agySetTranslationProvider(defaultProviderRaw);
-        } catch (_err) {}
-      }
-      if (targetWin.__agyLastDefaultPretranslate !== defaultPretranslateEnabled && typeof targetWin.__agySetPretranslate === 'function') {
-        targetWin.__agyLastDefaultPretranslate = defaultPretranslateEnabled;
-        try {
-          targetWin.__agySetPretranslate(defaultPretranslateEnabled);
-        } catch (_err) {}
-      }
-      if (typeof targetWin.__agySyncPersistentSettings === 'function') {
-        Promise.resolve(targetWin.__agySyncPersistentSettings()).catch(() => {});
-      }
-      targetWin.__agyForceRescanAll();
-      return { mounted: true, reused: true, version };
-    }
-
-    // Hot-swap cleanup of any prior version in this window
-    if (typeof targetWin.__agyKoThoughtCleanup === 'function') {
-      try {
-        targetWin.__agyKoThoughtCleanup(false);
-      } catch (_err) {}
-    }
-
-    let disposed = false;
-    const isDisposed = () => disposed;
-    const disposables = createDisposableRegistry();
-    const hostCfg = resolveAntigravityHostConfig(targetWin);
-    const allowLoopbackForTest = Boolean(
-      targetWin.__AGY_HOST_ADAPTER_CONFIG__ && targetWin.__AGY_HOST_ADAPTER_CONFIG__.__allowLoopbackForTest
-    );
-
-    const setTimer =
-      targetWin && typeof targetWin.setTimeout === 'function'
-        ? targetWin.setTimeout.bind(targetWin)
-        : setTimeout;
-    const clearTimer =
-      targetWin && typeof targetWin.clearTimeout === 'function'
-        ? targetWin.clearTimeout.bind(targetWin)
-        : clearTimeout;
-    const fetchFn =
-      targetWin && typeof targetWin.fetch === 'function'
+  const effectiveFetch =
+    typeof fetchFn === 'function'
+      ? fetchFn
+      : typeof targetWin.fetch === 'function'
         ? targetWin.fetch.bind(targetWin)
         : typeof fetch === 'function'
           ? fetch.bind(globalThis)
           : null;
 
-    const storage = createAntigravityStorageAdapter(targetWin);
-    const nativeBridge = createNativeStorageBridge(targetWin);
-    const llmConfigPort = createAntigravityLlmConfigAdapter({
-      storage,
-      nativeBridge,
-      defaultConfig: defaultLlmConfig,
-    });
+  const storage = createStoragePort({ targetWin, initialSettings: settings });
+  const initCfg = storage.getInitialSettings() || {};
 
-    const registry = createProviderRegistry();
-    if (typeof fetchFn === 'function') {
-      registry.registerProvider(
-        createGoogleTranslateAdapter({
-          fetchFn,
-          setTimer,
-          clearTimer,
-        })
-      );
-      registry.registerProvider(
-        createLocalLlmAdapter({
-          llmConfigPort,
-          fetchFn,
-          setTimer,
-          clearTimer,
-        })
-      );
-    }
+  let state = {
+    enabled: initCfg.enabled !== false,
+    translateThinking: resolveBooleanOption(
+      initCfg.translateThinking,
+      storage.getItem(STORAGE_KEYS.translateThinking),
+      true
+    ),
+    showThinking: resolveBooleanOption(
+      initCfg.showThinking,
+      storage.getItem(STORAGE_KEYS.showThinking),
+      true
+    ),
+    translateStaticUi: resolveBooleanOption(
+      initCfg.translateStaticUi,
+      storage.getItem(STORAGE_KEYS.translateStaticUi),
+      true
+    ),
+    provider: String(
+      initCfg.provider ||
+        storage.getItem(STORAGE_KEYS.provider) ||
+        'google-translate'
+    ).trim() || 'google-translate',
+    llmConfig: {
+      ...DEFAULT_LLM_CONFIG,
+      ...(storage.getJson(STORAGE_KEYS.llmConfig, {}) || {}),
+      ...(initCfg.llmConfig && typeof initCfg.llmConfig === 'object' ? initCfg.llmConfig : {}),
+    },
+    customProviders: Array.isArray(initCfg.customProviders)
+      ? initCfg.customProviders
+      : storage.getJson(STORAGE_KEYS.customProviders, []) || [],
+  };
 
-    const customProviderStore = createOriginLocalCustomProviderStore({
-      storage,
-      registry,
-      fetchFn,
-      setTimer,
-      clearTimer,
-    });
-    customProviderStore.hydrateIntoRegistry();
+  let started = false;
+  let disposed = false;
+  let lastError = null;
 
-    const sharedMemCache = (() => {
+  const disposables = createDisposableRegistry();
+  const catalog = createAntigravityDictionaryCatalog();
+  const providerRegistry = createProviderRegistry();
+
+  const googleProvider = createGoogleTranslateAdapter({ fetchFn: effectiveFetch });
+  const localLlmProvider = createLocalLlmAdapter({
+    fetchFn: effectiveFetch,
+    llmConfigPort: {
+      getLlmConfig: () => state.llmConfig,
+    },
+  });
+
+  providerRegistry.registerProvider(googleProvider);
+  providerRegistry.registerProvider(localLlmProvider);
+
+  function syncDeclarativeCustomProviders(list) {
+    if (!Array.isArray(list)) return;
+    for (const spec of list) {
+      if (!spec || typeof spec !== 'object' || !spec.id) continue;
       try {
-        if (targetWin.parent && targetWin.parent !== targetWin && targetWin.parent.__agySharedKoMemCache instanceof Map) {
-          return targetWin.parent.__agySharedKoMemCache;
-        }
-      } catch (_err) {}
-      if (!(targetWin.__agySharedKoMemCache instanceof Map)) {
-        targetWin.__agySharedKoMemCache = new Map();
-      }
-      return targetWin.__agySharedKoMemCache;
-    })();
-
-    const defaultProviderId =
-      normalizeAntigravityProviderAlias(defaultProviderRaw, registry) || 'google-translate';
-    const isRemoteEnv = isRemoteControlRuntimeEnvironment(targetWin, targetDoc, hostCfg);
-
-    // Normalize any legacy stored alias ('google', 'local', 'ollama') before creating TranslationService
-    const existingRawProv = storage.getItem(STORAGE_KEYS.PROVIDER);
-    if (existingRawProv) {
-      const normalizedStored = normalizeAntigravityProviderAlias(existingRawProv, registry);
-      if (normalizedStored && normalizedStored !== existingRawProv) {
-        storage.setItem(STORAGE_KEYS.PROVIDER, normalizedStored);
+        const provider = createCustomProviderAdapter(spec, { fetchFn: effectiveFetch });
+        providerRegistry.registerProvider(provider);
+      } catch (err) {
+        lastError = `custom-provider(${spec.id}): ${err && err.message ? err.message : String(err)}`;
       }
     }
+  }
+  syncDeclarativeCustomProviders(state.customProviders);
 
-    const translationService = createTranslationService({
-      registry,
-      storage,
-      defaultProviderId,
-      isRemoteEnv,
-      providerStorageKey: STORAGE_KEYS.PROVIDER,
-      cacheStorageKey: STORAGE_KEYS.CACHE,
-      setTimer,
-      clearTimer,
-      sharedMemCache,
-    });
+  if (!providerRegistry.hasProvider(state.provider)) {
+    state.provider = 'google-translate';
+  }
 
-    let showThinkingEnabled = true;
-    const savedShow = storage.getItem(STORAGE_KEYS.SHOW_THINKING);
-    if (savedShow === '0' || savedShow === 'false') showThinkingEnabled = false;
+  const translationService = createTranslationService({
+    registry: providerRegistry,
+    storage,
+    defaultProviderId: 'google-translate',
+    providerStorageKey: STORAGE_KEYS.provider,
+    cacheStorageKey: STORAGE_KEYS.cache,
+    setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
+    clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
+  });
+  if (state.provider !== translationService.getEffectiveProviderId() && providerRegistry.hasProvider(state.provider)) {
+    translationService.setProvider(state.provider, { persist: false });
+  }
+  disposables.register(() => translationService.dispose());
 
-    let translateThinkingEnabled = true;
-    const savedTrans = storage.getItem(STORAGE_KEYS.TRANSLATE_THINKING);
-    if (savedTrans === '0' || savedTrans === 'false') translateThinkingEnabled = false;
+  const uiLocalizer = createAntigravityUiLocalizer({
+    targetDoc,
+    catalog,
+    translationService,
+    isDisposed: () => disposed,
+  });
 
-    const catalog = createAntigravityDictionaryCatalog();
-    const cspSecurityPort = createCspSecurityPort(hostCfg, targetWin, disposables, {
-      allowLoopbackForTest,
-    });
+  const triggerController = createAntigravityTriggerController({
+    targetDoc,
+    targetWin,
+    catalog,
+    getShowThinkingEnabled: () => state.showThinking,
+    isDisposed: () => disposed,
+  });
 
-    let settingsUi = null;
-    let statusbarPort = null;
-    let scheduler = null;
+  const thinkingTranslator = createAntigravityThinkingTranslator({
+    targetDoc,
+    catalog,
+    translationService,
+    triggerController,
+    getTranslateThinkingEnabled: () => state.enabled && state.translateThinking,
+    isDisposed: () => disposed,
+    setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
+    clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
+  });
 
-    const uiLocalizer = createAntigravityUiLocalizer({
-      targetDoc,
-      catalog,
-      translationService,
-      isDisposed,
-    });
+  let scheduler = null;
 
-    const triggerController = createAntigravityTriggerController({
-      targetDoc,
-      catalog,
-      disposables,
-      getShowThinkingEnabled: () => showThinkingEnabled,
-      onEnsureStyle: () => {
-        if (settingsUi) settingsUi.ensureStyle();
-      },
-    });
+  function emitStatus() {
+    if (typeof onStatus !== 'function') return;
+    try {
+      onStatus(getStatus());
+    } catch (_err) {}
+  }
 
-    const pretranslator = createAntigravityPretranslator({
-      targetWin,
-      targetDoc,
-      storage,
-      nativeBridge,
-      translationService,
-      defaultPretranslateEnabled,
-      getTranslateThinkingEnabled: () => translateThinkingEnabled,
-      isDisposed,
-      onRefreshUi: () => {
-        if (settingsUi) settingsUi.refreshUi();
-      },
-      onBroadcastPretranslate: (nextVal) => {
-        propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-          if (typeof cw.__agySetPretranslate === 'function') {
-            cw.__agySetPretranslate(nextVal, { persistHost: false, broadcast: false });
-          }
-        });
-      },
-    });
+  function ensureStyleElement() {
+    if (disposed || !targetDoc) return;
+    const existing = targetDoc.getElementById && targetDoc.getElementById(STYLE_ID);
+    if (existing) return;
+    const parent = targetDoc.head || targetDoc.documentElement;
+    if (!parent || typeof targetDoc.createElement !== 'function') return;
+    const styleEl = targetDoc.createElement('style');
+    styleEl.id = STYLE_ID;
+    styleEl.textContent = buildMinimalOverlayCss();
+    parent.appendChild(styleEl);
+  }
 
-    const thinkingTranslator = createAntigravityThinkingTranslator({
-      targetDoc,
-      catalog,
-      translationService,
-      triggerController,
-      getTranslateThinkingEnabled: () => translateThinkingEnabled,
-      onTriggerPretranslate: () => {
-        if (scheduler) scheduler.schedulePretranslateDebounce();
-      },
-      isDisposed,
-      setTimer,
-      clearTimer,
-    });
-
-    function setShowThinkingEnabled(enabled, { broadcast = true } = {}) {
-      showThinkingEnabled = Boolean(enabled);
-      storage.setItem(STORAGE_KEYS.SHOW_THINKING, showThinkingEnabled ? '1' : '0');
-      triggerController.syncShowThinkingDomAttribute();
-      triggerController.scanTriggerButtonsSync(!showThinkingEnabled);
-      if (settingsUi) settingsUi.refreshUi();
-      if (broadcast) {
-        propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-          if (typeof cw.__agySetShowThinking === 'function') {
-            cw.__agySetShowThinking(showThinkingEnabled, { broadcast: false });
-          }
-        });
-      }
-      return { showThinkingEnabled };
-    }
-
-    function setTranslateThinkingEnabled(enabled, { broadcast = true } = {}) {
-      translateThinkingEnabled = Boolean(enabled);
-      storage.setItem(STORAGE_KEYS.TRANSLATE_THINKING, translateThinkingEnabled ? '1' : '0');
-      if (!translateThinkingEnabled) {
-        thinkingTranslator.restoreOriginalCursorEdits();
-      } else {
+  function scanAll() {
+    if (disposed || !state.enabled) return;
+    try {
+      ensureStyleElement();
+      triggerController.scanTriggerButtonsSync(false);
+      if (state.translateThinking) {
         thinkingTranslator.scanThoughtBlocks();
+        thinkingTranslator.scanSideQuestionAndBrowserThoughts();
+      } else {
+        thinkingTranslator.restoreOriginalCursorEdits();
       }
-      if (settingsUi) settingsUi.refreshUi();
-      if (broadcast) {
-        propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-          if (typeof cw.__agySetTranslateThinking === 'function') {
-            cw.__agySetTranslateThinking(translateThinkingEnabled, { broadcast: false });
-          }
-        });
+      if (state.translateStaticUi) {
+        const root = targetDoc.body || targetDoc.documentElement;
+        if (root) {
+          uiLocalizer.localizeStaticUiDom(root);
+        }
+      } else {
+        uiLocalizer.restoreAllMutatedNodes();
       }
-      return { translateThinkingEnabled };
+      if (scheduler && typeof scheduler.takeRecords === 'function') {
+        scheduler.takeRecords();
+      }
+      lastError = null;
+    } catch (err) {
+      lastError = err && err.message ? err.message : String(err);
+      emitStatus();
+    }
+  }
+
+  function start() {
+    if (disposed) {
+      throw new Error('Cannot start a disposed ko-thought-translator instance');
+    }
+    if (started) return getStatus();
+    started = true;
+
+    if (!state.enabled) {
+      emitStatus();
+      return getStatus();
     }
 
-    function selectTranslationProvider(rawId, { persistHost = true, broadcast = true } = {}) {
-      const normalized = normalizeAntigravityProviderAlias(rawId, registry);
-      const res = translationService.setProvider(normalized, { persist: true });
-      if (persistHost && nativeBridge && typeof nativeBridge.writeItems === 'function') {
-        nativeBridge.writeItems({ [STORAGE_KEYS.PROVIDER]: res.desiredProviderId });
-      }
-      if (statusbarPort) statusbarPort.refresh();
-      if (settingsUi) settingsUi.refreshUi();
-      if (broadcast) {
-        propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-          if (typeof cw.__agySetTranslationProvider === 'function') {
-            try {
-              cw.__agySetTranslationProvider(res.desiredProviderId, {
-                persistHost: false,
-                broadcast: false,
-              });
-            } catch (_err) {}
-          }
-        });
-      }
-      return {
-        provider: res.effectiveProviderId,
-        desiredProvider: res.desiredProviderId,
-        availableProviders: res.availableProviders,
-      };
-    }
-
-    settingsUi = createAntigravitySettingsUi({
-      targetWin,
-      targetDoc,
-      version,
-      registry,
-      translationService,
-      llmConfigPort,
-      customProviderStore,
-      resolveCspNonce: () => cspSecurityPort.resolveHostCspNonce(targetDoc),
-      getShowThinkingEnabled: () => showThinkingEnabled,
-      onToggleShowThinking: (val) => setShowThinkingEnabled(val),
-      getTranslateThinkingEnabled: () => translateThinkingEnabled,
-      onToggleTranslateThinking: (val) => setTranslateThinkingEnabled(val),
-      getPretranslateEnabled: () => pretranslator.getRawFlag(),
-      onTogglePretranslate: (val) => pretranslator.setPretranslateEnabled(val),
-      onSelectProvider: (id) => selectTranslationProvider(id),
-      onRetranslate: (clearCache) =>
-        thinkingTranslator.retranslateVisibleThoughts(clearCache, () => pretranslator.resetHistory()),
-      onRefreshStatusbar: () => {
-        if (statusbarPort) statusbarPort.refresh();
-      },
-      setTimer,
-      clearTimer,
-    });
-
-    statusbarPort = createStatusbarAdapterPort({
-      targetWin,
-      version,
-      translationService,
-      registry,
-      getCompactTag: (effId) => settingsUi.getProviderDisplayMeta(effId).compactTag,
-      getProviderTitle: (effId) => settingsUi.getProviderDisplayMeta(effId).title,
-      onToggleSettings: () => settingsUi.openOrToggleModal(),
-      onCloseSettings: () => settingsUi.closeModal(),
-      onCycleProvider: () => {
-        const ids = registry.listProviderIds();
-        if (ids.length > 0) {
-          const cur = translationService.getDesiredProviderId();
-          const idx = ids.indexOf(cur);
-          const next = ids[(idx + 1) % ids.length];
-          selectTranslationProvider(next);
-          thinkingTranslator.retranslateVisibleThoughts(false);
-        }
-      },
-    });
-
-    translationService.subscribe(() => {
-      if (statusbarPort) statusbarPort.refresh();
-    });
-    llmConfigPort.subscribe((cfg) => {
-      if (statusbarPort) statusbarPort.refresh();
-      if (settingsUi) settingsUi.refreshUi();
-      propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-        if (typeof cw.__agySyncLlmConfigFromParent === 'function') {
-          cw.__agySyncLlmConfigFromParent(cfg);
-        }
-      });
-    });
-
-    const remoteHostPort = createAntigravityRemoteCompanionSync({
-      targetWin,
-      targetDoc,
-      hostCfg,
-      version,
-      disposables,
-      onRefreshStatusbar: () => {
-        if (statusbarPort) statusbarPort.refresh();
-      },
-      onMountChildLocalizer: (cw, cd) => {
-        mount(cw, cd);
-      },
-      fetchFn,
-    });
-
-    const workbenchPromoter = createWorkbenchPromoter({
-      hostCfg,
-      cspSecurityPort,
-      remoteHostPort,
-      rootWin: targetWin,
-      rootDoc: targetDoc,
-      disposables,
-    });
-
-    async function syncPersistentTranslatorSettings() {
-      await llmConfigPort.syncFromNativeStorage();
-      if (nativeBridge && typeof nativeBridge.readItems === 'function') {
-        const items = await nativeBridge.readItems();
-        if (items && typeof items === 'object') {
-          if (items[STORAGE_KEYS.PROVIDER]) {
-            const normP = normalizeAntigravityProviderAlias(items[STORAGE_KEYS.PROVIDER], registry);
-            if (normP) {
-              translationService.syncDesiredProviderFromExternal(normP);
-            }
-          }
-          if (items[STORAGE_KEYS.PRETRANSLATE] !== undefined) {
-            const rawPre = String(items[STORAGE_KEYS.PRETRANSLATE]);
-            const nextPre = rawPre === '1' || rawPre === 'true';
-            if (nextPre !== pretranslator.getRawFlag()) {
-              pretranslator.setPretranslateEnabled(nextPre, { persistHost: false, broadcast: true });
-            }
-          }
-        }
-      }
-      if (statusbarPort) statusbarPort.refresh();
-      if (settingsUi) settingsUi.refreshUi();
-      return {
-        provider: translationService.getEffectiveProviderId(),
-        desiredProvider: translationService.getDesiredProviderId(),
-        pretranslateEnabled: pretranslator.getRawFlag(),
-        llmConfig: llmConfigPort.getLlmConfig(),
-      };
-    }
+    ensureStyleElement();
+    triggerController.attachListeners();
+    disposables.register(() => triggerController.detachListeners());
 
     scheduler = createObserverScheduler({
       targetWin,
       targetDoc,
-      disposables,
-      uiLocalizer,
-      triggerController,
-      thinkingTranslator,
-      pretranslator,
-      settingsUi,
-      statusbarPort,
-      workbenchPromoter,
-      onSyncPersistentSettings: syncPersistentTranslatorSettings,
+      onScanAll: scanAll,
+      scanIntervalMs: 2500,
+    });
+    scheduler.start();
+    disposables.register(() => {
+      if (scheduler) {
+        scheduler.stop();
+        scheduler = null;
+      }
     });
 
-    // Expose public & diagnostic globals on `targetWin` via `disposables.registerPropertyValue` for clean fullRestore!
-    const registerGlobal = (key, value) => {
-      disposables.registerPropertyValue(targetWin, key, value);
-    };
+    scanAll();
+    emitStatus();
+    return getStatus();
+  }
 
-    registerGlobal('__agyMountKoThoughtLocalizer', mount);
-    registerGlobal('__agyKoLocalizerActive', version);
-    registerGlobal('__agyLastDefaultPretranslate', defaultPretranslateEnabled);
-    registerGlobal('__agyLastDefaultProvider', defaultProviderRaw);
-    registerGlobal('__agyTranslateStaticUiSync', (raw) => catalog.translateSync(raw));
-    registerGlobal('__agyGetTranslationProvider', () => translationService.getEffectiveProviderId());
-    registerGlobal('__agyGetDesiredTranslationProvider', () => translationService.getDesiredProviderId());
-    registerGlobal('__agyListTranslationProviders', () => registry.listProviderIds());
-    registerGlobal('__agyRegisterTranslationAdapter', (adapter) => registry.registerProvider(adapter));
-    registerGlobal('__agySetTranslationProvider', selectTranslationProvider);
-    registerGlobal('__agySyncPersistentSettings', syncPersistentTranslatorSettings);
-    registerGlobal('__agySyncLlmConfigFromParent', (cfg) =>
-      llmConfigPort.setLlmConfig(cfg, { persistHost: false })
-    );
-    registerGlobal('__agyGetLlmConfig', () => llmConfigPort.getLlmConfig());
-    registerGlobal('__agySetLlmConfig', (partial, opts) => llmConfigPort.setLlmConfig(partial, opts));
-    registerGlobal('__agyUpsertCustomProvider', (spec) => customProviderStore.upsertSpec(spec));
-    registerGlobal('__agyRemoveCustomProvider', (id) => customProviderStore.removeSpec(id));
-    registerGlobal('__agyListCustomProviders', () => customProviderStore.listSpecs());
-    registerGlobal('__agyGetShowThinking', () => showThinkingEnabled);
-    registerGlobal('__agySetShowThinking', setShowThinkingEnabled);
-    registerGlobal('__agyGetTranslateThinking', () => translateThinkingEnabled);
-    registerGlobal('__agySetTranslateThinking', setTranslateThinkingEnabled);
-    registerGlobal('__agyGetPretranslate', () => pretranslator.getRawFlag());
-    registerGlobal('__agySetPretranslate', (val, opts) => pretranslator.setPretranslateEnabled(val, opts));
-    registerGlobal('__agyOpenTranslatorSettingsModal', () => settingsUi.openOrToggleModal());
-    registerGlobal('__agyRetranslateVisibleThoughts', (clearCache) =>
-      thinkingTranslator.retranslateVisibleThoughts(clearCache, () => pretranslator.resetHistory())
-    );
-    registerGlobal('__agyForceRescanAll', () => scheduler.scanAll());
+  function updateSettings(next = {}) {
+    if (disposed || !next || typeof next !== 'object') return getStatus();
 
-    const cleanup = (fullRestore = false) => {
-      if (disposed) return;
-      disposed = true;
-      propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-        if (typeof cw.__agyKoThoughtCleanup === 'function') {
-          try {
-            cw.__agyKoThoughtCleanup(fullRestore);
-          } catch (_err) {}
-        }
-      });
-      scheduler.stop();
-      translationService.dispose();
-      statusbarPort.dispose();
-      settingsUi.dispose(fullRestore);
-      if (fullRestore) {
-        thinkingTranslator.restoreOriginalCursorEdits();
-        triggerController.restoreTriggerButtons();
-        uiLocalizer.restoreAllMutatedNodes();
-        try {
-          delete targetWin.__agyPretranslateStats;
-          if (!targetWin.agyStatusBar && !targetWin.__agyMountMcpManager) {
-            delete targetWin.__agyCapturedLsClient;
-          }
-          delete targetWin.__agySharedKoMemCache;
-        } catch (_err) {}
+    const prevProvider = state.provider;
+    const prevEnabled = state.enabled;
+    const prevTranslateThinking = state.translateThinking;
+    const prevTranslateStaticUi = state.translateStaticUi;
+
+    if (typeof next.enabled === 'boolean') state.enabled = next.enabled;
+    if (typeof next.translateThinking === 'boolean') {
+      state.translateThinking = next.translateThinking;
+      storage.setItem(STORAGE_KEYS.translateThinking, state.translateThinking ? '1' : '0');
+    }
+    if (typeof next.showThinking === 'boolean') {
+      state.showThinking = next.showThinking;
+      storage.setItem(STORAGE_KEYS.showThinking, state.showThinking ? '1' : '0');
+    }
+    if (typeof next.translateStaticUi === 'boolean') {
+      state.translateStaticUi = next.translateStaticUi;
+      storage.setItem(STORAGE_KEYS.translateStaticUi, state.translateStaticUi ? '1' : '0');
+    }
+    if (next.llmConfig && typeof next.llmConfig === 'object') {
+      state.llmConfig = { ...state.llmConfig, ...next.llmConfig };
+      storage.setJson(STORAGE_KEYS.llmConfig, state.llmConfig);
+    }
+    if (Array.isArray(next.customProviders)) {
+      state.customProviders = next.customProviders;
+      storage.setJson(STORAGE_KEYS.customProviders, state.customProviders);
+      syncDeclarativeCustomProviders(state.customProviders);
+    }
+    if (typeof next.provider === 'string' && next.provider.trim()) {
+      const candidate = next.provider.trim();
+      if (providerRegistry.hasProvider(candidate)) {
+        state.provider = candidate;
+        translationService.setProvider(candidate, { persist: true });
       }
-      try {
-        delete targetWin.__agyKoLocalizerActive;
-      } catch (_err) {}
-      disposables.disposeAll(fullRestore);
-    };
+    }
 
-    registerGlobal('__agyKoThoughtCleanup', cleanup);
+    if (next.clearCache === true) {
+      translationService.clearCache();
+    }
 
-    scheduler.start();
+    if (!state.enabled && prevEnabled) {
+      thinkingTranslator.restoreOriginalCursorEdits();
+      uiLocalizer.restoreAllMutatedNodes();
+      triggerController.restoreTriggerButtons();
+    } else if (state.enabled && started) {
+      if (state.provider !== prevProvider || next.clearCache === true) {
+        translationService.bumpEpoch();
+        thinkingTranslator.retranslateVisibleThoughts(false);
+      } else if (state.translateThinking !== prevTranslateThinking || state.translateStaticUi !== prevTranslateStaticUi) {
+        scanAll();
+      } else {
+        triggerController.scanTriggerButtonsSync(false);
+      }
+    }
 
+    emitStatus();
+    return getStatus();
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    started = false;
+    disposables.disposeAll(true);
+    thinkingTranslator.restoreOriginalCursorEdits();
+    uiLocalizer.restoreAllMutatedNodes();
+    triggerController.restoreTriggerButtons();
+    const styleEl = targetDoc.getElementById && targetDoc.getElementById(STYLE_ID);
+    if (styleEl && typeof styleEl.remove === 'function') {
+      styleEl.remove();
+    }
+    emitStatus();
+  }
+
+  function getStatus() {
     return {
-      mounted: true,
-      reused: false,
       version,
-      cleanup,
+      started,
+      disposed,
+      enabled: state.enabled,
+      translateThinking: state.translateThinking,
+      showThinking: state.showThinking,
+      translateStaticUi: state.translateStaticUi,
+      provider: state.provider,
+      availableProviders: providerRegistry.listProviderIds(),
+      cacheSize: translationService.getCacheSize(),
+      lastError,
     };
   }
 
   return {
-    mount,
+    start,
+    updateSettings,
+    dispose,
+    getStatus,
+    scanAll,
   };
 }
 
 module.exports = {
-  normalizeAntigravityProviderAlias,
-  isUnsupportedDocumentEnvironment,
-  isRemoteControlRuntimeEnvironment,
-  createRuntimeBootstrapper,
+  STYLE_ID,
+  buildMinimalOverlayCss,
+  createKoTranslator,
 };

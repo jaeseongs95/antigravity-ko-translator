@@ -11,10 +11,7 @@ const {
 } = require('../../src/adapters/translators/custom-provider');
 const {
   STORAGE_KEYS,
-  createAntigravityStorageAdapter,
-  createNativeStorageBridge,
-  createAntigravityLlmConfigAdapter,
-  createOriginLocalCustomProviderStore,
+  createStoragePort,
 } = require('../../src/adapters/antigravity/storage-port');
 
 function createMemStorage(seed = {}) {
@@ -133,55 +130,45 @@ test('TranslationService (D-0026, D-0032, D-0033): lowercase normalization, remo
   pendingSvc.dispose();
 });
 
-test('Storage & LlmConfigPort (Rev5-F3 #1, Rev5-F8): nativeStorage getItems/updateItems-only contract, Ollama keep_alive:0 unload hint, and custom secret isolation', async () => {
-  const nativeDb = {
-    [STORAGE_KEYS.LLM_CONFIG]: JSON.stringify({
-      baseUrl: 'http://127.0.0.1:11434',
-      model: 'qwen2.5:7b',
-      apiFormat: 'ollama',
-      allowRemoteHttps: false,
-      timeoutMs: 12000,
-    }),
-  };
-  const nativeUpdateCalls = [];
-
-  // Authentic Antigravity nativeStorage has ONLY getItems() & updateItems() — setItem is undefined!
+test('Isolated StoragePort & LocalLlmAdapter: zero host nativeStorage access and loopback Ollama translation', async () => {
+  let nativeStorageTouched = false;
   const fakeWin = {
     localStorage: createMemStorage(),
     nativeStorage: {
-      setItem: undefined,
       async getItems() {
-        return { ...nativeDb };
+        nativeStorageTouched = true;
+        return {};
       },
-      async updateItems(entries) {
-        nativeUpdateCalls.push(entries);
-        Object.assign(nativeDb, entries);
+      async updateItems() {
+        nativeStorageTouched = true;
       },
     },
   };
 
-  const storage = createAntigravityStorageAdapter(fakeWin);
-  const nativeBridge = createNativeStorageBridge(fakeWin);
-  assert.equal(nativeBridge.hasNativeStorage(), true);
-
-  // Rev5-F8: Attempting to write custom provider credentials to nativeStorage MUST throw!
-  assert.throws(
-    () => nativeBridge.writeItems({ [STORAGE_KEYS.CUSTOM_PROVIDERS_LOCAL_ONLY]: '[{"headers":{"Authorization":"Bearer secret"}}]' }),
-    /Security violation/
-  );
-
-  const llmAdapterPort = createAntigravityLlmConfigAdapter({
+  const storage = createStoragePort({
     targetWin: fakeWin,
-    storage,
-    nativeBridge,
+    initialSettings: {
+      provider: 'local-llm',
+      llmConfig: {
+        baseUrl: 'http://127.0.0.1:11434',
+        model: 'qwen2.5:7b',
+        apiFormat: 'ollama',
+        allowRemoteHttps: false,
+        timeoutMs: 12000,
+      },
+    },
   });
-  await llmAdapterPort.syncFromNativeStorage();
-  assert.equal(llmAdapterPort.getLlmConfig().model, 'qwen2.5:7b');
 
-  // Verify Ollama keep_alive: 0 unload hint fires when switching away from active loopback Ollama model
+  storage.setItem(STORAGE_KEYS.provider, 'local-llm');
+  assert.equal(storage.getItem(STORAGE_KEYS.provider), 'local-llm');
+  assert.equal(storage.getInitialSettings().llmConfig.model, 'qwen2.5:7b');
+  assert.equal(nativeStorageTouched, false, 'StoragePort must NEVER read or write host nativeStorage');
+
   const fetchCalls = [];
   const localLlmProvider = createLocalLlmAdapter({
-    llmConfigPort: llmAdapterPort,
+    llmConfigPort: {
+      getLlmConfig: () => storage.getInitialSettings().llmConfig,
+    },
     async fetchFn(url, init) {
       fetchCalls.push({ url, body: JSON.parse(init.body) });
       return {
@@ -197,36 +184,6 @@ test('Storage & LlmConfigPort (Rev5-F3 #1, Rev5-F8): nativeStorage getItems/upda
   assert.equal(ko, '워크벤치 상태를 점검합니다.');
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, 'http://127.0.0.1:11434/api/chat');
-
-  // Switch model -> triggers unload hint (`keep_alive: 0`) for previous `qwen2.5:7b`!
-  llmAdapterPort.setLlmConfig({ model: 'gemma3:4b' });
-  await new Promise((r) => setTimeout(r, 5));
-  assert.equal(fetchCalls.length, 2);
-  assert.equal(fetchCalls[1].url, 'http://127.0.0.1:11434/api/generate');
-  assert.deepEqual(fetchCalls[1].body, { model: 'qwen2.5:7b', keep_alive: 0 });
-  assert.equal(nativeUpdateCalls.length, 1);
-
-  // Verify CustomProviderStore persists ONLY to origin-local storage, NEVER to nativeStorage!
-  const registry = createProviderRegistry();
-  const customStore = createOriginLocalCustomProviderStore({
-    storage,
-    registry,
-    async fetchFn() {
-      return { ok: true, async json() { return { translations: [{ text: '번역 완료' }] }; } };
-    },
-  });
-  customStore.upsertSpec({
-    id: 'my-gateway',
-    label: 'My Gateway',
-    endpointUrl: 'https://translate.example.com/v2/translate',
-    allowRemoteHttps: true,
-    headers: { Authorization: 'Bearer top-secret-token' },
-    bodyTemplate: { text: ['{{text}}'], target_lang: '{{targetLang}}' },
-    responsePath: 'translations.0.text',
-  });
-  assert.equal(nativeUpdateCalls.length, 1, 'Custom provider upsert must never call nativeStorage.updateItems');
-  assert.equal(Object.prototype.hasOwnProperty.call(nativeDb, STORAGE_KEYS.CUSTOM_PROVIDERS_LOCAL_ONLY), false);
-  assert.match(fakeWin.localStorage.getItem(STORAGE_KEYS.CUSTOM_PROVIDERS_LOCAL_ONLY), /top-secret-token/);
 });
 
 test('CustomProviderAdapter (Rev6-F5 #2): Array bodyTemplate, single-pass {{text|sourceLang|targetLang}} ($& safe), and forbidden headers', async () => {

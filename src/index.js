@@ -1,44 +1,63 @@
 'use strict';
 
-const { createRuntimeBootstrapper } = require('./runtime/bootstrap');
+/**
+ * Clean-Slate Entrypoint for Antigravity Desktop Korean Thought & UI Translator.
+ *
+ * Exposes `createKoTranslator` both as CommonJS export and as a single clean handle
+ * `window.__agyKoTranslator` when mounted in a top-frame Electron Hub window.
+ */
 
-function bootDefaultBrowserRuntime(globalScope) {
-  const win =
-    (globalScope && globalScope.window) ||
-    (typeof window !== 'undefined' ? window : null);
-  const doc = (win && win.document) || (typeof document !== 'undefined' ? document : null);
+const { createKoTranslator } = require('./runtime/bootstrap');
 
-  const version =
-    typeof KO_LOCALIZER_VERSION === 'string' ? KO_LOCALIZER_VERSION : 'v2.0.0';
-  const defaultPretranslateEnabled =
-    typeof DEFAULT_PRETRANSLATE_ENABLED === 'boolean' ? DEFAULT_PRETRANSLATE_ENABLED : false;
-  const defaultTranslationProvider =
-    typeof DEFAULT_TRANSLATION_PROVIDER === 'string'
-      ? DEFAULT_TRANSLATION_PROVIDER
-      : 'google-translate';
-  const defaultLlmConfig =
-    typeof DEFAULT_LLM_CONFIG === 'object' && DEFAULT_LLM_CONFIG !== null
-      ? DEFAULT_LLM_CONFIG
-      : undefined;
+function mountIfBrowser(globalScope) {
+  const win = globalScope || (typeof window !== 'undefined' ? window : null);
+  const doc = win && win.document ? win.document : typeof document !== 'undefined' ? document : null;
+  if (!win || !doc) return null;
 
-  const bootstrapper = createRuntimeBootstrapper({
-    version,
-    defaultPretranslateEnabled,
-    defaultTranslationProvider,
-    defaultLlmConfig,
-  });
-
-  if (win && doc) {
-    bootstrapper.mount(win, doc);
+  // Never run inside non-top frames (e.g. Sidecar AUX_PANE iframes) unless explicitly mounted by caller.
+  if (win.__AGY_KO_TRANSLATOR_AUTO_MOUNT__ === false) {
+    win.__agyCreateKoTranslator = createKoTranslator;
+    return null;
   }
-  return bootstrapper;
+
+  try {
+    if (win.top && win.top !== win) {
+      win.__agyCreateKoTranslator = createKoTranslator;
+      return null;
+    }
+  } catch (_err) {
+    return null;
+  }
+
+  // Cleanly dispose any previous instance on hot reload.
+  if (win.__agyKoTranslator && typeof win.__agyKoTranslator.dispose === 'function') {
+    try {
+      win.__agyKoTranslator.dispose();
+    } catch (_err) {}
+  }
+
+  const initialSettings =
+    win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ && typeof win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ === 'object'
+      ? win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__
+      : null;
+
+  const instance = createKoTranslator({
+    win,
+    doc,
+    settings: initialSettings,
+    version: '2.0.0',
+  });
+  win.__agyCreateKoTranslator = createKoTranslator;
+  win.__agyKoTranslator = instance;
+  instance.start();
+  return instance;
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  bootDefaultBrowserRuntime(typeof globalThis !== 'undefined' ? globalThis : window);
+  mountIfBrowser(window);
 }
 
 module.exports = {
-  createRuntimeBootstrapper,
-  bootDefaultBrowserRuntime,
+  createKoTranslator,
+  mountIfBrowser,
 };
