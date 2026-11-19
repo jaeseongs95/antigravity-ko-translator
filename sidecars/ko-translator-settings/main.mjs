@@ -23,6 +23,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
 const { resolveHostPaths } = require(path.join(REPO_ROOT, 'host', 'paths.js'));
+const { ANTIGRAVITY_HOST_PROFILE } = require(path.join(REPO_ROOT, 'host', 'profiles', 'antigravity.js'));
 const {
   readTranslatorSettings,
   saveTranslatorSettings,
@@ -65,8 +66,9 @@ function timingSafeMatch(expected, actual) {
 }
 
 export function createSettingsRequestHandler(pathOverrides = null, options = null) {
+  const activeProfile = (options && options.hostProfile) || ANTIGRAVITY_HOST_PROFILE;
   const paths = {
-    ...resolveHostPaths(process.env),
+    ...resolveHostPaths(process.env, activeProfile),
     ...(pathOverrides || {}),
   };
   const csrfToken =
@@ -101,7 +103,7 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
     const manifestValidation = manifest
       ? validateDropinManifest(manifest, paths.PLUGINS_ROOT_DIR)
       : { ok: false, reason: 'MANIFEST_NOT_FOUND' };
-    const asarLoaderInstalled = isAsarLoaderInstalled(paths.ASAR_PATH);
+    const asarLoaderInstalled = isAsarLoaderInstalled(paths.ASAR_PATH, activeProfile);
     return {
       ok: true,
       version: '2.0.0',

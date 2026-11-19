@@ -5,6 +5,7 @@ const {
   isInvalidCachedOrTranslatedText,
 } = require('../../core/text-tokenizer');
 const {
+  isWholeProtectedCodeBlock,
   tokenizeBlockElement,
   buildTranslatedBlockElement,
 } = require('./dom-tokenizer');
@@ -28,6 +29,9 @@ function createAntigravityThinkingTranslator({
 
   function tryTranslateBlockElementSync(origEl) {
     if (!origEl) return null;
+    if (isWholeProtectedCodeBlock(origEl)) {
+      return origEl.cloneNode(true);
+    }
     if (origEl.tagName === 'UL' || origEl.tagName === 'OL') {
       const items = Array.from(origEl.querySelectorAll(':scope > li'));
       const syncItems = [];
@@ -41,8 +45,8 @@ function createAntigravityThinkingTranslator({
       return listClone;
     }
 
-    const { tokenizedText, savedNodes } = tokenizeBlockElement(origEl, doc);
-    if (!tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
+    const { tokenizedText, savedNodes, skipTranslation } = tokenizeBlockElement(origEl, doc);
+    if (skipTranslation || !tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
       return origEl.cloneNode(true);
     }
     const cached = translationService ? translationService.getCachedSync(tokenizedText) : null;
@@ -53,8 +57,11 @@ function createAntigravityThinkingTranslator({
   }
 
   async function translateBlockElement(origEl, signal = null) {
-    const { tokenizedText, savedNodes } = tokenizeBlockElement(origEl, doc);
-    if (!tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
+    if (isWholeProtectedCodeBlock(origEl)) {
+      return { node: origEl.cloneNode(true), translated: true };
+    }
+    const { tokenizedText, savedNodes, skipTranslation } = tokenizeBlockElement(origEl, doc);
+    if (skipTranslation || !tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
       return { node: origEl.cloneNode(true), translated: true };
     }
     const translatedText = await translationService.translateText(tokenizedText, { signal });
@@ -139,8 +146,8 @@ function createAntigravityThinkingTranslator({
 
     const hasEnglishBlock =
       blockChildren.length > 0
-        ? blockChildren.some((ch) => !isAlreadyKoreanOrNonEnglish(ch.textContent || ''))
-        : !isAlreadyKoreanOrNonEnglish(rawSnapshot);
+        ? blockChildren.some((ch) => !isWholeProtectedCodeBlock(ch) && !isAlreadyKoreanOrNonEnglish(ch.textContent || ''))
+        : !isWholeProtectedCodeBlock(origContainer) && !isAlreadyKoreanOrNonEnglish(rawSnapshot);
 
     if (!hasEnglishBlock) {
       resetThoughtHost(cursorEdit);
@@ -514,6 +521,7 @@ function createAntigravityThinkingTranslator({
     processCursorEdit,
     scanThoughtBlocks,
     retranslateVisibleThoughts,
+    restoreAll: restoreOriginalCursorEdits,
     restoreOriginalCursorEdits,
   };
 }

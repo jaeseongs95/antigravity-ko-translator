@@ -226,13 +226,19 @@ function createAntigravityUiLocalizer({
         const ko = translateSync(trimmed);
         if (ko && ko !== trimmed) {
           let origMap = {};
+          let appliedMap = {};
           try {
             origMap = JSON.parse(el.getAttribute('data-agy-orig-attr') || '{}');
           } catch (_err) {}
-          if (origMap[attr] === undefined) {
+          try {
+            appliedMap = el.__agyAppliedAttrs || {};
+          } catch (_err) {}
+          if (origMap[attr] === undefined || appliedMap[attr] !== trimmed) {
             origMap[attr] = val;
             el.setAttribute('data-agy-orig-attr', JSON.stringify(origMap));
           }
+          appliedMap[attr] = ko;
+          el.__agyAppliedAttrs = appliedMap;
           el.setAttribute(attr, ko);
         }
       }
@@ -259,7 +265,7 @@ function createAntigravityUiLocalizer({
       if (syncKo && syncKo !== raw) {
         if (el.childNodes && el.childNodes.length === 1 && el.firstChild.nodeType === 3) {
           const tn = el.firstChild;
-          if (!tn.__agyOrigValue) tn.__agyOrigValue = tn.nodeValue;
+          if (!tn.__agyOrigValue || tn.__agyKoApplied !== raw) tn.__agyOrigValue = tn.nodeValue;
           tn.__agyKoApplied = syncKo;
           tn.nodeValue = syncKo;
         }

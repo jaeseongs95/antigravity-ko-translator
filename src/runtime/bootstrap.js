@@ -284,6 +284,14 @@ function createTranslatorRuntime({
     parent.appendChild(styleEl);
   }
 
+  function restoreThoughtBlocks() {
+    if (typeof thinkingTranslator.restoreAll === 'function') {
+      thinkingTranslator.restoreAll();
+    } else if (typeof thinkingTranslator.restoreOriginalBlocks === 'function') {
+      thinkingTranslator.restoreOriginalBlocks();
+    }
+  }
+
   function scanAll(activeObserver = null) {
     if (disposed || !state.enabled) return;
     try {
@@ -292,7 +300,7 @@ function createTranslatorRuntime({
       if (state.translateThinking) {
         thinkingTranslator.scanThoughtBlocks();
       } else {
-        thinkingTranslator.restoreOriginalCursorEdits();
+        restoreThoughtBlocks();
       }
       if (state.translateStaticUi) {
         const root = targetDoc.body || targetDoc.documentElement;
@@ -354,7 +362,7 @@ function createTranslatorRuntime({
       scheduler.stop();
     }
     triggerController.detachListeners();
-    thinkingTranslator.restoreOriginalCursorEdits();
+    restoreThoughtBlocks();
     uiLocalizer.restoreAllMutatedNodes();
     triggerController.restoreTriggerButtons();
   }
@@ -467,7 +475,7 @@ function createTranslatorRuntime({
     disposed = true;
     started = false;
     disposables.disposeAll(true);
-    thinkingTranslator.restoreOriginalCursorEdits();
+    restoreThoughtBlocks();
     uiLocalizer.restoreAllMutatedNodes();
     triggerController.restoreTriggerButtons();
     const styleEl = hostAdapter.styleId && targetDoc.getElementById && targetDoc.getElementById(hostAdapter.styleId);
@@ -532,6 +540,9 @@ function createTranslatorRuntime({
     }
     if (removed) {
       translationService.bumpEpoch();
+      if (state.provider === normId && started && runtimeActive && state.enabled) {
+        restoreThoughtBlocks();
+      }
     }
     emitStatus();
     return removed;

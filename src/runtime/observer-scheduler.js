@@ -3,8 +3,8 @@
 /**
  * Vendor-Neutral DOM MutationObserver & Periodic Scan Scheduler.
  *
- * All host-specific CSS selectors and attribute names are injected via `selectors`
- * from the active HostUiAdapter port rather than hardcoded here.
+ * All host-specific CSS selectors, attribute names, and element markers are
+ * injected via `selectors` from the active HostUiAdapter port.
  */
 
 const DEFAULT_SELECTORS = Object.freeze({
@@ -19,6 +19,11 @@ const DEFAULT_SELECTORS = Object.freeze({
   primaryViewTestId: '',
   autoExpandedAttr: '',
   origLabelAttr: '',
+  sessionSwitchingAttr: 'data-ko-session-switching',
+  addedNoAnimationsAttr: 'data-ko-added-no-animations',
+  noAnimationsClass: 'ko-no-animations',
+  appliedTextProp: '__koAppliedText',
+  programmaticClickProp: '__koProgrammaticClick',
 });
 
 function createObserverScheduler({
@@ -98,7 +103,6 @@ function createObserverScheduler({
     return views;
   }
 
-  // Guard session-switch transitions to prevent height/scroll flash during view swap.
   function guardSessionSwitchTransitions() {
     try {
       if (!doc || !sel.conversationViews || !sel.cascadeIdAttr) return;
@@ -139,14 +143,14 @@ function createObserverScheduler({
       const armFreezeTimer = (targetViews, durationMs) => {
         for (const v of targetViews) {
           if (!v) continue;
-          if (typeof v.setAttribute === 'function' && v.getAttribute('data-agy-session-switching') !== '1') {
-            v.setAttribute('data-agy-session-switching', '1');
+          if (typeof v.setAttribute === 'function' && v.getAttribute(sel.sessionSwitchingAttr) !== '1') {
+            v.setAttribute(sel.sessionSwitchingAttr, '1');
           }
           if (v.classList && typeof v.classList.contains === 'function' && typeof v.classList.add === 'function') {
-            if (!v.classList.contains('no-animations')) {
-              v.classList.add('no-animations');
+            if (!v.classList.contains(sel.noAnimationsClass)) {
+              v.classList.add(sel.noAnimationsClass);
               if (typeof v.setAttribute === 'function') {
-                v.setAttribute('data-agy-added-no-animations', '1');
+                v.setAttribute(sel.addedNoAnimationsAttr, '1');
               }
             }
           }
@@ -168,17 +172,17 @@ function createObserverScheduler({
             for (const v of viewsToClear) {
               if (!v) continue;
               if (typeof v.removeAttribute === 'function') {
-                v.removeAttribute('data-agy-session-switching');
+                v.removeAttribute(sel.sessionSwitchingAttr);
               }
               if (
                 typeof v.getAttribute === 'function' &&
-                v.getAttribute('data-agy-added-no-animations') === '1'
+                v.getAttribute(sel.addedNoAnimationsAttr) === '1'
               ) {
                 if (v.classList && typeof v.classList.remove === 'function') {
-                  v.classList.remove('no-animations');
+                  v.classList.remove(sel.noAnimationsClass);
                 }
                 if (typeof v.removeAttribute === 'function') {
-                  v.removeAttribute('data-agy-added-no-animations');
+                  v.removeAttribute(sel.addedNoAnimationsAttr);
                 }
               }
             }
@@ -207,7 +211,7 @@ function createObserverScheduler({
           if (cid && v.__koTrajectoryMountedForCascade !== cid && hasMountedTurnElement(v)) {
             const wasSwitching =
               v.__koAwaitingAsyncTrajectoryForCascade === cid ||
-              v.getAttribute('data-agy-session-switching') === '1' ||
+              v.getAttribute(sel.sessionSwitchingAttr) === '1' ||
               Boolean(sessionSwitchFreezeTimer);
             v.__koTrajectoryMountedForCascade = cid;
             v.__koAwaitingAsyncTrajectoryForCascade = null;
@@ -328,7 +332,7 @@ function createObserverScheduler({
             parent &&
             !isTriggerLabelElement(parent) &&
             !isIgnoredSubtree(parent) &&
-            m.target.__agyKoApplied !== String(m.target.nodeValue || '').trim()
+            m.target[sel.appliedTextProp] !== String(m.target.nodeValue || '').trim()
           ) {
             scheduleCoalescedScan();
             return;
@@ -345,7 +349,7 @@ function createObserverScheduler({
           }
           if (m.attributeName === 'aria-expanded') {
             if (
-              m.target.__agyProgrammaticClick ||
+              m.target[sel.programmaticClickProp] ||
               (sel.autoExpandedAttr &&
                 typeof m.target.getAttribute === 'function' &&
                 m.target.getAttribute(sel.autoExpandedAttr) === '1' &&
@@ -406,22 +410,22 @@ function createObserverScheduler({
     if (!doc || typeof doc.querySelectorAll !== 'function') return;
     try {
       const views = doc.querySelectorAll(
-        '[data-agy-session-switching], [data-agy-added-no-animations]'
+        `[${sel.sessionSwitchingAttr}], [${sel.addedNoAnimationsAttr}]`
       );
       for (const v of views) {
         if (!v) continue;
         if (typeof v.removeAttribute === 'function') {
-          v.removeAttribute('data-agy-session-switching');
+          v.removeAttribute(sel.sessionSwitchingAttr);
         }
         if (
           typeof v.getAttribute === 'function' &&
-          v.getAttribute('data-agy-added-no-animations') === '1'
+          v.getAttribute(sel.addedNoAnimationsAttr) === '1'
         ) {
           if (v.classList && typeof v.classList.remove === 'function') {
-            v.classList.remove('no-animations');
+            v.classList.remove(sel.noAnimationsClass);
           }
           if (typeof v.removeAttribute === 'function') {
-            v.removeAttribute('data-agy-added-no-animations');
+            v.removeAttribute(sel.addedNoAnimationsAttr);
           }
         }
       }

@@ -35,6 +35,11 @@ const ANTIGRAVITY_SELECTORS = Object.freeze({
   primaryViewTestId: 'conversation-view',
   autoExpandedAttr: 'data-agy-auto-expanded',
   origLabelAttr: 'data-agy-orig-label',
+  sessionSwitchingAttr: 'data-agy-session-switching',
+  addedNoAnimationsAttr: 'data-agy-added-no-animations',
+  noAnimationsClass: 'no-animations',
+  appliedTextProp: '__agyKoApplied',
+  programmaticClickProp: '__agyProgrammaticClick',
 });
 
 function buildMinimalOverlayCss() {

@@ -1227,7 +1227,12 @@ var __agyKoTranslatorBundleExports = (() => {
         viewTestIdAttr: "data-testid",
         primaryViewTestId: "",
         autoExpandedAttr: "",
-        origLabelAttr: ""
+        origLabelAttr: "",
+        sessionSwitchingAttr: "data-ko-session-switching",
+        addedNoAnimationsAttr: "data-ko-added-no-animations",
+        noAnimationsClass: "ko-no-animations",
+        appliedTextProp: "__koAppliedText",
+        programmaticClickProp: "__koProgrammaticClick"
       });
       function createObserverScheduler({
         targetWin,
@@ -1327,14 +1332,14 @@ var __agyKoTranslatorBundleExports = (() => {
             const armFreezeTimer = /* @__PURE__ */ __name((targetViews, durationMs) => {
               for (const v of targetViews) {
                 if (!v) continue;
-                if (typeof v.setAttribute === "function" && v.getAttribute("data-agy-session-switching") !== "1") {
-                  v.setAttribute("data-agy-session-switching", "1");
+                if (typeof v.setAttribute === "function" && v.getAttribute(sel.sessionSwitchingAttr) !== "1") {
+                  v.setAttribute(sel.sessionSwitchingAttr, "1");
                 }
                 if (v.classList && typeof v.classList.contains === "function" && typeof v.classList.add === "function") {
-                  if (!v.classList.contains("no-animations")) {
-                    v.classList.add("no-animations");
+                  if (!v.classList.contains(sel.noAnimationsClass)) {
+                    v.classList.add(sel.noAnimationsClass);
                     if (typeof v.setAttribute === "function") {
-                      v.setAttribute("data-agy-added-no-animations", "1");
+                      v.setAttribute(sel.addedNoAnimationsAttr, "1");
                     }
                   }
                 }
@@ -1356,14 +1361,14 @@ var __agyKoTranslatorBundleExports = (() => {
                   for (const v of viewsToClear) {
                     if (!v) continue;
                     if (typeof v.removeAttribute === "function") {
-                      v.removeAttribute("data-agy-session-switching");
+                      v.removeAttribute(sel.sessionSwitchingAttr);
                     }
-                    if (typeof v.getAttribute === "function" && v.getAttribute("data-agy-added-no-animations") === "1") {
+                    if (typeof v.getAttribute === "function" && v.getAttribute(sel.addedNoAnimationsAttr) === "1") {
                       if (v.classList && typeof v.classList.remove === "function") {
-                        v.classList.remove("no-animations");
+                        v.classList.remove(sel.noAnimationsClass);
                       }
                       if (typeof v.removeAttribute === "function") {
-                        v.removeAttribute("data-agy-added-no-animations");
+                        v.removeAttribute(sel.addedNoAnimationsAttr);
                       }
                     }
                   }
@@ -1390,7 +1395,7 @@ var __agyKoTranslatorBundleExports = (() => {
                 if (!v || typeof v.querySelector !== "function") continue;
                 const cid = v.getAttribute ? v.getAttribute(sel.cascadeIdAttr) : null;
                 if (cid && v.__koTrajectoryMountedForCascade !== cid && hasMountedTurnElement(v)) {
-                  const wasSwitching = v.__koAwaitingAsyncTrajectoryForCascade === cid || v.getAttribute("data-agy-session-switching") === "1" || Boolean(sessionSwitchFreezeTimer);
+                  const wasSwitching = v.__koAwaitingAsyncTrajectoryForCascade === cid || v.getAttribute(sel.sessionSwitchingAttr) === "1" || Boolean(sessionSwitchFreezeTimer);
                   v.__koTrajectoryMountedForCascade = cid;
                   v.__koAwaitingAsyncTrajectoryForCascade = null;
                   if (wasSwitching) {
@@ -1502,7 +1507,7 @@ var __agyKoTranslatorBundleExports = (() => {
               }
               if (m.type === "characterData" && m.target) {
                 const parent = m.target.parentElement;
-                if (parent && !isTriggerLabelElement(parent) && !isIgnoredSubtree(parent) && m.target.__agyKoApplied !== String(m.target.nodeValue || "").trim()) {
+                if (parent && !isTriggerLabelElement(parent) && !isIgnoredSubtree(parent) && m.target[sel.appliedTextProp] !== String(m.target.nodeValue || "").trim()) {
                   scheduleCoalescedScan();
                   return;
                 }
@@ -1517,7 +1522,7 @@ var __agyKoTranslatorBundleExports = (() => {
                   return;
                 }
                 if (m.attributeName === "aria-expanded") {
-                  if (m.target.__agyProgrammaticClick || sel.autoExpandedAttr && typeof m.target.getAttribute === "function" && m.target.getAttribute(sel.autoExpandedAttr) === "1" && m.target.getAttribute("aria-expanded") === "true") {
+                  if (m.target[sel.programmaticClickProp] || sel.autoExpandedAttr && typeof m.target.getAttribute === "function" && m.target.getAttribute(sel.autoExpandedAttr) === "1" && m.target.getAttribute("aria-expanded") === "true") {
                     continue;
                   }
                   scheduleCoalescedScan();
@@ -1568,19 +1573,19 @@ var __agyKoTranslatorBundleExports = (() => {
           if (!doc || typeof doc.querySelectorAll !== "function") return;
           try {
             const views = doc.querySelectorAll(
-              "[data-agy-session-switching], [data-agy-added-no-animations]"
+              `[${sel.sessionSwitchingAttr}], [${sel.addedNoAnimationsAttr}]`
             );
             for (const v of views) {
               if (!v) continue;
               if (typeof v.removeAttribute === "function") {
-                v.removeAttribute("data-agy-session-switching");
+                v.removeAttribute(sel.sessionSwitchingAttr);
               }
-              if (typeof v.getAttribute === "function" && v.getAttribute("data-agy-added-no-animations") === "1") {
+              if (typeof v.getAttribute === "function" && v.getAttribute(sel.addedNoAnimationsAttr) === "1") {
                 if (v.classList && typeof v.classList.remove === "function") {
-                  v.classList.remove("no-animations");
+                  v.classList.remove(sel.noAnimationsClass);
                 }
                 if (typeof v.removeAttribute === "function") {
-                  v.removeAttribute("data-agy-added-no-animations");
+                  v.removeAttribute(sel.addedNoAnimationsAttr);
                 }
               }
             }
@@ -1869,6 +1874,14 @@ var __agyKoTranslatorBundleExports = (() => {
           parent.appendChild(styleEl);
         }
         __name(ensureStyleElement, "ensureStyleElement");
+        function restoreThoughtBlocks() {
+          if (typeof thinkingTranslator.restoreAll === "function") {
+            thinkingTranslator.restoreAll();
+          } else if (typeof thinkingTranslator.restoreOriginalBlocks === "function") {
+            thinkingTranslator.restoreOriginalBlocks();
+          }
+        }
+        __name(restoreThoughtBlocks, "restoreThoughtBlocks");
         function scanAll(activeObserver = null) {
           if (disposed || !state.enabled) return;
           try {
@@ -1877,7 +1890,7 @@ var __agyKoTranslatorBundleExports = (() => {
             if (state.translateThinking) {
               thinkingTranslator.scanThoughtBlocks();
             } else {
-              thinkingTranslator.restoreOriginalCursorEdits();
+              restoreThoughtBlocks();
             }
             if (state.translateStaticUi) {
               const root = targetDoc.body || targetDoc.documentElement;
@@ -1939,7 +1952,7 @@ var __agyKoTranslatorBundleExports = (() => {
             scheduler.stop();
           }
           triggerController.detachListeners();
-          thinkingTranslator.restoreOriginalCursorEdits();
+          restoreThoughtBlocks();
           uiLocalizer.restoreAllMutatedNodes();
           triggerController.restoreTriggerButtons();
         }
@@ -2035,7 +2048,7 @@ var __agyKoTranslatorBundleExports = (() => {
           disposed = true;
           started = false;
           disposables.disposeAll(true);
-          thinkingTranslator.restoreOriginalCursorEdits();
+          restoreThoughtBlocks();
           uiLocalizer.restoreAllMutatedNodes();
           triggerController.restoreTriggerButtons();
           const styleEl = hostAdapter.styleId && targetDoc.getElementById && targetDoc.getElementById(hostAdapter.styleId);
@@ -2098,6 +2111,9 @@ var __agyKoTranslatorBundleExports = (() => {
           }
           if (removed) {
             translationService.bumpEpoch();
+            if (state.provider === normId && started && runtimeActive && state.enabled) {
+              restoreThoughtBlocks();
+            }
           }
           emitStatus();
           return removed;
@@ -4368,14 +4384,21 @@ var __agyKoTranslatorBundleExports = (() => {
               const ko = translateSync(trimmed);
               if (ko && ko !== trimmed) {
                 let origMap = {};
+                let appliedMap = {};
                 try {
                   origMap = JSON.parse(el.getAttribute("data-agy-orig-attr") || "{}");
                 } catch (_err) {
                 }
-                if (origMap[attr] === void 0) {
+                try {
+                  appliedMap = el.__agyAppliedAttrs || {};
+                } catch (_err) {
+                }
+                if (origMap[attr] === void 0 || appliedMap[attr] !== trimmed) {
                   origMap[attr] = val;
                   el.setAttribute("data-agy-orig-attr", JSON.stringify(origMap));
                 }
+                appliedMap[attr] = ko;
+                el.__agyAppliedAttrs = appliedMap;
                 el.setAttribute(attr, ko);
               }
             }
@@ -4396,7 +4419,7 @@ var __agyKoTranslatorBundleExports = (() => {
             if (syncKo && syncKo !== raw) {
               if (el.childNodes && el.childNodes.length === 1 && el.firstChild.nodeType === 3) {
                 const tn = el.firstChild;
-                if (!tn.__agyOrigValue) tn.__agyOrigValue = tn.nodeValue;
+                if (!tn.__agyOrigValue || tn.__agyKoApplied !== raw) tn.__agyOrigValue = tn.nodeValue;
                 tn.__agyKoApplied = syncKo;
                 tn.nodeValue = syncKo;
               }
@@ -4799,18 +4822,47 @@ var __agyKoTranslatorBundleExports = (() => {
         selectKoreanParticleByJongseong
       } = require_text_tokenizer();
       var INLINE_PROTECTED_DOM_SELECTOR = "code, pre, kbd, a, span.font-mono";
+      var WHOLE_CODE_BLOCK_SELECTOR = 'pre, code, .code-block, .shiki, .cm-editor, .monaco-editor, .xterm, [class*="language-"], [data-code-block], [data-diff-line]';
       var CODE_PLACEHOLDER_RESTORE_REGEX = /(?:⟦|\[|【)\s*C(\d+)\s*(?:⟧|\]|】)/gi;
       var LEADING_PARTICLE_AFTER_CODE_REGEX = /^(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/;
+      function isWholeProtectedCodeBlock(el) {
+        if (!el || el.nodeType !== 1) return false;
+        const tag = String(el.tagName || "").toUpperCase();
+        if (tag === "PRE" || tag === "CODE" || tag === "STYLE" || tag === "SCRIPT") return true;
+        if (typeof el.matches === "function") {
+          try {
+            if (el.matches(WHOLE_CODE_BLOCK_SELECTOR)) return true;
+          } catch (_err) {
+          }
+        }
+        if (typeof el.querySelector === "function") {
+          try {
+            const children = Array.from(el.children || []).filter(
+              (ch) => ch && ch.tagName !== "STYLE" && ch.tagName !== "SCRIPT"
+            );
+            if (children.length === 1 && children[0] !== el && isWholeProtectedCodeBlock(children[0])) {
+              const directText = Array.from(el.childNodes || []).filter((n) => n && n.nodeType === 3).map((n) => String(n.nodeValue || "").trim()).join("");
+              if (!directText) return true;
+            }
+          } catch (_err) {
+          }
+        }
+        return false;
+      }
+      __name(isWholeProtectedCodeBlock, "isWholeProtectedCodeBlock");
       function tokenizeBlockElement(blockEl, targetDoc = null) {
         if (!blockEl || typeof blockEl.cloneNode !== "function") {
-          return { tokenizedText: "", savedNodes: [] };
+          return { tokenizedText: "", savedNodes: [], skipTranslation: false };
+        }
+        if (isWholeProtectedCodeBlock(blockEl)) {
+          return { tokenizedText: "", savedNodes: [], skipTranslation: true };
         }
         const doc = targetDoc || blockEl.ownerDocument;
         const clone = blockEl.cloneNode(true);
         const allMatches = typeof clone.querySelectorAll === "function" ? Array.from(clone.querySelectorAll(INLINE_PROTECTED_DOM_SELECTOR)) : [];
         const outermostNodes = allMatches.filter((el) => {
           const anc = el.parentElement && typeof el.parentElement.closest === "function" ? el.parentElement.closest(INLINE_PROTECTED_DOM_SELECTOR) : null;
-          return !anc || !clone.contains(anc);
+          return !anc || anc === clone || !clone.contains(anc);
         });
         const savedNodes = [];
         for (let i = 0; i < outermostNodes.length; i++) {
@@ -4822,7 +4874,7 @@ var __agyKoTranslatorBundleExports = (() => {
           node.parentNode.replaceChild(textNode, node);
         }
         const tokenizedText = String(clone.textContent || "").trim();
-        return { tokenizedText, savedNodes };
+        return { tokenizedText, savedNodes, skipTranslation: false };
       }
       __name(tokenizeBlockElement, "tokenizeBlockElement");
       function buildTranslatedBlockElement(origEl, savedNodes, translatedText, targetDoc = null) {
@@ -4876,6 +4928,8 @@ var __agyKoTranslatorBundleExports = (() => {
       __name(buildTranslatedBlockElement, "buildTranslatedBlockElement");
       module.exports = {
         INLINE_PROTECTED_DOM_SELECTOR,
+        WHOLE_CODE_BLOCK_SELECTOR,
+        isWholeProtectedCodeBlock,
         tokenizeBlockElement,
         buildTranslatedBlockElement
       };
@@ -4891,6 +4945,7 @@ var __agyKoTranslatorBundleExports = (() => {
         isInvalidCachedOrTranslatedText
       } = require_text_tokenizer();
       var {
+        isWholeProtectedCodeBlock,
         tokenizeBlockElement,
         buildTranslatedBlockElement
       } = require_dom_tokenizer();
@@ -4912,6 +4967,9 @@ var __agyKoTranslatorBundleExports = (() => {
         __name(translateStaticSync, "translateStaticSync");
         function tryTranslateBlockElementSync(origEl) {
           if (!origEl) return null;
+          if (isWholeProtectedCodeBlock(origEl)) {
+            return origEl.cloneNode(true);
+          }
           if (origEl.tagName === "UL" || origEl.tagName === "OL") {
             const items = Array.from(origEl.querySelectorAll(":scope > li"));
             const syncItems = [];
@@ -4924,8 +4982,8 @@ var __agyKoTranslatorBundleExports = (() => {
             for (const sLi of syncItems) listClone.appendChild(sLi);
             return listClone;
           }
-          const { tokenizedText, savedNodes } = tokenizeBlockElement(origEl, doc);
-          if (!tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
+          const { tokenizedText, savedNodes, skipTranslation } = tokenizeBlockElement(origEl, doc);
+          if (skipTranslation || !tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
             return origEl.cloneNode(true);
           }
           const cached = translationService ? translationService.getCachedSync(tokenizedText) : null;
@@ -4936,8 +4994,11 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         __name(tryTranslateBlockElementSync, "tryTranslateBlockElementSync");
         async function translateBlockElement(origEl, signal = null) {
-          const { tokenizedText, savedNodes } = tokenizeBlockElement(origEl, doc);
-          if (!tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
+          if (isWholeProtectedCodeBlock(origEl)) {
+            return { node: origEl.cloneNode(true), translated: true };
+          }
+          const { tokenizedText, savedNodes, skipTranslation } = tokenizeBlockElement(origEl, doc);
+          if (skipTranslation || !tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
             return { node: origEl.cloneNode(true), translated: true };
           }
           const translatedText = await translationService.translateText(tokenizedText, { signal });
@@ -5006,7 +5067,7 @@ var __agyKoTranslatorBundleExports = (() => {
           );
           const rawSnapshot = (blockChildren.length > 0 ? blockChildren.map((ch) => String(ch.textContent || "").trim()).filter(Boolean).join("\n\n") : String(origContainer.textContent || "").trim()).trim();
           if (!rawSnapshot) return;
-          const hasEnglishBlock = blockChildren.length > 0 ? blockChildren.some((ch) => !isAlreadyKoreanOrNonEnglish(ch.textContent || "")) : !isAlreadyKoreanOrNonEnglish(rawSnapshot);
+          const hasEnglishBlock = blockChildren.length > 0 ? blockChildren.some((ch) => !isWholeProtectedCodeBlock(ch) && !isAlreadyKoreanOrNonEnglish(ch.textContent || "")) : !isWholeProtectedCodeBlock(origContainer) && !isAlreadyKoreanOrNonEnglish(rawSnapshot);
           if (!hasEnglishBlock) {
             resetThoughtHost(cursorEdit);
             cursorEdit.__agyLastSnapshot = rawSnapshot;
@@ -5349,6 +5410,7 @@ var __agyKoTranslatorBundleExports = (() => {
           processCursorEdit,
           scanThoughtBlocks,
           retranslateVisibleThoughts,
+          restoreAll: restoreOriginalCursorEdits,
           restoreOriginalCursorEdits
         };
       }
@@ -5384,7 +5446,12 @@ var __agyKoTranslatorBundleExports = (() => {
         viewTestIdAttr: "data-testid",
         primaryViewTestId: "conversation-view",
         autoExpandedAttr: "data-agy-auto-expanded",
-        origLabelAttr: "data-agy-orig-label"
+        origLabelAttr: "data-agy-orig-label",
+        sessionSwitchingAttr: "data-agy-session-switching",
+        addedNoAnimationsAttr: "data-agy-added-no-animations",
+        noAnimationsClass: "no-animations",
+        appliedTextProp: "__agyKoApplied",
+        programmaticClickProp: "__agyProgrammaticClick"
       });
       function buildMinimalOverlayCss() {
         return `

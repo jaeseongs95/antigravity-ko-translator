@@ -438,3 +438,84 @@ test('R7 F1+F3+F5+NB1+NB5: config-store strict validation, legacy file-lock defe
     cleanup();
   }
 });
+
+test('R8 F1+F3: Thinking <pre><code> blocks never leak to translator & preserve DOM; config-store preserves enabled and rejects secret queries / >16 providers', async () => {
+  const os = require('node:os');
+  const { win, doc, cleanup } = createHappyDomEnv();
+  const { readTranslatorSettings, saveTranslatorSettings, sanitizeLlmConfig } = require('../../host/config-store');
+
+  // F1: Thinking block with prose <p> + <pre><code>secret source</code></pre>
+  const block = doc.createElement('div');
+  block.className = 'cursor-edit';
+  const inner = doc.createElement('div');
+  inner.className = 'leading-relaxed';
+  const prose = doc.createElement('p');
+  prose.textContent = 'Analyzing the authentication handler.';
+  const pre = doc.createElement('pre');
+  const code = doc.createElement('code');
+  code.className = 'language-js';
+  const tokSpan = doc.createElement('span');
+  tokSpan.className = 'token keyword';
+  tokSpan.textContent = 'const secretApiKey = "sk-live-secret";';
+  code.appendChild(tokSpan);
+  pre.appendChild(code);
+  inner.appendChild(prose);
+  inner.appendChild(pre);
+  block.appendChild(inner);
+  doc.body.appendChild(block);
+
+  const sentPayloads = [];
+  const tr = createKoTranslator({
+    win,
+    doc,
+    settings: { enabled: true, translateThinking: true, translateStaticUi: false, provider: 'google-translate' },
+    fetchFn: async (url) => {
+      sentPayloads.push(String(url));
+      return { ok: true, json: async () => [[['인증 핸들러를 분석하는 중입니다.']]] };
+    },
+  });
+
+  try {
+    tr.start();
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(sentPayloads.length, 1, 'Only prose paragraph should be sent to translator');
+    assert.equal(sentPayloads[0].includes('secretApiKey'), false, 'F1: <pre><code> source must NEVER leak to translator');
+    const wrap = block.querySelector('.agy-ko-thought-wrap');
+    assert.ok(wrap);
+    const preservedCode = wrap.querySelector('pre > code.language-js > span.token.keyword');
+    assert.ok(preservedCode, 'F1: <pre><code> syntax highlighting DOM must be preserved intact');
+    assert.equal(preservedCode.textContent, 'const secretApiKey = "sk-live-secret";');
+  } finally {
+    tr.dispose();
+    cleanup();
+  }
+
+  // F3: config-store rejects secret query in llmConfig.baseUrl, rejects >16 customProviders in strict mode, and preserves `enabled`
+  assert.throws(
+    () => sanitizeLlmConfig({ baseUrl: 'http://127.0.0.1:11434/?api_key=leak' }, undefined, { strict: true }),
+    /FORBIDDEN_SECRET_QUERY_IN_LLM_BASE_URL/
+  );
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-cfg-r8-'));
+  try {
+    const sp = path.join(tmpDir, 'ko_translator_settings.json');
+    const lp = path.join(tmpDir, 'ko_translator_settings.lock');
+    saveTranslatorSettings({ enabled: false, showThinking: false }, { SETTINGS_PATH: sp, SETTINGS_LOCK_PATH: lp });
+    const afterToggle = saveTranslatorSettings({ showThinking: true }, { SETTINGS_PATH: sp, SETTINGS_LOCK_PATH: lp });
+    assert.equal(afterToggle.enabled, false, 'F3: Saving another setting must preserve existing enabled:false');
+    const readBack = readTranslatorSettings({ SETTINGS_PATH: sp }, { strict: true });
+    assert.equal(readBack.enabled, false);
+
+    const tooMany = Array.from({ length: 17 }, (_, i) => ({
+      id: `custom-${i}`,
+      endpointUrl: 'http://127.0.0.1:8080/t',
+      bodyTemplate: { q: '{{text}}' },
+      responsePath: 'text',
+    }));
+    assert.throws(
+      () => saveTranslatorSettings({ customProviders: tooMany }, { SETTINGS_PATH: sp, SETTINGS_LOCK_PATH: lp }),
+      /TOO_MANY_CUSTOM_PROVIDERS/
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

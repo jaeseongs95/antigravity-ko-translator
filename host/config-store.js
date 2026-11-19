@@ -15,21 +15,15 @@ const crypto = require('crypto');
 const lockfile = require('proper-lockfile');
 
 const { resolveHostPaths, PLUGIN_ID } = require('./paths');
+const { DEFAULT_LLM_CONFIG } = require('../src/adapters/translators/default-providers');
 const { validateTranslationEndpointUrl } = require('../src/adapters/translators/endpoint-validator');
 const { validateCustomProviderSpec } = require('../src/adapters/translators/custom-provider');
 
 const activeLockReleases = new Map();
 
-const DEFAULT_LLM_CONFIG = Object.freeze({
-  baseUrl: 'http://127.0.0.1:11434',
-  model: 'gemma3:4b',
-  apiFormat: 'ollama',
-  allowRemoteHttps: false,
-  timeoutMs: 15000,
-});
-
 const DEFAULT_SETTINGS = Object.freeze({
   schemaVersion: 1,
+  enabled: true,
   translateThinking: true,
   showThinking: true,
   translateStaticUi: true,
@@ -128,6 +122,9 @@ function sanitizeLlmConfig(raw, existing = DEFAULT_LLM_CONFIG, { strict = false 
   const allowRemoteHttps =
     typeof raw.allowRemoteHttps === 'boolean' ? raw.allowRemoteHttps : Boolean(base.allowRemoteHttps);
   const rawUrl = raw.baseUrl !== undefined ? String(raw.baseUrl).trim() : base.baseUrl;
+  if (SECRET_QUERY_RE.test(rawUrl)) {
+    throw new Error('FORBIDDEN_SECRET_QUERY_IN_LLM_BASE_URL');
+  }
   const parsedUrl = validateTranslationEndpointUrl(rawUrl, { allowRemoteHttps });
 
   if (raw.model !== undefined && typeof raw.model !== 'string') {
@@ -180,6 +177,9 @@ function sanitizeCustomProviders(rawList, { strict = false } = {}) {
   if (!Array.isArray(rawList)) {
     if (strict) throw new Error('INVALID_CUSTOM_PROVIDERS_LIST');
     return [];
+  }
+  if (strict && rawList.length > 16) {
+    throw new Error('TOO_MANY_CUSTOM_PROVIDERS');
   }
   const out = [];
   const seen = new Set();
@@ -269,6 +269,7 @@ function readTranslatorSettings(pathOverrides = null, { strict = false } = {}) {
     }
     return {
       schemaVersion: 1,
+      enabled: parsed.enabled !== false,
       translateThinking: parsed.translateThinking !== false,
       showThinking: parsed.showThinking !== false,
       translateStaticUi: parsed.translateStaticUi !== false,
@@ -301,6 +302,7 @@ function saveTranslatorSettings(patch, pathOverrides = null) {
     const current = readTranslatorSettings(p, { strict: true });
     const next = {
       schemaVersion: 1,
+      enabled: typeof patch.enabled === 'boolean' ? patch.enabled : current.enabled !== false,
       translateThinking:
         typeof patch.translateThinking === 'boolean' ? patch.translateThinking : current.translateThinking,
       showThinking: typeof patch.showThinking === 'boolean' ? patch.showThinking : current.showThinking,

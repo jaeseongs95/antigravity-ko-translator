@@ -128,7 +128,23 @@ function isPluginEnabledInConfig(configJsonPath, pluginId) {
   }
 }
 
-function collectExecutableExtensions({ uiExtensionsDir, pluginsRootDir, configJsonPath, settingsPath }) {
+function serializeSafeInlineJson(value) {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+function collectExecutableExtensions({
+  uiExtensionsDir,
+  pluginsRootDir,
+  configJsonPath,
+  settingsPath,
+  profile = ANTIGRAVITY_HOST_PROFILE,
+}) {
+  const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
+  const targetPluginId = activeProfile.pluginId || PLUGIN_ID;
+  const globalName = activeProfile.initialSettingsGlobalName;
   const results = [];
   if (!uiExtensionsDir || !fs.existsSync(uiExtensionsDir)) return results;
   let entries = [];
@@ -153,14 +169,13 @@ function collectExecutableExtensions({ uiExtensionsDir, pluginsRootDir, configJs
     if (!code.trim()) continue;
 
     let initialSettingsPrelude = '';
-    if (check.pluginId === PLUGIN_ID && settingsPath) {
+    if (check.pluginId === targetPluginId && settingsPath) {
       try {
         const settings = readTranslatorSettings({ SETTINGS_PATH: settingsPath }, { strict: true });
-        initialSettingsPrelude = `window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ = ${JSON.stringify(settings)};\n`;
+        initialSettingsPrelude = `window[${JSON.stringify(globalName)}] = ${serializeSafeInlineJson(settings)};\n`;
       } catch (_err) {
         // Fail-closed: NEVER fall back to external google-translate when settings file is corrupted.
-        initialSettingsPrelude =
-          'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ = {"enabled":false,"settingsCorrupted":true};\n';
+        initialSettingsPrelude = `window[${JSON.stringify(globalName)}] = {"enabled":false,"settingsCorrupted":true};\n`;
       }
     }
 
@@ -176,16 +191,18 @@ function collectExecutableExtensions({ uiExtensionsDir, pluginsRootDir, configJs
 
 function buildHostLoaderScriptSource(profile = ANTIGRAVITY_HOST_PROFILE) {
   const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
-  const appSegmentsJson = JSON.stringify(Array.from(activeProfile.appDirSegments || ['.gemini', 'antigravity']));
-  const cfgSegmentsJson = JSON.stringify(Array.from(activeProfile.configDirSegments || ['.gemini', 'config']));
-  const extDirNameJson = JSON.stringify(activeProfile.uiExtensionsDirName || 'ui-extensions.d');
-  const pluginIdJson = JSON.stringify(activeProfile.pluginId || PLUGIN_ID);
-  const settingsFileJson = JSON.stringify(activeProfile.settingsFileName || 'ko_translator_settings.json');
-  const hubReSource = ((activeProfile.allowedHubUrlRe || ALLOWED_HUB_URL_RE).source).replace(/\\/g, '\\');
-  const hubReFlags = (activeProfile.allowedHubUrlRe || ALLOWED_HUB_URL_RE).flags || 'i';
+  const appSegmentsJson = JSON.stringify(Array.from(activeProfile.appDirSegments));
+  const cfgSegmentsJson = JSON.stringify(Array.from(activeProfile.configDirSegments));
+  const extDirNameJson = JSON.stringify(activeProfile.uiExtensionsDirName);
+  const pluginIdJson = JSON.stringify(activeProfile.pluginId);
+  const settingsFileJson = JSON.stringify(activeProfile.settingsFileName);
+  const globalNameJson = JSON.stringify(activeProfile.initialSettingsGlobalName);
+  const logPrefixJson = JSON.stringify(activeProfile.logPrefix);
+  const hubReSource = activeProfile.allowedHubUrlRe.source;
+  const hubReFlags = activeProfile.allowedHubUrlRe.flags || 'i';
 
   return `'use strict';
-// ${activeProfile.patchMarker || PATCH_MARKER} — Shared Drop-In UI Extensions Loader (Zero-Daemon, Top-Frame Hub Only)
+// ${activeProfile.patchMarker} — Shared Drop-In UI Extensions Loader (Zero-Daemon, Top-Frame Hub Only)
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -194,17 +211,37 @@ const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._:-]{0,63}$/;
 const FORBIDDEN_PROVIDER_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 const SECRET_HEADER_RE = /^(?:authorization|proxy-authorization|x-api-key|api-key|x-goog-api-key|x-auth-token|x-access-token|x-secret|cookie)$/i;
+const FORBIDDEN_CUSTOM_HEADER_RE = /^(?:host|origin|referer|cookie|set-cookie|content-length|transfer-encoding|connection|upgrade|te|trailer|proxy-authorization|sec-.*)$/i;
 const SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
+const PRIVATE_IPV4_RE = /^(?:0\\.|10\\.|127\\.|169\\.254\\.|172\\.(?:1[6-9]|2\\d|3[01])\\.|192\\.168\\.|100\\.(?:6[4-9]|[7-9]\\d|1[01]\\d|12[0-7])\\.|192\\.0\\.2\\.|198\\.51\\.100\\.|203\\.0\\.113\\.|22[4-9]\\.|2[3-5]\\d\\.)/;
 const ALLOWED_HUB_URL_RE = new RegExp(${JSON.stringify(hubReSource)}, ${JSON.stringify(hubReFlags)});
 const APP_SEGMENTS = ${appSegmentsJson};
 const CFG_SEGMENTS = ${cfgSegmentsJson};
 const EXT_DIR_NAME = ${extDirNameJson};
 const TARGET_PLUGIN_ID = ${pluginIdJson};
 const SETTINGS_FILE_NAME = ${settingsFileJson};
+const INITIAL_SETTINGS_GLOBAL = ${globalNameJson};
+const LOG_PREFIX = ${logPrefixJson};
 
 function isInside(parentDir, childPath) {
   const rel = path.relative(parentDir, childPath);
   return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function validateEndpointFallback(rawUrl, allowRemoteHttps) {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) throw new Error('BAD_URL');
+  if (SECRET_QUERY_RE.test(rawUrl)) throw new Error('SECRET_QUERY');
+  const u = new URL(rawUrl.trim());
+  if (u.username || u.password || u.hash) throw new Error('FORBIDDEN_URL_PARTS');
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('BAD_SCHEME');
+  if (u.hostname.includes('%')) throw new Error('FORBIDDEN_ZONE_ID');
+  const h = u.hostname.replace(/^\\[|\\]$/g, '').replace(/\\.+$/, '').toLowerCase();
+  if (!h) throw new Error('EMPTY_HOST');
+  const isLoop = h === '127.0.0.1' || h === 'localhost' || h === '::1';
+  if (isLoop) return;
+  if (!allowRemoteHttps || u.protocol !== 'https:') throw new Error('SSRF_REMOTE_BLOCKED');
+  if (h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) throw new Error('INTERNAL_HOST');
+  if (PRIVATE_IPV4_RE.test(h) || h.includes(':') || !h.includes('.')) throw new Error('FORBIDDEN_IP_OR_SINGLE_LABEL');
 }
 
 function validateSettingsStrictFallback(parsed) {
@@ -230,24 +267,33 @@ function validateSettingsStrictFallback(parsed) {
       throw new Error('BAD_TIMEOUT');
     }
     if (lc.baseUrl !== undefined) {
-      const u = new URL(String(lc.baseUrl));
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('BAD_SCHEME');
-      const h = u.hostname.replace(/^\\[|\\]$/g, '').toLowerCase();
-      const isLoop = h === '127.0.0.1' || h === 'localhost' || h === '::1';
-      if (!isLoop && (!lc.allowRemoteHttps || u.protocol !== 'https:')) throw new Error('SSRF_BLOCKED');
+      validateEndpointFallback(String(lc.baseUrl), Boolean(lc.allowRemoteHttps));
     }
   }
   if (parsed.customProviders !== undefined) {
-    if (!Array.isArray(parsed.customProviders)) throw new Error('BAD_CUSTOM_PROVIDERS');
+    if (!Array.isArray(parsed.customProviders) || parsed.customProviders.length > 16) throw new Error('BAD_CUSTOM_PROVIDERS');
+    const seen = new Set();
     for (const cp of parsed.customProviders) {
       if (!cp || typeof cp !== 'object' || Array.isArray(cp)) throw new Error('BAD_CP_ITEM');
-      if (cp.headers && typeof cp.headers === 'object') {
+      if (typeof cp.id !== 'string' || !cp.id.trim()) throw new Error('BAD_CP_ID');
+      const cid = cp.id.trim().toLowerCase();
+      if (FORBIDDEN_PROVIDER_IDS.has(cid) || !PROVIDER_ID_RE.test(cid) || seen.has(cid)) throw new Error('BAD_CP_ID');
+      seen.add(cid);
+      if (cp.method !== undefined && String(cp.method).trim().toUpperCase() !== 'POST') throw new Error('BAD_CP_METHOD');
+      if (cp.timeoutMs !== undefined && (typeof cp.timeoutMs !== 'number' || !Number.isFinite(cp.timeoutMs) || cp.timeoutMs < 1000 || cp.timeoutMs > 120000)) {
+        throw new Error('BAD_CP_TIMEOUT');
+      }
+      if (!cp.bodyTemplate || typeof cp.bodyTemplate !== 'object') throw new Error('BAD_CP_BODY');
+      if (typeof cp.responsePath !== 'string' || !cp.responsePath.trim()) throw new Error('BAD_CP_RESP_PATH');
+      if (cp.headers !== undefined) {
+        if (!cp.headers || typeof cp.headers !== 'object' || Array.isArray(cp.headers)) throw new Error('BAD_CP_HEADERS');
         for (const hk of Object.keys(cp.headers)) {
-          if (SECRET_HEADER_RE.test(String(hk || '').trim())) throw new Error('SECRET_HEADER');
+          const cleanK = String(hk || '').trim();
+          if (SECRET_HEADER_RE.test(cleanK) || FORBIDDEN_CUSTOM_HEADER_RE.test(cleanK)) throw new Error('FORBIDDEN_HEADER');
         }
       }
       const ep = cp.endpointUrl !== undefined ? cp.endpointUrl : cp.url;
-      if (SECRET_QUERY_RE.test(String(ep || ''))) throw new Error('SECRET_QUERY');
+      validateEndpointFallback(String(ep || ''), Boolean(cp.allowRemoteHttps));
     }
   }
   return parsed;
@@ -267,14 +313,19 @@ function loadValidatedSettings(realPDir, sp) {
 
 function attach(contents) {
   if (!contents || typeof contents.getType !== 'function' || contents.getType() !== 'window') return;
-  let lastInjectedUrl = null;
-  let inFlightUrl = null;
+  let injectedForUrl = null;
+  let injectedPluginIds = new Set();
+  let inFlightPluginIds = new Set();
   const run = () => {
     try {
       if (contents.isDestroyed()) return;
       const url = typeof contents.getURL === 'function' ? String(contents.getURL() || '') : '';
       if (!ALLOWED_HUB_URL_RE.test(url)) return;
-      if (lastInjectedUrl === url || inFlightUrl === url) return;
+      if (injectedForUrl !== url) {
+        injectedForUrl = url;
+        injectedPluginIds = new Set();
+        inFlightPluginIds = new Set();
+      }
 
       const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
       const agyDir = path.join(home, ...APP_SEGMENTS);
@@ -290,17 +341,18 @@ function attach(contents) {
           cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
           if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return;
         } catch (err) {
-          try { console.error('[ko-thought-translator] corrupted config.json (fail-closed):', err && err.message ? err.message : err); } catch (_e) {}
+          try { console.error(LOG_PREFIX, 'corrupted config.json (fail-closed):', err && err.message ? err.message : err); } catch (_e) {}
           return;
         }
       }
 
       const files = fs.readdirSync(extDir).filter((f) => f.endsWith('.json')).sort();
-      const scriptsToRun = [];
+      const pendingItems = [];
       for (const f of files) {
         try {
           const m = JSON.parse(fs.readFileSync(path.join(extDir, f), 'utf8'));
           if (!m || m.schemaVersion !== 1 || typeof m.pluginId !== 'string' || !PLUGIN_ID_RE.test(m.pluginId)) continue;
+          if (injectedPluginIds.has(m.pluginId) || inFlightPluginIds.has(m.pluginId)) continue;
           if (cfg && cfg.plugins && cfg.plugins[m.pluginId] && cfg.plugins[m.pluginId].enabled === false) continue;
           const pDir = path.join(pluginsRoot, m.pluginId);
           if (!fs.existsSync(pDir)) continue;
@@ -320,47 +372,44 @@ function attach(contents) {
                   .replace(/</g, '\\\\u003c')
                   .replace(/\\u2028/g, '\\\\u2028')
                   .replace(/\\u2029/g, '\\\\u2029');
-                prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__=' + safeJson + ';\\n';
+                prelude = 'window[' + JSON.stringify(INITIAL_SETTINGS_GLOBAL) + ']=' + safeJson + ';\\n';
               }
             } catch (_e) {
-              prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__={"enabled":false,"settingsCorrupted":true};\\n';
+              prelude = 'window[' + JSON.stringify(INITIAL_SETTINGS_GLOBAL) + ']={"enabled":false,"settingsCorrupted":true};\\n';
             }
           }
-          const wrapped = '(function(){try{\\n' + prelude + rawCode + '\\n}catch(err){try{console.error("[ko-thought-translator] renderer error:",err&&err.message?err.message:err);}catch(_e){}}})();';
-          scriptsToRun.push(wrapped);
+          const wrapped = '(function(){try{\\n' + prelude + rawCode + '\\n}catch(err){try{console.error(' + JSON.stringify(LOG_PREFIX) + ',"renderer error:",err&&err.message?err.message:err);}catch(_e){}}})();';
+          pendingItems.push({ pluginId: m.pluginId, code: wrapped });
         } catch (err) {
-          try { console.error('[ko-thought-translator] extension load failed:', f, err && err.message ? err.message : err); } catch (_e) {}
+          try { console.error(LOG_PREFIX, 'extension load failed:', f, err && err.message ? err.message : err); } catch (_e) {}
         }
       }
-      if (scriptsToRun.length === 0) return;
+      if (pendingItems.length === 0) return;
 
-      inFlightUrl = url;
-      Promise.allSettled(scriptsToRun.map((code) => Promise.resolve(contents.executeJavaScript(code))))
+      for (const item of pendingItems) inFlightPluginIds.add(item.pluginId);
+      const runUrl = url;
+      Promise.allSettled(pendingItems.map((item) => Promise.resolve(contents.executeJavaScript(item.code))))
         .then((results) => {
-          const anyFulfilled = results.some((r) => r.status === 'fulfilled');
-          for (const r of results) {
-            if (r.status === 'rejected') {
-              try { console.error('[ko-thought-translator] executeJavaScript failed:', r.reason && r.reason.message ? r.reason.message : r.reason); } catch (_e) {}
+          for (let i = 0; i < results.length; i++) {
+            const pid = pendingItems[i].pluginId;
+            if (injectedForUrl === runUrl) inFlightPluginIds.delete(pid);
+            if (results[i].status === 'fulfilled') {
+              if (injectedForUrl === runUrl) injectedPluginIds.add(pid);
+            } else {
+              try { console.error(LOG_PREFIX, 'executeJavaScript failed:', pid, results[i].reason && results[i].reason.message ? results[i].reason.message : results[i].reason); } catch (_e) {}
             }
-          }
-          if (anyFulfilled && inFlightUrl === url) {
-            lastInjectedUrl = url;
-          }
-        })
-        .finally(() => {
-          if (inFlightUrl === url) {
-            inFlightUrl = null;
           }
         });
     } catch (err) {
-      inFlightUrl = null;
-      try { console.error('[ko-thought-translator] loader run failed:', err && err.message ? err.message : err); } catch (_e) {}
+      inFlightPluginIds.clear();
+      try { console.error(LOG_PREFIX, 'loader run failed:', err && err.message ? err.message : err); } catch (_e) {}
     }
   };
   contents.on('did-start-navigation', (_ev, _url, _isInPlace, isMainFrame) => {
     if (isMainFrame !== false) {
-      lastInjectedUrl = null;
-      inFlightUrl = null;
+      injectedForUrl = null;
+      injectedPluginIds = new Set();
+      inFlightPluginIds = new Set();
     }
   });
   contents.on('dom-ready', run);
@@ -435,17 +484,18 @@ function isAsarLoaderInstalled(asarPath, profile = ANTIGRAVITY_HOST_PROFILE) {
 
 function isPureUnpatchedArchive(archive, profile = ANTIGRAVITY_HOST_PROFILE) {
   const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
-  const mainEntry = activeProfile.mainEntryInAsar || 'dist/main.js';
-  const marker = activeProfile.patchMarker || PATCH_MARKER;
-  const legacyMarkers = Array.isArray(activeProfile.legacyPatchMarkers)
-    ? activeProfile.legacyPatchMarkers
-    : ['AGY_STATUSBAR', 'AGY_KO_THOUGHT', 'ui-extensions-loader'];
+  const mainEntry = activeProfile.mainEntryInAsar;
+  const marker = activeProfile.patchMarker;
+  const legacyMarkers = Array.isArray(activeProfile.legacyPatchMarkers) ? activeProfile.legacyPatchMarkers : [];
+  const unchangedEntries = Array.isArray(activeProfile.unchangedEntriesInAsar) ? activeProfile.unchangedEntriesInAsar : [];
   const mainBuf = archive && archive.fileMap ? archive.fileMap.get(mainEntry) : null;
   if (!mainBuf || mainBuf.length === 0) return false;
-  const mainText = mainBuf.toString('utf8');
-  const utilsText = archive.fileMap.get('dist/utils.js')?.toString('utf8') || '';
-  const preloadText = archive.fileMap.get('dist/preload.js')?.toString('utf8') || '';
-  const all = mainText + '\n' + utilsText + '\n' + preloadText;
+  const parts = [mainBuf.toString('utf8')];
+  for (const entryName of unchangedEntries) {
+    const entryBuf = archive.fileMap.get(entryName);
+    if (entryBuf) parts.push(entryBuf.toString('utf8'));
+  }
+  const all = parts.join('\n');
   if (all.includes(marker)) return false;
   for (const legacy of legacyMarkers) {
     if (all.includes(legacy)) return false;
@@ -509,7 +559,7 @@ function verifyAllAsarIntegrity(archive) {
   return valid && checkedCount > 0;
 }
 
-function transformExactSize(origBuf, targetStr, replacementStr) {
+function transformExactSize(origBuf, targetStr, replacementStr, marker = PATCH_MARKER) {
   const origText = origBuf.toString('utf8');
   const firstIdx = origText.indexOf(targetStr);
   if (firstIdx === -1) {
@@ -523,13 +573,14 @@ function transformExactSize(origBuf, targetStr, replacementStr) {
   let delta = Buffer.byteLength(nextText, 'utf8') - origBuf.length;
 
   if (delta > 0) {
-    // Strip only pure standalone single-line `//` comment lines (never touching code or template literals).
+    // Strip only pure standalone single-line `//` comment lines (never touching code, template literals, or marker).
     const lines = nextText.split('\n');
     const kept = [];
     for (const line of lines) {
       if (
         delta > 0 &&
-        /^\s*\/\/(?!.*AGY_UI_EXTENSIONS_LOADER_V1)\s*[A-Za-z0-9#*\-_=.,:;()[\]{}@/'" ]*$/.test(line)
+        (!marker || !line.includes(marker)) &&
+        /^\s*\/\/\s*[A-Za-z0-9#*\-_=.,:;()[\]{}@/'" ]*$/.test(line)
       ) {
         delta -= Buffer.byteLength(line, 'utf8') + 1;
         continue;
@@ -574,9 +625,10 @@ function writeBinaryAtomicStrictSync(targetPath, buf) {
   }
 }
 
-function registerPluginManifest(pathOverrides = null) {
-  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
-  const pluginId = p.PLUGIN_ID || PLUGIN_ID;
+function registerPluginManifest(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROFILE) {
+  const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
+  const p = { ...resolveHostPaths(process.env, activeProfile), ...(pathOverrides || {}) };
+  const pluginId = p.PLUGIN_ID || activeProfile.pluginId;
   let entryScript = p.RENDERER_BUNDLE_PATH;
   if (!pathOverrides || !pathOverrides.RENDERER_BUNDLE_PATH) {
     const installedEntry = path.join(p.PLUGINS_ROOT_DIR, pluginId, 'dist', 'renderer.js');
@@ -590,12 +642,13 @@ function registerPluginManifest(pathOverrides = null) {
     entryScript,
   };
   writeFileAtomicSync(p.MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n');
-  writeFileAtomicSync(p.LOADER_SCRIPT_PATH, buildHostLoaderScriptSource());
+  writeFileAtomicSync(p.LOADER_SCRIPT_PATH, buildHostLoaderScriptSource(activeProfile));
   return manifest;
 }
 
-function unregisterPluginManifest(pathOverrides = null) {
-  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+function unregisterPluginManifest(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROFILE) {
+  const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
+  const p = { ...resolveHostPaths(process.env, activeProfile), ...(pathOverrides || {}) };
   let removed = false;
   if (fs.existsSync(p.MANIFEST_PATH)) {
     fs.unlinkSync(p.MANIFEST_PATH);
@@ -604,12 +657,17 @@ function unregisterPluginManifest(pathOverrides = null) {
   return removed;
 }
 
-function verifyOrigBackupStrict(backupPath, metaPath, expectedVersion, { backfillMeta = false } = {}) {
+function verifyOrigBackupStrict(
+  backupPath,
+  metaPath,
+  expectedVersion,
+  { backfillMeta = false, profile = ANTIGRAVITY_HOST_PROFILE } = {}
+) {
   if (!fs.existsSync(backupPath)) {
     return { ok: false, status: 'ERR_ORIG_MISSING' };
   }
   const origArchive = readAsarArchive(backupPath);
-  if (!isPureUnpatchedArchive(origArchive) || (expectedVersion && origArchive.appVersion !== expectedVersion)) {
+  if (!isPureUnpatchedArchive(origArchive, profile) || (expectedVersion && origArchive.appVersion !== expectedVersion)) {
     return { ok: false, status: 'ERR_ORIG_INVALID', appVersion: origArchive.appVersion };
   }
   const origHash = sha256Hex(origArchive.buf);
@@ -743,7 +801,7 @@ function installAsarDropinLoader(pathOverrides = null, profile = ANTIGRAVITY_HOS
     asar.uncacheAll();
     return {
       status: 'INSTALLED',
-      patchMarker: PATCH_MARKER,
+      patchMarker: marker,
       appVersion: archive.appVersion,
       backupPath,
       sha256: sha256Hex(outBuf),
@@ -753,12 +811,13 @@ function installAsarDropinLoader(pathOverrides = null, profile = ANTIGRAVITY_HOS
   }
 }
 
-function rollbackAsarDropinLoader(pathOverrides = null) {
-  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+function rollbackAsarDropinLoader(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROFILE) {
+  const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
+  const p = { ...resolveHostPaths(process.env, activeProfile), ...(pathOverrides || {}) };
   const ownManifestName = path.basename(p.MANIFEST_PATH);
 
   if (!fs.existsSync(p.ASAR_PATH)) {
-    const manifestRemoved = unregisterPluginManifest(p);
+    const manifestRemoved = unregisterPluginManifest(p, activeProfile);
     return { status: 'SKIPPED_NO_ASAR', manifestRemoved };
   }
 
@@ -767,7 +826,7 @@ function rollbackAsarDropinLoader(pathOverrides = null) {
     ? fs.readdirSync(p.UI_EXTENSIONS_DIR).filter((f) => f.endsWith('.json') && f !== ownManifestName)
     : [];
   if (siblingManifests.length > 0) {
-    const manifestRemoved = unregisterPluginManifest(p);
+    const manifestRemoved = unregisterPluginManifest(p, activeProfile);
     return {
       status: 'MANIFEST_REMOVED_SHARED_LOADER_PRESERVED',
       manifestRemoved,
@@ -781,19 +840,22 @@ function rollbackAsarDropinLoader(pathOverrides = null) {
   }
   try {
     const cur = readAsarArchive(p.ASAR_PATH);
-    if (isPureUnpatchedArchive(cur)) {
-      const manifestRemoved = unregisterPluginManifest(p);
+    if (isPureUnpatchedArchive(cur, activeProfile)) {
+      const manifestRemoved = unregisterPluginManifest(p, activeProfile);
       return { status: 'ALREADY_UNPATCHED', appVersion: cur.appVersion, manifestRemoved };
     }
     const backupPath = `${p.ASAR_PATH}.v${cur.appVersion}.orig`;
     const metaPath = `${backupPath}.json`;
-    const check = verifyOrigBackupStrict(backupPath, metaPath, cur.appVersion, { backfillMeta: false });
+    const check = verifyOrigBackupStrict(backupPath, metaPath, cur.appVersion, {
+      backfillMeta: false,
+      profile: activeProfile,
+    });
     if (!check.ok) {
       return { status: check.status, appVersion: cur.appVersion, manifestRemoved: false };
     }
     writeBinaryAtomicStrictSync(p.ASAR_PATH, check.archive.buf);
     asar.uncacheAll();
-    const manifestRemoved = unregisterPluginManifest(p);
+    const manifestRemoved = unregisterPluginManifest(p, activeProfile);
     return {
       status: 'ROLLED_BACK',
       appVersion: cur.appVersion,
