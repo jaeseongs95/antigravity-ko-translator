@@ -225,8 +225,8 @@ function createObserverScheduler({
   }
 
   function runFastPass() {
-    guardSessionSwitchTransitions();
     if (disposed || !running || inFastScan || !doc || !isEnabled()) return;
+    guardSessionSwitchTransitions();
     inFastScan = true;
     try {
       if (typeof onEnsureStyle === 'function') {

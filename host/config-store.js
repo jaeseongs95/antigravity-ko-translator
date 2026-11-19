@@ -228,13 +228,14 @@ function sanitizeCustomProviders(rawList, { strict = false } = {}) {
   return out;
 }
 
-function isPluginEnabled(configJsonPath) {
+function isPluginEnabled(configJsonPath, pluginId = PLUGIN_ID) {
   const target = configJsonPath || resolveHostPaths(process.env).CONFIG_JSON_PATH;
+  const effectivePluginId = pluginId || PLUGIN_ID;
   try {
     if (!target || !fs.existsSync(target)) return true;
     const cfg = JSON.parse(fs.readFileSync(target, 'utf8'));
     if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return false;
-    const entry = cfg.plugins && cfg.plugins[PLUGIN_ID];
+    const entry = cfg.plugins && cfg.plugins[effectivePluginId];
     if (entry && entry.enabled === false) return false;
     return true;
   } catch (_err) {
@@ -300,6 +301,11 @@ function saveTranslatorSettings(patch, pathOverrides = null) {
   }
   try {
     const current = readTranslatorSettings(p, { strict: true });
+    for (const boolKey of ['enabled', 'translateThinking', 'showThinking', 'translateStaticUi']) {
+      if (patch[boolKey] !== undefined && typeof patch[boolKey] !== 'boolean') {
+        throw new Error(`INVALID_BOOLEAN_SETTING:${boolKey}`);
+      }
+    }
     const next = {
       schemaVersion: 1,
       enabled: typeof patch.enabled === 'boolean' ? patch.enabled : current.enabled !== false,

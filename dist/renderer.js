@@ -1409,8 +1409,8 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         __name(guardSessionSwitchTransitions, "guardSessionSwitchTransitions");
         function runFastPass() {
-          guardSessionSwitchTransitions();
           if (disposed || !running || inFastScan || !doc || !isEnabled()) return;
+          guardSessionSwitchTransitions();
           inFastScan = true;
           try {
             if (typeof onEnsureStyle === "function") {
@@ -3780,110 +3780,10 @@ var __agyKoTranslatorBundleExports = (() => {
           if (m) return `도구 ${m[1]}개 사용 가능`;
           m = t.match(/^(\d+)\s+servers?\s+enabled$/i);
           if (m) return `서버 ${m[1]}개 활성화됨`;
-          m = t.match(/^Custom Servers:\s*(\d+)\s*\|\s*Active Runtime States:\s*(\d+)$/i);
-          if (m) return `커스텀 서버: ${m[1]}개 | 활성 런타임 상태: ${m[2]}개`;
-          m = t.match(/^Tools\s*\((\d+)\)\s*—\s*click a tool chip to enable\/disable it in mcp_config\.json:$/i);
-          if (m) return `도구 (${m[1]}개) — 도구 칩을 클릭해 mcp_config.json에서 활성화/비활성화:`;
-          m = t.match(/^Tools\s*\((\d+)\):$/i);
-          if (m) return `도구 (${m[1]}개):`;
-          m = t.match(/^Saving\s+(\d+)\s+MCP\s+servers\s*\((.+)\)\.\.\.$/i);
-          if (m) return `MCP 서버 ${m[1]}개 저장 중 (${m[2]})...`;
-          m = t.match(/^Automatically configured and connected\s+(\d+)\s+servers:\s*(.+)\.$/i);
-          if (m) return `서버 ${m[1]}개를 자동으로 설정하고 연결했습니다: ${m[2]}.`;
-          m = t.match(/^Auto-configuring\s+"(.+)"\.\.\.$/i);
-          if (m) return `"${m[1]}" 자동 설정 중...`;
-          m = t.match(/^Automatically added and connected\s+"(.+)"\.$/i);
-          if (m) return `"${m[1]}" 서버를 자동으로 추가하고 연결했습니다.`;
-          m = t.match(
-            /^Auto-filled form for\s+"(.+)"\.\s*Review or add env vars below,\s*then click Save & Connect Server\.$/i
-          );
-          if (m) return `"${m[1]}" 서버 폼을 자동으로 채웠습니다. 아래에서 환경 변수를 검토하거나 추가한 뒤 [서버 저장 및 연결]을 클릭하세요.`;
-          m = t.match(/^Server\s+"(.+)"\s+(enabled|disabled)\.$/i);
-          if (m) return `"${m[1]}" 서버가 ${m[2].toLowerCase() === "enabled" ? "활성화" : "비활성화"}되었습니다.`;
-          m = t.match(/^Restarting\s+"(.+)"\.\.\.$/i);
-          if (m) return `"${m[1]}" 재시작 중...`;
-          m = t.match(/^Restarted\s+"(.+)"\.$/i);
-          if (m) return `"${m[1]}" 서버를 재시작했습니다.`;
-          m = t.match(/^Removed custom server\s+"(.+)"\.$/i);
-          if (m) return `"${m[1]}" 커스텀 서버를 삭제했습니다.`;
-          m = t.match(/^Tool\s+"(.+)"\s+on\s+"(.+)"\s+(enabled|disabled)\.$/i);
-          if (m) return `"${m[2]}" 서버의 "${m[1]}" 도구가 ${m[3].toLowerCase() === "enabled" ? "활성화" : "비활성화"}되었습니다.`;
-          m = t.match(/^Loaded preset\s+"(.+)"\.\s*Review placeholders before saving\.$/i);
-          if (m) {
-            const inner = translateStaticUiSync(m[1]) || m[1];
-            return `"${inner}" 프리셋을 불러왔습니다. 저장하기 전에 입력값을 확인하세요.`;
-          }
-          m = t.match(/^Saving\s+"(.+)"\s+to\s+mcp_config\.json\.\.\.$/i);
-          if (m) return `mcp_config.json에 "${m[1]}" 저장 중...`;
-          m = t.match(/^Saved and triggered reload for\s+"(.+)"\.$/i);
-          if (m) return `"${m[1]}" 서버를 저장하고 다시 불러왔습니다.`;
-          m = t.match(/^Failed to load MCP configuration:\s*(.+)$/i);
-          if (m) return `MCP 설정을 불러오지 못했습니다: ${m[1]}`;
-          m = t.match(/^Failed to\s+(toggle|delete)\s+"(.+)":\s*(.+)$/i);
-          if (m) return `"${m[2]}" 서버 ${m[1].toLowerCase() === "toggle" ? "상태 전환" : "삭제"} 실패: ${m[3]}`;
-          m = t.match(/^Failed to toggle tool:\s*(.+)$/i);
-          if (m) return `도구 상태 전환 실패: ${m[1]}`;
-          m = t.match(/^Invalid JSON(?: input)?:\s*(.+)$/i);
-          if (m) return `잘못된 JSON 형식: ${m[1]}`;
-          m = t.match(/^Server\s+"(.+)"\s+configuration must be a JSON object\.$/i);
-          if (m) return `"${m[1]}" 서버 설정은 JSON 객체여야 합니다.`;
-          m = t.match(/^Server\s+"(.+)"\s+must specify either "command"\s*\(Stdio\)\s*or "url"\s*\(Streamable HTTP\)\.$/i);
-          if (m) return `"${m[1]}" 서버는 "command"(Stdio) 또는 "url"(Streamable HTTP) 중 하나를 지정해야 합니다.`;
           m = t.match(/^Error:\s*(.+)$/i);
           if (m) return `오류: ${m[1]}`;
-          m = t.match(/^HTTP\s+(.+?)\s+\[🔑 Auth Header Configured\]$/i);
-          if (m) return `HTTP ${m[1]}  [🔑 인증 헤더 설정됨]`;
-          m = t.match(/^Apply this authentication to all (\d+) custom HTTP servers \((.+)\)$/i);
-          if (m) return `이 인증을 ${m[1]}개 커스텀 HTTP 서버 전체에 일괄 적용 (${m[2]})`;
-          m = t.match(/^Connected \((\d+) tools available\)$/i);
-          if (m) return `연결됨 (사용 가능한 도구 ${m[1]}개)`;
-          m = t.match(/^Added\s+"(.+)",\s*which requires authentication\.\s*Enter your token or complete OAuth below\.$/i);
-          if (m) return `"${m[1]}" 서버를 추가했습니다. 인증이 필요하므로 아래에서 토큰을 입력하거나 OAuth 인증을 완료하세요.`;
-          m = t.match(
-            /^Auto-filled form for\s+"(.+)"\.\s*Review settings or authentication below,\s*then click Save & Connect Server\.$/i
-          );
-          if (m) return `"${m[1]}" 서버 폼을 자동으로 채웠습니다. 아래에서 설정 또는 인증을 확인한 뒤 [서버 저장 및 연결]을 클릭하세요.`;
-          m = t.match(/^OAuth authentication completed for\s+"(.+)"\.$/i);
-          if (m) return `"${m[1]}" 서버의 OAuth 인증이 완료되었습니다.`;
-          m = t.match(/^Disconnected OAuth session for\s+"(.+)"\.$/i);
-          if (m) return `"${m[1]}" 서버의 OAuth 세션 연결을 해제했습니다.`;
-          m = t.match(/^Edit settings & authentication for\s+"(.+)"$/i);
-          if (m) return `"${m[1]}" 설정 및 인증 수정`;
-          m = t.match(/^Configure Bearer token,\s*API Key,\s*or OAuth for\s+"(.+)"$/i);
-          if (m) return `"${m[1]}" Bearer 토큰, API Key 또는 OAuth 설정`;
-          m = t.match(/^Configure authentication for\s+"(.+)"$/i);
-          if (m) return `"${m[1]}" 인증 설정`;
-          m = t.match(/^Edit settings for\s+"(.+)"$/i);
-          if (m) return `"${m[1]}" 설정 수정`;
-          m = t.match(/^HTTP\s+(.+?)\s+\[🔗 OAuth Connected\]$/i);
-          if (m) return `HTTP ${m[1]}  [🔗 OAuth 연결됨]`;
-          m = t.match(/^HTTP\s+(.+?)\s+\[🔗 OAuth\]$/i);
-          if (m) return `HTTP ${m[1]}  [🔗 OAuth]`;
-          m = t.match(/^●\s*OAuth Connected\s*\((.+)\)$/i);
-          if (m) return `● OAuth 연결됨 (${m[1]})`;
-          m = t.match(/^🔗\s*OAuth Ready\s*—\s*Sign in to\s+"(.+)"\s+in your browser\.$/i);
-          if (m) return `🔗 OAuth 준비됨 — 브라우저에서 "${m[1]}"에 로그인하세요.`;
-          m = t.match(/^🔗\s*Connect\s+(.+?)\s*↗$/i);
-          if (m) return `🔗 ${m[1]} 연결 ↗`;
-          m = t.match(/^Connect\s+(.+?)\s*↗$/i);
-          if (m) return `${m[1]} 연결 ↗`;
           m = t.match(/^Connect\s+(.+)$/i);
           if (m) return `${m[1]} 연결`;
-          m = t.match(
-            /^Antigravity uses browser OAuth authentication to interact with the\s+"(.+)"\s+MCP server\.?\s*Click Connect below to sign in with your account and authorize access\.$/i
-          );
-          if (m) return `Antigravity는 브라우저 OAuth 인증을 사용하여 "${m[1]}" MCP 서버와 연동합니다. 아래 연결 버튼을 클릭해 계정으로 로그인하고 접근 권한을 승인하세요.`;
-          m = t.match(/^OAuth sign-in window is ready for\s+"(.+)"\.$/i);
-          if (m) return `"${m[1]}" 서버의 OAuth 로그인 창이 준비되었습니다.`;
-          m = t.match(/^Disconnected OAuth for\s+"(.+)"\.$/i);
-          if (m) return `"${m[1]}" 서버의 OAuth 연결을 해제했습니다.`;
-          m = t.match(/^Auto-filled form for\s+"(.+)"\.\s*Review OAuth \/ connection settings below\.$/i);
-          if (m) return `"${m[1]}" 서버 폼을 자동으로 채웠습니다. 아래에서 OAuth 및 연결 설정을 확인하세요.`;
-          m = t.match(/^Loaded preset\s+"(.+)"\.$/i);
-          if (m) {
-            const inner = translateStaticUiSync(m[1]) || m[1];
-            return `"${inner}" 프리셋을 불러왔습니다.`;
-          }
           m = t.match(/^Thought for\s+(.+)$/i);
           if (m) return `${formatDurationKo(m[1])} 동안 생각함`;
           m = t.match(/^Thinking for\s+(.+)$/i);
@@ -4247,9 +4147,9 @@ var __agyKoTranslatorBundleExports = (() => {
     "src/adapters/antigravity/ui-localizer.js"(exports, module) {
       "use strict";
       var { isAlreadyKoreanOrNonEnglish } = require_text_tokenizer();
-      var BASE_EXCLUDED_SELECTOR = 'style, script, code, pre, kbd, samp, var, svg, math, [contenteditable="true"], .monaco-editor, .xterm, .cm-editor, .cm-content, .cm-line, .shiki, .code-block, .code-line, .line-content, .token, [class*="language-"], [data-line-number], [data-line], [data-line-start], [data-line-end], [data-start-line], [data-end-line], [data-diff-type], [data-diff-line], [data-file-uri], [data-active-file-uri], [data-current-line], [data-current-start-line], [data-current-end-line], [data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], [data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], [data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], [data-agy-no-translate="true"], .agy-ctx-statusbar, .agy-ctx-menu, #agy-ctx-debug-modal, .agy-ctx-modal-backdrop, .agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], [data-testid="side-question-answer"] button[aria-expanded], [data-testid="planner-response-text"], [data-testid="user-message-bubble"], [data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], .cursor-edit, [data-agy-ko-thought-host="1"]';
+      var BASE_EXCLUDED_SELECTOR = 'style, script, code, pre, kbd, samp, var, svg, math, [contenteditable="true"], .monaco-editor, .xterm, .cm-editor, .cm-content, .cm-line, .shiki, .code-block, .code-line, .line-content, .token, [class*="language-"], [data-line-number], [data-line], [data-line-start], [data-line-end], [data-start-line], [data-end-line], [data-diff-type], [data-diff-line], [data-file-uri], [data-active-file-uri], [data-current-line], [data-current-start-line], [data-current-end-line], [data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], [data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], [data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], [data-agy-no-translate="true"], [translate="no"], .agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], [data-testid="side-question-answer"] button[aria-expanded], [data-testid="planner-response-text"], [data-testid="user-message-bubble"], [data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], .cursor-edit, [data-agy-ko-thought-host="1"]';
       var TEXT_EXCLUDED_SELECTOR = "textarea, " + BASE_EXCLUDED_SELECTOR;
-      var STATIC_UI_SUBTREE_PRUNE_SELECTOR = TEXT_EXCLUDED_SELECTOR + ", #agy-mcp-manager-modal-backdrop, #agy-mcp-edit-popup-backdrop, #agy-mcp-oauth-connect-backdrop, #agy-mcp-settings-pane";
+      var STATIC_UI_SUBTREE_PRUNE_SELECTOR = TEXT_EXCLUDED_SELECTOR;
       var EXCLUDED_CODE_DATA_ATTR_PREFIX_REGEX = /^data-(?:line-|quotable|diff-|code-|token-|syntax-|file-path|file-uri|symbol-|lsp-)/i;
       function hasExcludedCodeDataAttrPrefix(el, rootBoundary = null) {
         let cur = el;
@@ -4338,15 +4238,6 @@ var __agyKoTranslatorBundleExports = (() => {
               if (el.tagName === "P" && !el.closest('[contenteditable="true"]') && (txt.startsWith("Ask anything") || txt.startsWith("Message subagent") || txt.startsWith("무엇이든 물어보세요") || txt.startsWith("서브에이전트에게 메시지 보내기"))) {
                 return false;
               }
-              return true;
-            }
-          }
-          if (!forAttributes && el.classList && (el.classList.contains("agy-mcp-server-name") || el.classList.contains("agy-mcp-tool-chip"))) {
-            return true;
-          }
-          if (!forAttributes && el.classList && el.classList.contains("agy-mcp-cmd-preview")) {
-            const txt = String(el.textContent || "").trim();
-            if (txt !== "(managed by plugin)" && txt !== "(플러그인에서 관리됨)" && txt !== "(empty command)" && txt !== "(빈 명령어)" && !/\[(?:🔑\s*(?:Auth Header Configured|인증 헤더 설정됨)|🔗\s*OAuth(?:\s*Connected|\s*연결됨)?)\]/.test(txt)) {
               return true;
             }
           }
@@ -4454,7 +4345,7 @@ var __agyKoTranslatorBundleExports = (() => {
         function localizeStaticUiInRoot(rootNode, observer = null) {
           const activeDoc = rootNode && rootNode.ownerDocument || doc;
           if (!rootNode || !activeDoc || typeof activeDoc.createTreeWalker !== "function") return;
-          if (rootNode.nodeType === 1 && typeof rootNode.getAttribute === "function" && rootNode.getAttribute("data-agy-no-translate") === "true") {
+          if (rootNode.nodeType === 1 && typeof rootNode.getAttribute === "function" && (rootNode.getAttribute("data-agy-no-translate") === "true" || rootNode.getAttribute("translate") === "no")) {
             return;
           }
           localizeAttributesInRoot(rootNode);
@@ -5049,8 +4940,14 @@ var __agyKoTranslatorBundleExports = (() => {
           });
         }
         __name(restoreOriginalCursorEdits, "restoreOriginalCursorEdits");
+        function isInsideNoTranslateSubtree(el) {
+          if (!el || typeof el.closest !== "function") return false;
+          return Boolean(el.closest('[data-agy-no-translate="true"], [translate="no"]'));
+        }
+        __name(isInsideNoTranslateSubtree, "isInsideNoTranslateSubtree");
         function processCursorEdit(cursorEdit, triggerBtn = null) {
           if (!cursorEdit || !doc) return;
+          if (isInsideNoTranslateSubtree(cursorEdit)) return;
           if (!getTranslateThinkingEnabled()) {
             if (cursorEdit.getAttribute("data-agy-ko-ready") === "1" || cursorEdit.querySelector && cursorEdit.querySelector(":scope > .agy-ko-thought-wrap")) {
               resetThoughtHost(cursorEdit);
@@ -5288,6 +5185,7 @@ var __agyKoTranslatorBundleExports = (() => {
           const browserThoughtSpans = doc.querySelectorAll('[data-testid="browser-subagent-thinking"] span');
           const translateEnabled = Boolean(getTranslateThinkingEnabled());
           for (const el of browserThoughtSpans) {
+            if (isInsideNoTranslateSubtree(el)) continue;
             if (!el.childNodes || el.childNodes.length !== 1 || el.firstChild.nodeType !== 3) continue;
             const tn = el.firstChild;
             if (!translateEnabled) {
@@ -5432,7 +5330,7 @@ var __agyKoTranslatorBundleExports = (() => {
       var { createAntigravityThinkingTranslator } = require_thinking_translator();
       var STYLE_ID = "agy-ko-thought-localizer-style";
       var ANTIGRAVITY_SELECTORS = Object.freeze({
-        noTranslateSubtree: '.agy-ko-thought-wrap, [data-agy-no-translate="true"]',
+        noTranslateSubtree: '.agy-ko-thought-wrap, [data-agy-no-translate="true"], [translate="no"]',
         triggerLabelClass: "agy-ko-trigger-label",
         conversationViews: '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]',
         conversationViewFallbackList: Object.freeze([

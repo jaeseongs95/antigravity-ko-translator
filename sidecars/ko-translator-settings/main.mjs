@@ -98,7 +98,7 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
       settingsCorrupted = true;
       settingsError = err && err.message ? err.message : 'SETTINGS_FILE_CORRUPTED';
     }
-    const pluginEnabled = isPluginEnabled(paths.CONFIG_JSON_PATH);
+    const pluginEnabled = isPluginEnabled(paths.CONFIG_JSON_PATH, activeProfile.pluginId);
     const manifest = readDropinManifest(paths.MANIFEST_PATH);
     const manifestValidation = manifest
       ? validateDropinManifest(manifest, paths.PLUGINS_ROOT_DIR)

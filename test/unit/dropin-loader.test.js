@@ -20,6 +20,8 @@ const {
   isPureUnpatchedArchive,
   readAsarArchive,
 } = require('../../host/dropin-loader');
+const { buildStatusReport } = require('../../host/cli');
+const { ANTIGRAVITY_HOST_PROFILE } = require('../../host/profiles/antigravity');
 const vm = require('node:vm');
 
 function buildSyntheticAsar(filePath, version = '2.33.0') {
@@ -304,6 +306,121 @@ test('F5: isPureUnpatchedArchive rejects legacy v1.x ASAR patches and rollback f
       fileMap: new Map([['dist/main.js', Buffer.from('// AGY_STATUSBAR_V6\n', 'utf8')]]),
     };
     assert.equal(isPureUnpatchedArchive(fakeLegacyArchive), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R9 F1: non-Antigravity HostProfile works end-to-end across install, delta>0 comment stripping, .orig reinstall, rollback, and buildStatusReport', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-custom-profile-'));
+  try {
+    const customProfile = Object.freeze({
+      ...ANTIGRAVITY_HOST_PROFILE,
+      id: 'acme-desktop',
+      pluginId: 'acme-ko-plugin',
+      manifestFileName: 'acme-ko-plugin.json',
+      patchMarker: 'ACME_EXT_LOADER_V1',
+      legacyPatchMarkers: Object.freeze(['ACME_LEGACY_PATCH']),
+      mainEntry: 'dist/main.js',
+      mainAnchorTarget: "app.on('web-contents-created', (_e, contents) => {",
+      // Intentionally longer than mainAnchorTarget AND puts custom marker on a standalone // line
+      // so delta > 0 comment stripping MUST preserve the custom profile marker.
+      mainAnchorReplacement:
+        "app.on('web-contents-created', (_e, contents) => {\n// ACME_EXT_LOADER_V1\ntry{require(process.env.ACME_LOADER).attach(contents);}catch(_e){}",
+    });
+
+    const asarPath = path.join(dir, 'app.asar');
+    const pkgBuf = Buffer.from(JSON.stringify({ name: 'acme-app', version: '9.1.0' }), 'utf8');
+    const mainLines = [
+      "'use strict';",
+      "const { app } = require('electron');",
+      ...Array.from({ length: 12 }, (_, i) => `// acme headroom comment line ${i} for exact size padding`),
+      customProfile.mainAnchorTarget,
+      '  void contents;',
+      '});',
+    ];
+    const mainBuf = Buffer.from(mainLines.join('\n') + '\n', 'utf8');
+    const makeIntegrity = (buf) => {
+      const hash = crypto.createHash('sha256').update(buf).digest('hex');
+      return { algorithm: 'SHA256', hash, blockSize: 4 * 1024 * 1024, blocks: [hash] };
+    };
+    const files = {
+      'package.json': { size: pkgBuf.length, offset: '0', integrity: makeIntegrity(pkgBuf) },
+      dist: {
+        files: {
+          'main.js': { size: mainBuf.length, offset: String(pkgBuf.length), integrity: makeIntegrity(mainBuf) },
+        },
+      },
+    };
+    const headerStrBuf = Buffer.from(JSON.stringify({ files }), 'utf8');
+    const aligned = Math.ceil(headerStrBuf.length / 4) * 4;
+    const u8 = 4 + aligned;
+    const u4 = 4 + u8;
+    const hdr = Buffer.alloc(8 + u4, 0);
+    hdr.writeUInt32LE(4, 0);
+    hdr.writeUInt32LE(u4, 4);
+    hdr.writeUInt32LE(u8, 8);
+    hdr.writeUInt32LE(headerStrBuf.length, 12);
+    headerStrBuf.copy(hdr, 16);
+    const origAsarBuf = Buffer.concat([hdr, pkgBuf, mainBuf]);
+    fs.writeFileSync(asarPath, origAsarBuf);
+
+    const configJsonPath = path.join(dir, 'config.json');
+    fs.writeFileSync(
+      configJsonPath,
+      JSON.stringify({
+        plugins: {
+          'ko-thought-translator': { enabled: true },
+          'acme-ko-plugin': { enabled: false },
+        },
+      }),
+      'utf8'
+    );
+
+    const pluginsRoot = path.join(dir, 'plugins');
+    const entryScript = path.join(pluginsRoot, 'acme-ko-plugin', 'dist', 'renderer.js');
+    fs.mkdirSync(path.dirname(entryScript), { recursive: true });
+    fs.writeFileSync(entryScript, '// acme renderer\n', 'utf8');
+
+    const overrides = {
+      ASAR_PATH: asarPath,
+      ASAR_LOCK_PATH: path.join(dir, 'asar.lock'),
+      CONFIG_JSON_PATH: configJsonPath,
+      SETTINGS_PATH: path.join(dir, 'settings.json'),
+      SETTINGS_LOCK_PATH: path.join(dir, 'settings.lock'),
+      PLUGINS_ROOT_DIR: pluginsRoot,
+      UI_EXTENSIONS_DIR: path.join(dir, 'ui-extensions.d'),
+      MANIFEST_PATH: path.join(dir, 'ui-extensions.d', customProfile.manifestFileName),
+      LOADER_SCRIPT_PATH: path.join(dir, 'ui-extensions-loader.js'),
+      RENDERER_BUNDLE_PATH: entryScript,
+    };
+
+    registerPluginManifest(overrides, customProfile);
+    const firstInstall = installAsarDropinLoader(overrides, customProfile);
+    assert.equal(firstInstall.status, 'INSTALLED');
+    assert.equal(firstInstall.patchMarker, 'ACME_EXT_LOADER_V1');
+    assert.equal(
+      isAsarLoaderInstalled(asarPath, customProfile),
+      true,
+      'Custom profile marker must survive delta > 0 comment stripping'
+    );
+
+    // Status report must check customProfile.pluginId (false), NOT hardcoded ko-thought-translator (true)
+    const statusDisabled = buildStatusReport(overrides, customProfile);
+    assert.equal(statusDisabled.pluginEnabled, false);
+    assert.equal(statusDisabled.asarLoaderInstalled, true);
+    assert.equal(statusDisabled.patchMarker, 'ACME_EXT_LOADER_V1');
+
+    // Rollback must restore byte-identically with customProfile
+    const rb = rollbackAsarDropinLoader(overrides, customProfile);
+    assert.equal(rb.status, 'ROLLED_BACK');
+    assert.deepEqual(fs.readFileSync(asarPath), origAsarBuf);
+
+    // Reinstall when .orig backup already exists must pass profile into verifyOrigBackupStrict
+    registerPluginManifest(overrides, customProfile);
+    const reinstall = installAsarDropinLoader(overrides, customProfile);
+    assert.equal(reinstall.status, 'INSTALLED');
+    assert.equal(isAsarLoaderInstalled(asarPath, customProfile), true);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

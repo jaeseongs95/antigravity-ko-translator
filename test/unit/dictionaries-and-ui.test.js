@@ -210,3 +210,24 @@ test('F1 (D-0042): ALL Antigravity 2.0 code/diff/syntax/monospace selectors are 
     );
   }
 });
+
+test('Native-app-only opt-out: [translate="no"] and [data-agy-no-translate="true"] are always excluded without cross-plugin selector coupling', () => {
+  assert.equal(BASE_EXCLUDED_SELECTOR.includes('[translate="no"]'), true);
+  assert.equal(BASE_EXCLUDED_SELECTOR.includes('[data-agy-no-translate="true"]'), true);
+  assert.equal(BASE_EXCLUDED_SELECTOR.includes('agy-ctx-'), false);
+  assert.equal(BASE_EXCLUDED_SELECTOR.includes('agy-mcp-'), false);
+
+  const localizer = createAntigravityUiLocalizer({
+    targetDoc: null,
+    catalog: createAntigravityDictionaryCatalog(),
+  });
+  for (const attrSel of ['[translate="no"]', '[data-agy-no-translate="true"]']) {
+    const el = {
+      nodeType: 1,
+      attributes: [],
+      closest: (sel) => (sel.includes(attrSel) ? el : null),
+      parentElement: null,
+    };
+    assert.equal(localizer.isExcludedFromStaticUiLocalization(el), true, `${attrSel} must be excluded`);
+  }
+});

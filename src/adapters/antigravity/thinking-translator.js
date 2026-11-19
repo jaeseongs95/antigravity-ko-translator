@@ -112,8 +112,14 @@ function createAntigravityThinkingTranslator({
     });
   }
 
+  function isInsideNoTranslateSubtree(el) {
+    if (!el || typeof el.closest !== 'function') return false;
+    return Boolean(el.closest('[data-agy-no-translate="true"], [translate="no"]'));
+  }
+
   function processCursorEdit(cursorEdit, triggerBtn = null) {
     if (!cursorEdit || !doc) return;
+    if (isInsideNoTranslateSubtree(cursorEdit)) return;
     if (!getTranslateThinkingEnabled()) {
       if (
         cursorEdit.getAttribute('data-agy-ko-ready') === '1' ||
@@ -393,6 +399,7 @@ function createAntigravityThinkingTranslator({
     const browserThoughtSpans = doc.querySelectorAll('[data-testid="browser-subagent-thinking"] span');
     const translateEnabled = Boolean(getTranslateThinkingEnabled());
     for (const el of browserThoughtSpans) {
+      if (isInsideNoTranslateSubtree(el)) continue;
       if (!el.childNodes || el.childNodes.length !== 1 || el.firstChild.nodeType !== 3) continue;
       const tn = el.firstChild;
       if (!translateEnabled) {

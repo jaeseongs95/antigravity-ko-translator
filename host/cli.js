@@ -46,7 +46,7 @@ function buildStatusReport(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROF
   return {
     version: '2.0.0',
     patchMarker: activeProfile.patchMarker,
-    pluginEnabled: isPluginEnabled(p.CONFIG_JSON_PATH),
+    pluginEnabled: isPluginEnabled(p.CONFIG_JSON_PATH, activeProfile.pluginId),
     manifestRegistered: Boolean(manifestValidation.ok),
     manifestValidation,
     asarLoaderInstalled: isAsarLoaderInstalled(p.ASAR_PATH, activeProfile),

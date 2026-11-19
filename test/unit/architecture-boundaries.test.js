@@ -22,6 +22,8 @@ test('Clean-Slate Zero-Interference: zero legacy remote, statusbar, Fiber, Angul
   const forbiddenPatterns = [
     /statusbar_autoinject/i,
     /agy-statusbar-code/i,
+    /agy-ctx-statusbar/i,
+    /agy-mcp-/i,
     /app_storage\.json/i,
     /__reactFiber\$/,
     /__reactContainer\$/,

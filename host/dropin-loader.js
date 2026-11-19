@@ -728,7 +728,10 @@ function installAsarDropinLoader(pathOverrides = null, profile = ANTIGRAVITY_HOS
     const metaPath = `${backupPath}.json`;
 
     if (fs.existsSync(backupPath)) {
-      const check = verifyOrigBackupStrict(backupPath, metaPath, archive.appVersion, { backfillMeta: true });
+      const check = verifyOrigBackupStrict(backupPath, metaPath, archive.appVersion, {
+        backfillMeta: true,
+        profile: activeProfile,
+      });
       if (!check.ok) {
         return { status: check.status, appVersion: archive.appVersion };
       }
@@ -760,7 +763,7 @@ function installAsarDropinLoader(pathOverrides = null, profile = ANTIGRAVITY_HOS
       return { status: 'ERR_MAIN_MISSING', appVersion: archive.appVersion };
     }
 
-    const patchedMainBuf = transformExactSize(mainBuf, anchorTarget, anchorReplacement);
+    const patchedMainBuf = transformExactSize(mainBuf, anchorTarget, anchorReplacement, marker);
     archive.fileMap.set(mainEntry, patchedMainBuf);
 
     const chunks = [];
