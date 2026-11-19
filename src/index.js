@@ -24,10 +24,14 @@ function createKoTranslator(options = {}) {
   });
 }
 
-function mountIfBrowser(globalScope) {
+function mountIfBrowser(globalScope, hostCapabilityArg = null) {
   const win = globalScope || (typeof window !== 'undefined' ? window : null);
   const doc = win && win.document ? win.document : typeof document !== 'undefined' ? document : null;
   if (!win || !doc) return null;
+
+  const resolvedHostCap =
+    (hostCapabilityArg && typeof hostCapabilityArg === 'object' ? hostCapabilityArg : null) ||
+    (win && win.__ADDON_HOST_API__ && typeof win.__ADDON_HOST_API__ === 'object' ? win.__ADDON_HOST_API__ : null);
 
   // Never run inside non-top frames (e.g. Sidecar AUX_PANE iframes) unless explicitly mounted by caller.
   if (win.__AGY_KO_TRANSLATOR_AUTO_MOUNT__ === false) {
@@ -60,16 +64,33 @@ function mountIfBrowser(globalScope) {
     win,
     doc,
     settings: initialSettings,
-    version: '2.0.0',
+    hostCapability: resolvedHostCap,
+    version: '2.1.0',
   });
   win.__agyCreateKoTranslator = createKoTranslator;
   win.__agyKoTranslator = instance;
+
+  if (resolvedHostCap && typeof resolvedHostCap.onDispose === 'function') {
+    try {
+      resolvedHostCap.onDispose(() => {
+        instance.dispose();
+        if (win.__agyKoTranslator === instance) {
+          delete win.__agyKoTranslator;
+        }
+      });
+    } catch (_err) {}
+  }
+
   instance.start();
   return instance;
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-  mountIfBrowser(window);
+  // Capture the per-plugin scoped capability handle supplied by antigravity-native-addon-host's
+  // `(function(addonHost){ ... })(__addonHandle)` wrapper when present.
+  // eslint-disable-next-line no-undef
+  const detectedHostCap = typeof addonHost !== 'undefined' ? addonHost : null;
+  mountIfBrowser(window, detectedHostCap);
 }
 
 module.exports = {

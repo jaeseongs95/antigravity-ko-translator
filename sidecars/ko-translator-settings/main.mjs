@@ -29,9 +29,11 @@ const {
   saveTranslatorSettings,
   isPluginEnabled,
 } = require(path.join(REPO_ROOT, 'host', 'config-store.js'));
-const { isAsarLoaderInstalled, readDropinManifest, validateDropinManifest } = require(
-  path.join(REPO_ROOT, 'host', 'dropin-loader.js')
-);
+const {
+  isAddonHostLoaderPresent,
+  readRegisteredManifest,
+  validateAddonManifestContract,
+} = require(path.join(REPO_ROOT, 'host', 'addon-registry.js'));
 
 const INDEX_HTML_PATH = path.join(__dirname, 'index.html');
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -99,14 +101,17 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
       settingsError = err && err.message ? err.message : 'SETTINGS_FILE_CORRUPTED';
     }
     const pluginEnabled = isPluginEnabled(paths.CONFIG_JSON_PATH, activeProfile.pluginId);
-    const manifest = readDropinManifest(paths.MANIFEST_PATH);
+    const manifest = readRegisteredManifest(paths.MANIFEST_PATH);
     const manifestValidation = manifest
-      ? validateDropinManifest(manifest, paths.PLUGINS_ROOT_DIR)
+      ? validateAddonManifestContract(manifest, paths.PLUGINS_ROOT_DIR, {
+          expectedHostProfileId: activeProfile.id,
+          checkFilesExist: true,
+        })
       : { ok: false, reason: 'MANIFEST_NOT_FOUND' };
-    const asarLoaderInstalled = isAsarLoaderInstalled(paths.ASAR_PATH, activeProfile);
+    const addonHostInstalled = isAddonHostLoaderPresent(paths.LOADER_SCRIPT_PATH);
     return {
       ok: true,
-      version: '2.0.0',
+      version: '2.1.0',
       csrfToken,
       settings,
       settingsCorrupted,
@@ -114,7 +119,8 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
       diagnostics: {
         pluginEnabled,
         manifestRegistered: Boolean(manifestValidation.ok),
-        asarLoaderInstalled,
+        addonHostInstalled,
+        asarLoaderInstalled: addonHostInstalled,
         settingsPath: paths.SETTINGS_PATH,
       },
     };

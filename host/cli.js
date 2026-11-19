@@ -1,13 +1,17 @@
 'use strict';
 
 /**
- * Explicit, Zero-Daemon Host CLI for ko-thought-translator (Desktop Native App Only).
+ * Explicit, Zero-Daemon Addon CLI for `ko-thought-translator` (AddonManifest.v1).
+ *
+ * Zero `app.asar` mutation: `app.asar` install/rollback belongs solely to
+ * `antigravity-native-addon-host`. This CLI manages ONLY this plugin's manifest
+ * registration in `<appDir>/addons.d/ko-thought-translator.json` and isolated settings.
  *
  * Commands:
  *   --status     Read-only JSON status report (0 file mutations)
- *   --install    Register `ui-extensions.d/ko-thought-translator.json` & install `dist/main.js` drop-in loader
+ *   --install    Register `addons.d/ko-thought-translator.json` (AddonManifest.v1)
  *   --uninstall  Unregister manifest & clean `ko_translator_settings.json`
- *   --rollback   Unregister manifest & atomically restore pure `.orig` `app.asar` when no sibling manifests remain
+ *   --rollback   Unregister this plugin's manifest & settings (delegates `app.asar` rollback to addon-host)
  */
 
 const { resolveHostPaths } = require('./paths');
@@ -18,22 +22,28 @@ const {
   removeTranslatorSettings,
 } = require('./config-store');
 const {
-  readDropinManifest,
-  validateDropinManifest,
-  isAsarLoaderInstalled,
-  registerPluginManifest,
-  unregisterPluginManifest,
-  installAsarDropinLoader,
-  rollbackAsarDropinLoader,
-} = require('./dropin-loader');
+  readRegisteredManifest,
+  validateAddonManifestContract,
+  isAddonHostLoaderPresent,
+  registerAddonManifest,
+  unregisterAddonManifest,
+} = require('./addon-registry');
+
+const HOST_INSTALL_HINT =
+  'Install the shared host via antigravity-native-addon-host (`addon-host --install`) to load AddonManifest.v1 plugins.';
 
 function buildStatusReport(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROFILE) {
   const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
   const p = { ...resolveHostPaths(process.env, activeProfile), ...(pathOverrides || {}) };
-  const manifest = readDropinManifest(p.MANIFEST_PATH);
+  const manifest = readRegisteredManifest(p.MANIFEST_PATH);
   const manifestValidation = manifest
-    ? validateDropinManifest(manifest, p.PLUGINS_ROOT_DIR)
+    ? validateAddonManifestContract(manifest, p.PLUGINS_ROOT_DIR, {
+        expectedHostProfileId: activeProfile.id,
+        checkFilesExist: true,
+      })
     : { ok: false, reason: 'MANIFEST_NOT_FOUND' };
+  const addonHostInstalled = isAddonHostLoaderPresent(p.LOADER_SCRIPT_PATH);
+
   let settings = null;
   let settingsCorrupted = false;
   let settingsError = null;
@@ -44,12 +54,14 @@ function buildStatusReport(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROF
     settingsError = err && err.message ? err.message : 'SETTINGS_FILE_CORRUPTED';
   }
   return {
-    version: '2.0.0',
+    version: '2.1.0',
+    manifestSchema: 'AddonManifest.v1',
     patchMarker: activeProfile.patchMarker,
     pluginEnabled: isPluginEnabled(p.CONFIG_JSON_PATH, activeProfile.pluginId),
     manifestRegistered: Boolean(manifestValidation.ok),
     manifestValidation,
-    asarLoaderInstalled: isAsarLoaderInstalled(p.ASAR_PATH, activeProfile),
+    addonHostInstalled,
+    asarLoaderInstalled: addonHostInstalled,
     settings,
     settingsCorrupted,
     settingsError,
@@ -66,39 +78,34 @@ async function runCli(argv = process.argv.slice(2), pathOverrides = null, profil
     return report;
   }
 
-  if (argv.includes('--install')) {
-    const manifest = registerPluginManifest(p, activeProfile);
-    const manifestValidation = validateDropinManifest(manifest, p.PLUGINS_ROOT_DIR);
-    if (!manifestValidation.ok) {
-      unregisterPluginManifest(p, activeProfile);
+  if (argv.includes('--install') || argv.includes('--register')) {
+    const reg = registerAddonManifest(p, activeProfile);
+    if (!reg.ok) {
       const out = {
         status: 'FAILED',
-        error: manifestValidation.reason || 'INVALID_MANIFEST',
-        manifest,
-        manifestValidation,
+        error: reg.reason || 'INVALID_MANIFEST',
+        manifest: reg.manifest || null,
+        manifestValidation: reg.manifestValidation || { ok: false, reason: reg.reason },
       };
       process.stdout.write(JSON.stringify(out, null, 2) + '\n');
       process.exitCode = 1;
       return out;
     }
-    const asar = installAsarDropinLoader(p, activeProfile);
-    const succeeded =
-      asar.status === 'INSTALLED' ||
-      asar.status === 'ALREADY_INSTALLED' ||
-      asar.status === 'SKIPPED_NO_ASAR';
-    if (!succeeded) {
-      unregisterPluginManifest(p, activeProfile);
-    }
-    const out = { status: succeeded ? 'INSTALLED' : 'FAILED', manifest, manifestValidation, asar };
+    const addonHostInstalled = isAddonHostLoaderPresent(p.LOADER_SCRIPT_PATH);
+    const out = {
+      status: 'INSTALLED',
+      manifestPath: reg.manifestPath,
+      manifest: reg.manifest,
+      manifestValidation: reg.manifestValidation,
+      addonHostInstalled,
+      ...(addonHostInstalled ? {} : { hostInstallHint: HOST_INSTALL_HINT }),
+    };
     process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-    if (!succeeded) {
-      process.exitCode = 1;
-    }
     return out;
   }
 
-  if (argv.includes('--uninstall')) {
-    const manifestRemoved = unregisterPluginManifest(p, activeProfile);
+  if (argv.includes('--uninstall') || argv.includes('--unregister')) {
+    const manifestRemoved = unregisterAddonManifest(p, activeProfile);
     const settingsRemoved = removeTranslatorSettings(p);
     const out = { status: 'UNINSTALLED', manifestRemoved, settingsRemoved };
     process.stdout.write(JSON.stringify(out, null, 2) + '\n');
@@ -106,18 +113,15 @@ async function runCli(argv = process.argv.slice(2), pathOverrides = null, profil
   }
 
   if (argv.includes('--rollback')) {
-    const rollback = rollbackAsarDropinLoader(p, activeProfile);
-    const succeeded =
-      rollback.status === 'ROLLED_BACK' ||
-      rollback.status === 'ALREADY_UNPATCHED' ||
-      rollback.status === 'SKIPPED_NO_ASAR' ||
-      rollback.status === 'MANIFEST_REMOVED_SHARED_LOADER_PRESERVED';
-    const settingsRemoved = succeeded ? removeTranslatorSettings(p) : false;
-    const out = { ...rollback, settingsRemoved };
+    const manifestRemoved = unregisterAddonManifest(p, activeProfile);
+    const settingsRemoved = removeTranslatorSettings(p);
+    const out = {
+      status: 'MANIFEST_REMOVED_HOST_PRESERVED',
+      manifestRemoved,
+      settingsRemoved,
+      note: 'To roll back app.asar itself, run `addon-host --rollback` in antigravity-native-addon-host.',
+    };
     process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-    if (!succeeded) {
-      process.exitCode = 1;
-    }
     return out;
   }
 

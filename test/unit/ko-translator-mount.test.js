@@ -350,7 +350,7 @@ test('R7 F1+F3+F5+NB1+NB5: config-store strict validation, legacy file-lock defe
     acquireExclusiveLock,
     releaseExclusiveLock,
   } = require('../../host/config-store');
-  const { buildHostLoaderScriptSource } = require('../../host/dropin-loader');
+  const { readFailClosedSettingsPayload } = require('../../host/main-hook');
 
   // F3: Forbidden provider IDs & non-string types must throw
   assert.throws(() => normalizeProviderId('constructor'), /Forbidden provider id/);
@@ -359,7 +359,7 @@ test('R7 F1+F3+F5+NB1+NB5: config-store strict validation, legacy file-lock defe
   assert.throws(() => sanitizeLlmConfig({ apiFormat: 'invalid-fmt' }, undefined, { strict: true }), /INVALID_API_FORMAT/);
   assert.throws(() => sanitizeLlmConfig({ timeoutMs: 999999 }, undefined, { strict: true }), /INVALID_TIMEOUT_MS/);
 
-  // NB1: Legacy regular-file lock (fresh -> fail-closed null; stale -> unlinked & acquired)
+  // NB1 & F1: Legacy regular-file lock + main-hook semantic corruption fail-closed
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-lock-r7-'));
   try {
     const lockPath = path.join(tmpDir, 'settings.lock');
@@ -370,14 +370,33 @@ test('R7 F1+F3+F5+NB1+NB5: config-store strict validation, legacy file-lock defe
     const tok = acquireExclusiveLock(lockPath, 5000);
     assert.ok(tok, 'Stale legacy regular-file lock must be safely replaced by proper-lockfile');
     releaseExclusiveLock(lockPath, tok);
+
+    const semanticBadSettings = path.join(tmpDir, 'bad_settings.json');
+    fs.writeFileSync(
+      semanticBadSettings,
+      JSON.stringify({
+        schemaVersion: 1,
+        enabled: true,
+        customProviders: [
+          {
+            id: 'bad-secret',
+            endpointUrl: 'https://api.example.com/v1',
+            allowRemoteHttps: true,
+            headers: { Authorization: 'Bearer leak' },
+            bodyTemplate: { q: '{{text}}' },
+            responsePath: 'text',
+          },
+        ],
+      }),
+      'utf8'
+    );
+    assert.deepEqual(readFailClosedSettingsPayload({ SETTINGS_PATH: semanticBadSettings }), {
+      enabled: false,
+      settingsCorrupted: true,
+    });
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
-
-  // F1: buildHostLoaderScriptSource must reject semantic corruption (secret headers / bad types) fail-closed
-  const loaderSrc = buildHostLoaderScriptSource();
-  assert.match(loaderSrc, /loadValidatedSettings/);
-  assert.match(loaderSrc, /Promise\.allSettled/);
 
   // F5: bootstrap cache-variant invalidation when local-llm model/timeout changes
   const { win, doc, cleanup } = createHappyDomEnv();
@@ -517,5 +536,110 @@ test('R8 F1+F3: Thinking <pre><code> blocks never leak to translator & preserve 
     );
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('AddonManifest.v1 capability handle: dist/renderer.js uses addonHost.injectStyle/removeStyle/onDispose and skips [data-addon-host-owner] & dynamic getNoTranslateSelector()', async () => {
+  const { win, doc, cleanup } = createHappyDomEnv();
+
+  const convView = doc.createElement('div');
+  convView.setAttribute('data-testid', 'conversation-view');
+  const nativeBtn = doc.createElement('button');
+  nativeBtn.textContent = 'Settings';
+  convView.appendChild(nativeBtn);
+
+  // Sibling plugin slot stamped by antigravity-native-addon-host
+  const peerSlot = doc.createElement('div');
+  peerSlot.setAttribute('data-addon-host-owner', 'antigravity-statusbar');
+  peerSlot.setAttribute('data-addon-host-slot', 'antigravity-statusbar.root');
+  const peerLabel = doc.createElement('span');
+  peerLabel.textContent = 'Settings';
+  peerSlot.appendChild(peerLabel);
+  const peerTrigger = doc.createElement('button');
+  peerTrigger.setAttribute('data-testid', 'thinking-collapsible-trigger');
+  peerTrigger.innerHTML = '<span>Thought for 5s</span>';
+  peerSlot.appendChild(peerTrigger);
+  convView.appendChild(peerSlot);
+
+  // Custom opt-out selector supplied dynamically by host capability handle
+  const customPeer = doc.createElement('div');
+  customPeer.setAttribute('data-custom-host-optout', 'true');
+  const customPeerLabel = doc.createElement('span');
+  customPeerLabel.textContent = 'Thinking';
+  customPeer.appendChild(customPeerLabel);
+  convView.appendChild(customPeer);
+
+  doc.body.appendChild(convView);
+
+  const injectedStyles = new Map();
+  const removedStyles = [];
+  const disposeCallbacks = [];
+  const mockAddonHost = Object.freeze({
+    pluginId: 'ko-thought-translator',
+    hostVersion: '1.0.1',
+    hostProfileId: 'antigravity-desktop',
+    storageNamespace: 'ko-thought-translator',
+    ipcChannelPrefix: 'ko-translator:',
+    getNoTranslateSelector() {
+      return '[data-addon-host-owner], [translate="no"], [data-agy-no-translate="true"], [data-custom-host-optout="true"]';
+    },
+    injectStyle(styleId, cssText) {
+      injectedStyles.set(styleId, cssText);
+    },
+    removeStyle(styleId) {
+      removedStyles.push(styleId);
+      injectedStyles.delete(styleId);
+    },
+    onDispose(fn) {
+      disposeCallbacks.push(fn);
+    },
+  });
+
+  const bundleCode = fs.readFileSync(BUNDLE_PATH, 'utf8');
+  const wrapped = `(function(addonHost){\n${bundleCode}\n})(addonHost);`;
+  const ctx = vm.createContext({
+    window: win,
+    document: doc,
+    Node: win.Node,
+    MutationObserver: win.MutationObserver,
+    AbortController: win.AbortController || AbortController,
+    URL: win.URL || URL,
+    setTimeout: win.setTimeout.bind(win),
+    clearTimeout: win.clearTimeout.bind(win),
+    setInterval: win.setInterval.bind(win),
+    clearInterval: win.clearInterval.bind(win),
+    console,
+    addonHost: mockAddonHost,
+  });
+
+  try {
+    vm.runInContext(wrapped, ctx, { filename: 'dist/renderer.js' });
+
+    assert.equal(nativeBtn.textContent, '설정', 'Native host button must be localized');
+    assert.equal(peerLabel.textContent, 'Settings', 'Sibling plugin [data-addon-host-owner] UI must NEVER be translated');
+    assert.equal(
+      peerTrigger.querySelector('.agy-ko-trigger-label'),
+      null,
+      'Sibling plugin button inside [data-addon-host-owner] must NEVER be touched by trigger controller'
+    );
+    assert.equal(
+      customPeerLabel.textContent,
+      'Thinking',
+      'Dynamic selector from addonHost.getNoTranslateSelector() must NEVER be translated'
+    );
+    assert.equal(injectedStyles.has(STYLE_ID), true, 'Style must be registered through addonHost.injectStyle()');
+    assert.equal(doc.getElementById(STYLE_ID), null, 'Raw <style> must not bypass addonHost.injectStyle()');
+    assert.equal(disposeCallbacks.length, 1, 'onDispose hook must be registered with addonHost');
+
+    // Trigger host-managed dispose
+    disposeCallbacks[0]();
+    assert.equal(removedStyles.includes(STYLE_ID), true, 'Host dispose must call addonHost.removeStyle()');
+    assert.equal(nativeBtn.textContent, 'Settings', 'Host dispose must restore localized native text');
+    assert.equal(win.__agyKoTranslator, undefined, 'Host dispose must clear window.__agyKoTranslator');
+  } finally {
+    if (win.__agyKoTranslator && typeof win.__agyKoTranslator.dispose === 'function') {
+      win.__agyKoTranslator.dispose();
+    }
+    cleanup();
   }
 });

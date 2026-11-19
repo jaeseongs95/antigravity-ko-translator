@@ -45,17 +45,39 @@ function isElementInLatestTurn(btn, doc, NodeCtor) {
   return false;
 }
 
+const BASE_TRIGGER_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]';
+
+function buildTriggerNoTranslateSelector(extraSelector, doc) {
+  if (typeof extraSelector !== 'string' || !extraSelector.trim()) return BASE_TRIGGER_NO_TRANSLATE_SELECTOR;
+  if (doc && typeof doc.querySelector === 'function') {
+    try {
+      doc.querySelector(extraSelector.trim());
+      return `${BASE_TRIGGER_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+    } catch (_err) {
+      return BASE_TRIGGER_NO_TRANSLATE_SELECTOR;
+    }
+  }
+  return `${BASE_TRIGGER_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+}
+
 function createAntigravityTriggerController({
   targetDoc,
   targetWin,
   catalog,
+  extraExcludedSelector = null,
   getShowThinkingEnabled = () => true,
   isDisposed = () => false,
 } = {}) {
   const doc = targetDoc || (typeof document !== 'undefined' ? document : null);
   const win = targetWin || (typeof window !== 'undefined' ? window : null);
   const NodeCtor = (win && win.Node) || (typeof Node !== 'undefined' ? Node : null);
+  const noTranslateSelector = buildTriggerNoTranslateSelector(extraExcludedSelector, doc);
   let clickListenerAttached = false;
+
+  function isInsideNoTranslateSubtree(el) {
+    if (!el || typeof el.closest !== 'function') return false;
+    return Boolean(el.closest(noTranslateSelector));
+  }
 
   function translateSync(raw) {
     return catalog && typeof catalog.translateSync === 'function' ? catalog.translateSync(raw) : null;
@@ -73,6 +95,7 @@ function createAntigravityTriggerController({
 
   function processTriggerButton(btn) {
     if (!btn || !doc || typeof btn.querySelectorAll !== 'function') return;
+    if (isInsideNoTranslateSubtree(btn)) return;
     const spans = Array.from(btn.querySelectorAll(':scope > span'));
     const origSpan = spans.find((s) => !s.classList || !s.classList.contains('agy-ko-trigger-label'));
     if (!origSpan) return;

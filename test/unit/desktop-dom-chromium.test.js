@@ -94,6 +94,7 @@ test(
     <div class="cm-editor"><span id="d42-9">Change</span></div>
     <div class="shiki"><span id="d42-10">Change</span></div>
     <div class="font-mono"><span id="d42-11">Change</span></div>
+    <div data-addon-host-owner="antigravity-statusbar" data-addon-host-slot="antigravity-statusbar.root"><span id="peer-addon-1">Settings</span></div>
   </div>
   <script>
     window.fetch = async function () {
@@ -138,6 +139,11 @@ test(
           `Real Chromium Blink CSS must exclude D-0042 element #d42-${i} from translation`
         );
       }
+      assert.match(
+        dumped,
+        /id="peer-addon-1"[^>]*>Settings</,
+        'Real Chromium Blink CSS must exclude sibling addon slot [data-addon-host-owner] from translation'
+      );
       console.log(
         JSON.stringify({
           chromiumWorkbenchVerified: true,
@@ -175,8 +181,8 @@ test(
         SETTINGS_PATH: settingsPath,
         SETTINGS_LOCK_PATH: path.join(agyDir, 'ko_translator_settings.lock'),
         CONFIG_JSON_PATH: path.join(cfgDir, 'config.json'),
-        MANIFEST_PATH: path.join(agyDir, 'ui-extensions.d', 'ko-thought-translator.json'),
-        ASAR_PATH: path.join(dir, 'missing.asar'),
+        MANIFEST_PATH: path.join(agyDir, 'addons.d', 'ko-thought-translator.json'),
+        LOADER_SCRIPT_PATH: path.join(agyDir, 'addon-host-loader.js'),
       });
       // Wrap GET / solely to trigger a real user form submit click inside headless Chrome after initial load
       const testHandle = (reqOpts) => {

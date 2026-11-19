@@ -39,8 +39,9 @@ function createTranslatorRuntime({
   doc = null,
   hostAdapter = null,
   providerBundle = null,
+  hostCapability = null,
   settings = null,
-  version = '2.0.0',
+  version = '2.1.0',
   fetchFn = null,
   onStatus = null,
 } = {}) {
@@ -235,10 +236,16 @@ function createTranslatorRuntime({
   }
   disposables.register(() => translationService.dispose());
 
+  const hostNoTranslateSelector =
+    hostCapability && typeof hostCapability.getNoTranslateSelector === 'function'
+      ? hostCapability.getNoTranslateSelector()
+      : null;
+
   const uiLocalizer = hostAdapter.createUiLocalizer({
     targetDoc,
     catalog,
     translationService,
+    extraExcludedSelector: hostNoTranslateSelector,
     isDisposed: () => disposed,
   });
 
@@ -246,6 +253,7 @@ function createTranslatorRuntime({
     targetDoc,
     targetWin,
     catalog,
+    extraExcludedSelector: hostNoTranslateSelector,
     getShowThinkingEnabled: () => state.showThinking,
     isDisposed: () => disposed,
   });
@@ -255,6 +263,7 @@ function createTranslatorRuntime({
     catalog,
     translationService,
     triggerController,
+    extraExcludedSelector: hostNoTranslateSelector,
     getTranslateThinkingEnabled: () => state.enabled && state.translateThinking,
     isDisposed: () => disposed,
     setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
@@ -272,12 +281,16 @@ function createTranslatorRuntime({
 
   function ensureStyleElement() {
     if (disposed || !targetDoc || !hostAdapter.styleId) return;
+    const cssText = typeof hostAdapter.buildOverlayCss === 'function' ? hostAdapter.buildOverlayCss() : '';
+    if (!cssText) return;
+    if (hostCapability && typeof hostCapability.injectStyle === 'function') {
+      hostCapability.injectStyle(hostAdapter.styleId, cssText);
+      return;
+    }
     const existing = targetDoc.getElementById && targetDoc.getElementById(hostAdapter.styleId);
     if (existing) return;
     const parent = targetDoc.head || targetDoc.documentElement;
     if (!parent || typeof targetDoc.createElement !== 'function') return;
-    const cssText = typeof hostAdapter.buildOverlayCss === 'function' ? hostAdapter.buildOverlayCss() : '';
-    if (!cssText) return;
     const styleEl = targetDoc.createElement('style');
     styleEl.id = hostAdapter.styleId;
     styleEl.textContent = cssText;
@@ -478,6 +491,11 @@ function createTranslatorRuntime({
     restoreThoughtBlocks();
     uiLocalizer.restoreAllMutatedNodes();
     triggerController.restoreTriggerButtons();
+    if (hostAdapter.styleId && hostCapability && typeof hostCapability.removeStyle === 'function') {
+      try {
+        hostCapability.removeStyle(hostAdapter.styleId);
+      } catch (_err) {}
+    }
     const styleEl = hostAdapter.styleId && targetDoc.getElementById && targetDoc.getElementById(hostAdapter.styleId);
     if (styleEl && typeof styleEl.remove === 'function') {
       styleEl.remove();

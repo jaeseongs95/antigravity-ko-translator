@@ -16,28 +16,34 @@ const {
 } = require('../../host/config-store');
 const { buildStatusReport, runCli } = require('../../host/cli');
 
+const REPO_ROOT = path.resolve(__dirname, '..', '..');
+
 function makeTempEnv() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-host-test-'));
   const agyDir = path.join(dir, '.gemini', 'antigravity');
   const cfgDir = path.join(dir, '.gemini', 'config');
   const pluginsDir = path.join(cfgDir, 'plugins');
+  const pluginDir = path.join(pluginsDir, 'ko-thought-translator');
   fs.mkdirSync(agyDir, { recursive: true });
-  fs.mkdirSync(path.join(pluginsDir, 'ko-thought-translator', 'dist'), { recursive: true });
-  fs.writeFileSync(path.join(pluginsDir, 'ko-thought-translator', 'dist', 'renderer.js'), '// renderer\n', 'utf8');
+  fs.mkdirSync(path.join(pluginDir, 'dist'), { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, 'dist', 'renderer.js'), '// renderer\n', 'utf8');
+  fs.writeFileSync(path.join(pluginDir, 'dist', 'main-hook.js'), 'module.exports = {};\n', 'utf8');
   return {
     dir,
+    pluginDir,
     paths: {
       PLUGIN_ID: 'ko-thought-translator',
-      RENDERER_BUNDLE_PATH: path.join(pluginsDir, 'ko-thought-translator', 'dist', 'renderer.js'),
-      UI_EXTENSIONS_DIR: path.join(agyDir, 'ui-extensions.d'),
-      MANIFEST_PATH: path.join(agyDir, 'ui-extensions.d', 'ko-thought-translator.json'),
-      LOADER_SCRIPT_PATH: path.join(agyDir, 'ui-extensions-loader.js'),
+      SOURCE_MANIFEST_PATH: path.join(REPO_ROOT, 'addon-manifest.v1.json'),
+      RENDERER_BUNDLE_PATH: path.join(pluginDir, 'dist', 'renderer.js'),
+      MAIN_HOOK_PATH: path.join(pluginDir, 'dist', 'main-hook.js'),
+      ADDONS_DIR: path.join(agyDir, 'addons.d'),
+      MANIFEST_PATH: path.join(agyDir, 'addons.d', 'ko-thought-translator.json'),
+      ADDONS_LOCK_PATH: path.join(agyDir, 'addon-host-addons.lock'),
+      LOADER_SCRIPT_PATH: path.join(agyDir, 'addon-host-loader.js'),
       SETTINGS_PATH: path.join(agyDir, 'ko_translator_settings.json'),
       SETTINGS_LOCK_PATH: path.join(agyDir, 'ko_translator_settings.lock'),
-      ASAR_LOCK_PATH: path.join(agyDir, 'ui_extensions_asar.lock'),
       CONFIG_JSON_PATH: path.join(cfgDir, 'config.json'),
       PLUGINS_ROOT_DIR: pluginsDir,
-      ASAR_PATH: path.join(dir, 'nonexistent-app.asar'),
     },
   };
 }
@@ -75,13 +81,13 @@ test('config-store persists settings atomically to ko_translator_settings.json a
     assert.equal(removeTranslatorSettings(paths), true);
     assert.equal(fs.existsSync(paths.SETTINGS_PATH), false);
 
-    // Defect-4: Corrupted settings file MUST fail closed on save (never silently reset to google-translate)
+    // Corrupted settings file MUST fail closed on save (never silently reset to google-translate)
     fs.writeFileSync(paths.SETTINGS_PATH, '{corrupted-user-settings', 'utf8');
     assert.throws(() => saveTranslatorSettings({ showThinking: false }, paths), /SETTINGS_FILE_CORRUPTED/);
     assert.equal(fs.readFileSync(paths.SETTINGS_PATH, 'utf8'), '{corrupted-user-settings');
     fs.unlinkSync(paths.SETTINGS_PATH);
 
-    // Defect-4: Non-array customProviders and secret headers/query params MUST fail closed
+    // Non-array customProviders and secret headers/query params MUST fail closed
     assert.throws(() => saveTranslatorSettings({ customProviders: 'invalid' }, paths), /INVALID_CUSTOM_PROVIDERS_LIST/);
     assert.throws(
       () =>
@@ -117,7 +123,7 @@ test('isPluginEnabled reads config.json read-only without mutating it', () => {
     );
     assert.equal(isPluginEnabled(paths.CONFIG_JSON_PATH), false);
 
-    // F4: Corrupted existing config.json MUST fail closed (false)
+    // Corrupted existing config.json MUST fail closed (false)
     fs.writeFileSync(paths.CONFIG_JSON_PATH, '{broken-config', 'utf8');
     assert.equal(isPluginEnabled(paths.CONFIG_JSON_PATH), false);
   } finally {
@@ -125,26 +131,44 @@ test('isPluginEnabled reads config.json read-only without mutating it', () => {
   }
 });
 
-test('host CLI --status is 100% read-only and --install/--uninstall manage manifest cleanly', async () => {
-  const { dir, paths } = makeTempEnv();
+test('host CLI --status is 100% read-only and --install/--uninstall/--rollback manage AddonManifest.v1 cleanly without touching app.asar', async () => {
+  const { dir, pluginDir, paths } = makeTempEnv();
   try {
     const before = buildStatusReport(paths);
+    assert.equal(before.manifestSchema, 'AddonManifest.v1');
     assert.equal(before.manifestRegistered, false);
+    assert.equal(before.addonHostInstalled, false);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), false);
 
-    await runCli(['--install'], paths);
+    // Simulate installed shared host loader
+    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V1\n', 'utf8');
+
+    const inst = await runCli(['--install'], paths);
+    assert.equal(inst.status, 'INSTALLED');
+    assert.equal(inst.addonHostInstalled, true);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), true);
+    const afterInstall = buildStatusReport(paths);
+    assert.equal(afterInstall.manifestRegistered, true);
+    assert.equal(afterInstall.addonHostInstalled, true);
+
+    const uninst = await runCli(['--uninstall'], paths);
+    assert.equal(uninst.status, 'UNINSTALLED');
+    assert.equal(fs.existsSync(paths.MANIFEST_PATH), false);
+
+    // --rollback only unregisters this addon and never touches shared host loader or app.asar
+    await runCli(['--install'], paths);
+    const rb = await runCli(['--rollback'], paths);
+    assert.equal(rb.status, 'MANIFEST_REMOVED_HOST_PRESERVED');
+    assert.equal(rb.manifestRemoved, true);
+    assert.equal(fs.existsSync(paths.MANIFEST_PATH), false);
     assert.equal(fs.existsSync(paths.LOADER_SCRIPT_PATH), true);
 
-    await runCli(['--uninstall'], paths);
-    assert.equal(fs.existsSync(paths.MANIFEST_PATH), false);
-
-    // F4: Non-standard entryScript outside PLUGINS_ROOT_DIR/<pluginId> MUST fail closed (never fake INSTALLED)
-    const outsideEntry = path.join(dir, 'outside-renderer.js');
-    fs.writeFileSync(outsideEntry, '// outside\n', 'utf8');
+    // Missing confined renderer entry inside PLUGINS_ROOT_DIR/<pluginId> MUST fail closed
+    fs.unlinkSync(path.join(pluginDir, 'dist', 'renderer.js'));
     const prevExitCode = process.exitCode;
-    const failedInst = await runCli(['--install'], { ...paths, RENDERER_BUNDLE_PATH: outsideEntry });
+    const failedInst = await runCli(['--install'], paths);
     assert.equal(failedInst.status, 'FAILED');
+    assert.equal(failedInst.error, 'ERR_ENTRY_SCRIPT_NOT_FOUND');
     assert.equal(process.exitCode, 1);
     assert.equal(buildStatusReport(paths).manifestRegistered, false);
     process.exitCode = prevExitCode || 0;

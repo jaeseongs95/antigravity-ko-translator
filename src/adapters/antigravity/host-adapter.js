@@ -17,7 +17,7 @@ const { createAntigravityThinkingTranslator } = require('./thinking-translator')
 const STYLE_ID = 'agy-ko-thought-localizer-style';
 
 const ANTIGRAVITY_SELECTORS = Object.freeze({
-  noTranslateSubtree: '.agy-ko-thought-wrap, [data-agy-no-translate="true"], [translate="no"]',
+  noTranslateSubtree: '.agy-ko-thought-wrap, [data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]',
   triggerLabelClass: 'agy-ko-trigger-label',
   conversationViews:
     '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]',

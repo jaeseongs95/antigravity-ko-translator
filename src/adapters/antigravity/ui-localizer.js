@@ -13,7 +13,7 @@ const BASE_EXCLUDED_SELECTOR =
   '[data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], ' +
   '[data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], ' +
   '[data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], ' +
-  '[data-agy-no-translate="true"], [translate="no"], ' +
+  '[data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"], ' +
   '.agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, ' +
   '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
   'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
@@ -58,13 +58,31 @@ function isExcludedByFontMonoInheritance(el) {
   return true;
 }
 
+function mergeExcludedSelector(baseSelector, extraSelector, doc) {
+  if (typeof extraSelector !== 'string' || !extraSelector.trim()) return baseSelector;
+  const candidate = `${baseSelector}, ${extraSelector.trim()}`;
+  if (doc && typeof doc.querySelector === 'function') {
+    try {
+      doc.querySelector(extraSelector.trim());
+      return candidate;
+    } catch (_err) {
+      return baseSelector;
+    }
+  }
+  return candidate;
+}
+
 function createAntigravityUiLocalizer({
   targetDoc,
   catalog,
   translationService = null,
+  extraExcludedSelector = null,
   isDisposed = () => false,
 } = {}) {
   const doc = targetDoc || (typeof document !== 'undefined' ? document : null);
+  const effectiveBaseExcludedSelector = mergeExcludedSelector(BASE_EXCLUDED_SELECTOR, extraExcludedSelector, doc);
+  const effectiveTextExcludedSelector = `textarea, ${effectiveBaseExcludedSelector}`;
+  const effectiveSubtreePruneSelector = effectiveTextExcludedSelector;
 
   function translateSync(raw) {
     return catalog && typeof catalog.translateSync === 'function' ? catalog.translateSync(raw) : null;
@@ -72,7 +90,7 @@ function createAntigravityUiLocalizer({
 
   function isExcludedFromStaticUiLocalization(el, forAttributes = false, rootBoundary = null) {
     if (!el || typeof el.closest !== 'function') return true;
-    const selector = forAttributes ? BASE_EXCLUDED_SELECTOR : TEXT_EXCLUDED_SELECTOR;
+    const selector = forAttributes ? effectiveBaseExcludedSelector : effectiveTextExcludedSelector;
     if (el.closest(selector)) {
       return true;
     }
@@ -296,8 +314,11 @@ function createAntigravityUiLocalizer({
     if (!rootNode || !activeDoc || typeof activeDoc.createTreeWalker !== 'function') return;
     if (
       rootNode.nodeType === 1 &&
-      typeof rootNode.getAttribute === 'function' &&
-      (rootNode.getAttribute('data-agy-no-translate') === 'true' || rootNode.getAttribute('translate') === 'no')
+      ((typeof rootNode.getAttribute === 'function' &&
+        (rootNode.getAttribute('data-agy-no-translate') === 'true' ||
+          rootNode.getAttribute('translate') === 'no' ||
+          rootNode.hasAttribute('data-addon-host-owner'))) ||
+        (typeof rootNode.matches === 'function' && rootNode.matches(effectiveBaseExcludedSelector)))
     ) {
       return;
     }
@@ -309,7 +330,7 @@ function createAntigravityUiLocalizer({
         if (!node) return 2;
         if (node.nodeType === 1) {
           if (node !== rootNode) {
-            if (typeof node.matches === 'function' && node.matches(STATIC_UI_SUBTREE_PRUNE_SELECTOR)) {
+            if (typeof node.matches === 'function' && node.matches(effectiveSubtreePruneSelector)) {
               return 2;
             }
             if (hasExcludedCodeDataAttrPrefix(node, node)) {

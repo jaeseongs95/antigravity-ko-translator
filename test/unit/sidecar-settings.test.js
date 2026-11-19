@@ -45,8 +45,8 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
       SETTINGS_PATH: path.join(agyDir, 'ko_translator_settings.json'),
       SETTINGS_LOCK_PATH: path.join(agyDir, 'ko_translator_settings.lock'),
       CONFIG_JSON_PATH: path.join(cfgDir, 'config.json'),
-      MANIFEST_PATH: path.join(agyDir, 'ui-extensions.d', 'ko-thought-translator.json'),
-      ASAR_PATH: path.join(dir, 'missing.asar'),
+      MANIFEST_PATH: path.join(agyDir, 'addons.d', 'ko-thought-translator.json'),
+      LOADER_SCRIPT_PATH: path.join(agyDir, 'addon-host-loader.js'),
     });
 
     const htmlRes = handle({ method: 'GET', urlPath: '/', headers: { host: '127.0.0.1:43210' }, requireHost: true });

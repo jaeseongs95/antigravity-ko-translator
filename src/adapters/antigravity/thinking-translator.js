@@ -10,11 +10,27 @@ const {
   buildTranslatedBlockElement,
 } = require('./dom-tokenizer');
 
+const BASE_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]';
+
+function buildEffectiveNoTranslateSelector(extraSelector, doc) {
+  if (typeof extraSelector !== 'string' || !extraSelector.trim()) return BASE_NO_TRANSLATE_SELECTOR;
+  if (doc && typeof doc.querySelector === 'function') {
+    try {
+      doc.querySelector(extraSelector.trim());
+      return `${BASE_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+    } catch (_err) {
+      return BASE_NO_TRANSLATE_SELECTOR;
+    }
+  }
+  return `${BASE_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+}
+
 function createAntigravityThinkingTranslator({
   targetDoc,
   catalog,
   translationService,
   triggerController,
+  extraExcludedSelector = null,
   getTranslateThinkingEnabled = () => true,
   onTriggerPretranslate = null,
   isDisposed = () => false,
@@ -22,6 +38,7 @@ function createAntigravityThinkingTranslator({
   clearTimer = clearTimeout,
 } = {}) {
   const doc = targetDoc || (typeof document !== 'undefined' ? document : null);
+  const noTranslateSelector = buildEffectiveNoTranslateSelector(extraExcludedSelector, doc);
 
   function translateStaticSync(raw) {
     return catalog && typeof catalog.translateSync === 'function' ? catalog.translateSync(raw) : null;
@@ -114,7 +131,7 @@ function createAntigravityThinkingTranslator({
 
   function isInsideNoTranslateSubtree(el) {
     if (!el || typeof el.closest !== 'function') return false;
-    return Boolean(el.closest('[data-agy-no-translate="true"], [translate="no"]'));
+    return Boolean(el.closest(noTranslateSelector));
   }
 
   function processCursorEdit(cursorEdit, triggerBtn = null) {

@@ -18,8 +18,9 @@ function walkJsFiles(dir) {
   return out;
 }
 
-test('Clean-Slate Zero-Interference: zero legacy remote, statusbar, Fiber, Angular, Worker, or watcher references in src/ and host/', () => {
+test('Clean-Slate Zero-Interference & AddonManifest.v1: zero legacy patch, app.asar, Fiber, Angular, Worker, or watcher references', () => {
   const forbiddenPatterns = [
+    /@electron\/asar/,
     /statusbar_autoinject/i,
     /agy-statusbar-code/i,
     /agy-ctx-statusbar/i,
@@ -36,6 +37,8 @@ test('Clean-Slate Zero-Interference: zero legacy remote, statusbar, Fiber, Angul
     /--watch-storage/,
     /ko_thought_watcher\.pid/,
     /copyFileSync\([^)]*ASAR/i,
+    /AGY_UI_EXTENSIONS_LOADER_V1/,
+    /ui-extensions-loader\.js/,
   ];
 
   const files = [
@@ -49,9 +52,16 @@ test('Clean-Slate Zero-Interference: zero legacy remote, statusbar, Fiber, Angul
     const src = fs.readFileSync(file, 'utf8');
     const rel = path.relative(REPO_ROOT, file);
     for (const re of forbiddenPatterns) {
-      assert.equal(re.test(src), false, `Forbidden legacy pattern ${re} found in ${rel}`);
+      assert.equal(re.test(src), false, `Forbidden legacy/ASAR pattern ${re} found in ${rel}`);
     }
   }
+});
+
+test('AddonManifest.v1 invariant: legacy host/dropin-loader.js is removed and package.json has zero @electron/asar dependency', () => {
+  assert.equal(fs.existsSync(path.join(REPO_ROOT, 'host', 'dropin-loader.js')), false);
+  assert.equal(fs.existsSync(path.join(REPO_ROOT, 'addon-manifest.v1.json')), true);
+  const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
+  assert.equal(Boolean(pkg.dependencies && pkg.dependencies['@electron/asar']), false);
 });
 
 test('Hexagonal boundary: src/core/ has zero DOM, window, or vendor Antigravity dependencies', () => {
@@ -69,7 +79,7 @@ test('No hooks.json exists (zero per-turn PreInvocation/PostInvocation host hook
   assert.equal(fs.existsSync(path.join(REPO_ROOT, 'hooks.json')), false);
 });
 
-test('R8 F2 DIP boundary: src/runtime/ and host/dropin-loader.js contain zero hardcoded vendor literals', () => {
+test('DIP boundary: src/runtime/, host/addon-registry.js, and host/main-hook.js contain zero hardcoded vendor literals', () => {
   const runtimeFiles = walkJsFiles(path.join(REPO_ROOT, 'src', 'runtime'));
   assert.ok(runtimeFiles.length >= 2);
   const forbiddenRuntimePatterns = [
@@ -88,16 +98,16 @@ test('R8 F2 DIP boundary: src/runtime/ and host/dropin-loader.js contain zero ha
     }
   }
 
-  const loaderSrc = fs.readFileSync(path.join(REPO_ROOT, 'host', 'dropin-loader.js'), 'utf8');
-  const forbiddenLoaderPatterns = [
-    /'AGY_UI_EXTENSIONS_LOADER_V1'/,
+  const registrySrc = fs.readFileSync(path.join(REPO_ROOT, 'host', 'addon-registry.js'), 'utf8');
+  const forbiddenRegistryPatterns = [
     /'AGY_STATUSBAR'/,
     /'AGY_KO_THOUGHT'/,
-    /'__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__'/,
+    /'antigravity-desktop'/,
+    /'dist\/main\.js'/,
     /'dist\/utils\.js'/,
     /'dist\/preload\.js'/,
   ];
-  for (const re of forbiddenLoaderPatterns) {
-    assert.equal(re.test(loaderSrc), false, `Hardcoded host literal ${re} leaked into host/dropin-loader.js`);
+  for (const re of forbiddenRegistryPatterns) {
+    assert.equal(re.test(registrySrc), false, `Hardcoded host literal ${re} leaked into host/addon-registry.js`);
   }
 });

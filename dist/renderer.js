@@ -1,4 +1,4 @@
-// === Antigravity Korean Thought & UI Translator v2.0.0 (Desktop Native App Only — Generated Bundle) ===
+// === Antigravity Korean Thought & UI Translator v2.1.0 (AddonManifest.v1 Desktop Native App Only — Generated Bundle) ===
 "use strict";
 var __agyKoTranslatorBundleExports = (() => {
   var __defProp = Object.defineProperty;
@@ -1671,8 +1671,9 @@ var __agyKoTranslatorBundleExports = (() => {
         doc = null,
         hostAdapter = null,
         providerBundle = null,
+        hostCapability = null,
         settings = null,
-        version = "2.0.0",
+        version = "2.1.0",
         fetchFn = null,
         onStatus = null
       } = {}) {
@@ -1828,16 +1829,19 @@ var __agyKoTranslatorBundleExports = (() => {
           translationService.syncDesiredProviderFromExternal(state.provider);
         }
         disposables.register(() => translationService.dispose());
+        const hostNoTranslateSelector = hostCapability && typeof hostCapability.getNoTranslateSelector === "function" ? hostCapability.getNoTranslateSelector() : null;
         const uiLocalizer = hostAdapter.createUiLocalizer({
           targetDoc,
           catalog,
           translationService,
+          extraExcludedSelector: hostNoTranslateSelector,
           isDisposed: /* @__PURE__ */ __name(() => disposed, "isDisposed")
         });
         const triggerController = hostAdapter.createTriggerController({
           targetDoc,
           targetWin,
           catalog,
+          extraExcludedSelector: hostNoTranslateSelector,
           getShowThinkingEnabled: /* @__PURE__ */ __name(() => state.showThinking, "getShowThinkingEnabled"),
           isDisposed: /* @__PURE__ */ __name(() => disposed, "isDisposed")
         });
@@ -1846,6 +1850,7 @@ var __agyKoTranslatorBundleExports = (() => {
           catalog,
           translationService,
           triggerController,
+          extraExcludedSelector: hostNoTranslateSelector,
           getTranslateThinkingEnabled: /* @__PURE__ */ __name(() => state.enabled && state.translateThinking, "getTranslateThinkingEnabled"),
           isDisposed: /* @__PURE__ */ __name(() => disposed, "isDisposed"),
           setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
@@ -1862,12 +1867,16 @@ var __agyKoTranslatorBundleExports = (() => {
         __name(emitStatus, "emitStatus");
         function ensureStyleElement() {
           if (disposed || !targetDoc || !hostAdapter.styleId) return;
+          const cssText = typeof hostAdapter.buildOverlayCss === "function" ? hostAdapter.buildOverlayCss() : "";
+          if (!cssText) return;
+          if (hostCapability && typeof hostCapability.injectStyle === "function") {
+            hostCapability.injectStyle(hostAdapter.styleId, cssText);
+            return;
+          }
           const existing = targetDoc.getElementById && targetDoc.getElementById(hostAdapter.styleId);
           if (existing) return;
           const parent = targetDoc.head || targetDoc.documentElement;
           if (!parent || typeof targetDoc.createElement !== "function") return;
-          const cssText = typeof hostAdapter.buildOverlayCss === "function" ? hostAdapter.buildOverlayCss() : "";
-          if (!cssText) return;
           const styleEl = targetDoc.createElement("style");
           styleEl.id = hostAdapter.styleId;
           styleEl.textContent = cssText;
@@ -2051,6 +2060,12 @@ var __agyKoTranslatorBundleExports = (() => {
           restoreThoughtBlocks();
           uiLocalizer.restoreAllMutatedNodes();
           triggerController.restoreTriggerButtons();
+          if (hostAdapter.styleId && hostCapability && typeof hostCapability.removeStyle === "function") {
+            try {
+              hostCapability.removeStyle(hostAdapter.styleId);
+            } catch (_err) {
+            }
+          }
           const styleEl = hostAdapter.styleId && targetDoc.getElementById && targetDoc.getElementById(hostAdapter.styleId);
           if (styleEl && typeof styleEl.remove === "function") {
             styleEl.remove();
@@ -4147,7 +4162,7 @@ var __agyKoTranslatorBundleExports = (() => {
     "src/adapters/antigravity/ui-localizer.js"(exports, module) {
       "use strict";
       var { isAlreadyKoreanOrNonEnglish } = require_text_tokenizer();
-      var BASE_EXCLUDED_SELECTOR = 'style, script, code, pre, kbd, samp, var, svg, math, [contenteditable="true"], .monaco-editor, .xterm, .cm-editor, .cm-content, .cm-line, .shiki, .code-block, .code-line, .line-content, .token, [class*="language-"], [data-line-number], [data-line], [data-line-start], [data-line-end], [data-start-line], [data-end-line], [data-diff-type], [data-diff-line], [data-file-uri], [data-active-file-uri], [data-current-line], [data-current-start-line], [data-current-end-line], [data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], [data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], [data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], [data-agy-no-translate="true"], [translate="no"], .agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], [data-testid="side-question-answer"] button[aria-expanded], [data-testid="planner-response-text"], [data-testid="user-message-bubble"], [data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], .cursor-edit, [data-agy-ko-thought-host="1"]';
+      var BASE_EXCLUDED_SELECTOR = 'style, script, code, pre, kbd, samp, var, svg, math, [contenteditable="true"], .monaco-editor, .xterm, .cm-editor, .cm-content, .cm-line, .shiki, .code-block, .code-line, .line-content, .token, [class*="language-"], [data-line-number], [data-line], [data-line-start], [data-line-end], [data-start-line], [data-end-line], [data-diff-type], [data-diff-line], [data-file-uri], [data-active-file-uri], [data-current-line], [data-current-start-line], [data-current-end-line], [data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], [data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], [data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], [data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"], .agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], [data-testid="side-question-answer"] button[aria-expanded], [data-testid="planner-response-text"], [data-testid="user-message-bubble"], [data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], .cursor-edit, [data-agy-ko-thought-host="1"]';
       var TEXT_EXCLUDED_SELECTOR = "textarea, " + BASE_EXCLUDED_SELECTOR;
       var STATIC_UI_SUBTREE_PRUNE_SELECTOR = TEXT_EXCLUDED_SELECTOR;
       var EXCLUDED_CODE_DATA_ATTR_PREFIX_REGEX = /^data-(?:line-|quotable|diff-|code-|token-|syntax-|file-path|file-uri|symbol-|lsp-)/i;
@@ -4180,20 +4195,38 @@ var __agyKoTranslatorBundleExports = (() => {
         return true;
       }
       __name(isExcludedByFontMonoInheritance, "isExcludedByFontMonoInheritance");
+      function mergeExcludedSelector(baseSelector, extraSelector, doc) {
+        if (typeof extraSelector !== "string" || !extraSelector.trim()) return baseSelector;
+        const candidate = `${baseSelector}, ${extraSelector.trim()}`;
+        if (doc && typeof doc.querySelector === "function") {
+          try {
+            doc.querySelector(extraSelector.trim());
+            return candidate;
+          } catch (_err) {
+            return baseSelector;
+          }
+        }
+        return candidate;
+      }
+      __name(mergeExcludedSelector, "mergeExcludedSelector");
       function createAntigravityUiLocalizer({
         targetDoc,
         catalog,
         translationService = null,
+        extraExcludedSelector = null,
         isDisposed = /* @__PURE__ */ __name(() => false, "isDisposed")
       } = {}) {
         const doc = targetDoc || (typeof document !== "undefined" ? document : null);
+        const effectiveBaseExcludedSelector = mergeExcludedSelector(BASE_EXCLUDED_SELECTOR, extraExcludedSelector, doc);
+        const effectiveTextExcludedSelector = `textarea, ${effectiveBaseExcludedSelector}`;
+        const effectiveSubtreePruneSelector = effectiveTextExcludedSelector;
         function translateSync(raw) {
           return catalog && typeof catalog.translateSync === "function" ? catalog.translateSync(raw) : null;
         }
         __name(translateSync, "translateSync");
         function isExcludedFromStaticUiLocalization(el, forAttributes = false, rootBoundary = null) {
           if (!el || typeof el.closest !== "function") return true;
-          const selector = forAttributes ? BASE_EXCLUDED_SELECTOR : TEXT_EXCLUDED_SELECTOR;
+          const selector = forAttributes ? effectiveBaseExcludedSelector : effectiveTextExcludedSelector;
           if (el.closest(selector)) {
             return true;
           }
@@ -4345,7 +4378,7 @@ var __agyKoTranslatorBundleExports = (() => {
         function localizeStaticUiInRoot(rootNode, observer = null) {
           const activeDoc = rootNode && rootNode.ownerDocument || doc;
           if (!rootNode || !activeDoc || typeof activeDoc.createTreeWalker !== "function") return;
-          if (rootNode.nodeType === 1 && typeof rootNode.getAttribute === "function" && (rootNode.getAttribute("data-agy-no-translate") === "true" || rootNode.getAttribute("translate") === "no")) {
+          if (rootNode.nodeType === 1 && (typeof rootNode.getAttribute === "function" && (rootNode.getAttribute("data-agy-no-translate") === "true" || rootNode.getAttribute("translate") === "no" || rootNode.hasAttribute("data-addon-host-owner")) || typeof rootNode.matches === "function" && rootNode.matches(effectiveBaseExcludedSelector))) {
             return;
           }
           localizeAttributesInRoot(rootNode);
@@ -4354,7 +4387,7 @@ var __agyKoTranslatorBundleExports = (() => {
               if (!node) return 2;
               if (node.nodeType === 1) {
                 if (node !== rootNode) {
-                  if (typeof node.matches === "function" && node.matches(STATIC_UI_SUBTREE_PRUNE_SELECTOR)) {
+                  if (typeof node.matches === "function" && node.matches(effectiveSubtreePruneSelector)) {
                     return 2;
                   }
                   if (hasExcludedCodeDataAttrPrefix(node, node)) {
@@ -4517,17 +4550,38 @@ var __agyKoTranslatorBundleExports = (() => {
         return false;
       }
       __name(isElementInLatestTurn, "isElementInLatestTurn");
+      var BASE_TRIGGER_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]';
+      function buildTriggerNoTranslateSelector(extraSelector, doc) {
+        if (typeof extraSelector !== "string" || !extraSelector.trim()) return BASE_TRIGGER_NO_TRANSLATE_SELECTOR;
+        if (doc && typeof doc.querySelector === "function") {
+          try {
+            doc.querySelector(extraSelector.trim());
+            return `${BASE_TRIGGER_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+          } catch (_err) {
+            return BASE_TRIGGER_NO_TRANSLATE_SELECTOR;
+          }
+        }
+        return `${BASE_TRIGGER_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+      }
+      __name(buildTriggerNoTranslateSelector, "buildTriggerNoTranslateSelector");
       function createAntigravityTriggerController({
         targetDoc,
         targetWin,
         catalog,
+        extraExcludedSelector = null,
         getShowThinkingEnabled = /* @__PURE__ */ __name(() => true, "getShowThinkingEnabled"),
         isDisposed = /* @__PURE__ */ __name(() => false, "isDisposed")
       } = {}) {
         const doc = targetDoc || (typeof document !== "undefined" ? document : null);
         const win = targetWin || (typeof window !== "undefined" ? window : null);
         const NodeCtor = win && win.Node || (typeof Node !== "undefined" ? Node : null);
+        const noTranslateSelector = buildTriggerNoTranslateSelector(extraExcludedSelector, doc);
         let clickListenerAttached = false;
+        function isInsideNoTranslateSubtree(el) {
+          if (!el || typeof el.closest !== "function") return false;
+          return Boolean(el.closest(noTranslateSelector));
+        }
+        __name(isInsideNoTranslateSubtree, "isInsideNoTranslateSubtree");
         function translateSync(raw) {
           return catalog && typeof catalog.translateSync === "function" ? catalog.translateSync(raw) : null;
         }
@@ -4544,6 +4598,7 @@ var __agyKoTranslatorBundleExports = (() => {
         __name(syncShowThinkingDomAttribute, "syncShowThinkingDomAttribute");
         function processTriggerButton(btn) {
           if (!btn || !doc || typeof btn.querySelectorAll !== "function") return;
+          if (isInsideNoTranslateSubtree(btn)) return;
           const spans = Array.from(btn.querySelectorAll(":scope > span"));
           const origSpan = spans.find((s) => !s.classList || !s.classList.contains("agy-ko-trigger-label"));
           if (!origSpan) return;
@@ -4840,11 +4895,26 @@ var __agyKoTranslatorBundleExports = (() => {
         tokenizeBlockElement,
         buildTranslatedBlockElement
       } = require_dom_tokenizer();
+      var BASE_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]';
+      function buildEffectiveNoTranslateSelector(extraSelector, doc) {
+        if (typeof extraSelector !== "string" || !extraSelector.trim()) return BASE_NO_TRANSLATE_SELECTOR;
+        if (doc && typeof doc.querySelector === "function") {
+          try {
+            doc.querySelector(extraSelector.trim());
+            return `${BASE_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+          } catch (_err) {
+            return BASE_NO_TRANSLATE_SELECTOR;
+          }
+        }
+        return `${BASE_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+      }
+      __name(buildEffectiveNoTranslateSelector, "buildEffectiveNoTranslateSelector");
       function createAntigravityThinkingTranslator({
         targetDoc,
         catalog,
         translationService,
         triggerController,
+        extraExcludedSelector = null,
         getTranslateThinkingEnabled = /* @__PURE__ */ __name(() => true, "getTranslateThinkingEnabled"),
         onTriggerPretranslate = null,
         isDisposed = /* @__PURE__ */ __name(() => false, "isDisposed"),
@@ -4852,6 +4922,7 @@ var __agyKoTranslatorBundleExports = (() => {
         clearTimer = clearTimeout
       } = {}) {
         const doc = targetDoc || (typeof document !== "undefined" ? document : null);
+        const noTranslateSelector = buildEffectiveNoTranslateSelector(extraExcludedSelector, doc);
         function translateStaticSync(raw) {
           return catalog && typeof catalog.translateSync === "function" ? catalog.translateSync(raw) : null;
         }
@@ -4942,7 +5013,7 @@ var __agyKoTranslatorBundleExports = (() => {
         __name(restoreOriginalCursorEdits, "restoreOriginalCursorEdits");
         function isInsideNoTranslateSubtree(el) {
           if (!el || typeof el.closest !== "function") return false;
-          return Boolean(el.closest('[data-agy-no-translate="true"], [translate="no"]'));
+          return Boolean(el.closest(noTranslateSelector));
         }
         __name(isInsideNoTranslateSubtree, "isInsideNoTranslateSubtree");
         function processCursorEdit(cursorEdit, triggerBtn = null) {
@@ -5330,7 +5401,7 @@ var __agyKoTranslatorBundleExports = (() => {
       var { createAntigravityThinkingTranslator } = require_thinking_translator();
       var STYLE_ID = "agy-ko-thought-localizer-style";
       var ANTIGRAVITY_SELECTORS = Object.freeze({
-        noTranslateSubtree: '.agy-ko-thought-wrap, [data-agy-no-translate="true"], [translate="no"]',
+        noTranslateSubtree: '.agy-ko-thought-wrap, [data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]',
         triggerLabelClass: "agy-ko-trigger-label",
         conversationViews: '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]',
         conversationViewFallbackList: Object.freeze([
@@ -6978,10 +7049,11 @@ var __agyKoTranslatorBundleExports = (() => {
         });
       }
       __name(createKoTranslator, "createKoTranslator");
-      function mountIfBrowser(globalScope) {
+      function mountIfBrowser(globalScope, hostCapabilityArg = null) {
         const win = globalScope || (typeof window !== "undefined" ? window : null);
         const doc = win && win.document ? win.document : typeof document !== "undefined" ? document : null;
         if (!win || !doc) return null;
+        const resolvedHostCap = (hostCapabilityArg && typeof hostCapabilityArg === "object" ? hostCapabilityArg : null) || (win && win.__ADDON_HOST_API__ && typeof win.__ADDON_HOST_API__ === "object" ? win.__ADDON_HOST_API__ : null);
         if (win.__AGY_KO_TRANSLATOR_AUTO_MOUNT__ === false) {
           win.__agyCreateKoTranslator = createKoTranslator;
           return null;
@@ -7005,16 +7077,29 @@ var __agyKoTranslatorBundleExports = (() => {
           win,
           doc,
           settings: initialSettings,
-          version: "2.0.0"
+          hostCapability: resolvedHostCap,
+          version: "2.1.0"
         });
         win.__agyCreateKoTranslator = createKoTranslator;
         win.__agyKoTranslator = instance;
+        if (resolvedHostCap && typeof resolvedHostCap.onDispose === "function") {
+          try {
+            resolvedHostCap.onDispose(() => {
+              instance.dispose();
+              if (win.__agyKoTranslator === instance) {
+                delete win.__agyKoTranslator;
+              }
+            });
+          } catch (_err) {
+          }
+        }
         instance.start();
         return instance;
       }
       __name(mountIfBrowser, "mountIfBrowser");
       if (typeof window !== "undefined" && typeof document !== "undefined") {
-        mountIfBrowser(window);
+        const detectedHostCap = typeof addonHost !== "undefined" ? addonHost : null;
+        mountIfBrowser(window, detectedHostCap);
       }
       module.exports = {
         STYLE_ID,

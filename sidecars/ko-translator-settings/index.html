@@ -156,11 +156,11 @@
         <strong id="diag-plugin-val">확인 중…</strong>
       </div>
       <div class="badge" id="diag-manifest">
-        <span>드롭인 등록</span>
+        <span>AddonManifest.v1</span>
         <strong id="diag-manifest-val">확인 중…</strong>
       </div>
       <div class="badge" id="diag-asar">
-        <span>네이티브 로더</span>
+        <span>공용 애드온 호스트</span>
         <strong id="diag-asar-val">확인 중…</strong>
       </div>
     </div>
@@ -385,7 +385,7 @@
           }
           renderPayload(data);
           elFeedback.className = 'feedback ok';
-          elFeedback.textContent = '저장되었습니다. 창 새로고침(Ctrl+R) 시 즉시 반영됩니다.';
+          elFeedback.textContent = '저장되었습니다. 실행 중인 창에 실시간 반영됩니다.';
         } catch (err) {
           elFeedback.className = 'feedback err';
           elFeedback.textContent = '저장 실패: ' + (err && err.message ? err.message : String(err));
