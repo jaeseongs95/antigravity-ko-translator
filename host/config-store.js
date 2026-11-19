@@ -236,11 +236,13 @@ function isPluginEnabled(configJsonPath) {
   try {
     if (!target || !fs.existsSync(target)) return true;
     const cfg = JSON.parse(fs.readFileSync(target, 'utf8'));
-    const entry = cfg && cfg.plugins && cfg.plugins[PLUGIN_ID];
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return false;
+    const entry = cfg.plugins && cfg.plugins[PLUGIN_ID];
     if (entry && entry.enabled === false) return false;
     return true;
   } catch (_err) {
-    return true;
+    // Fail-closed when an existing config.json is corrupted.
+    return false;
   }
 }
 
@@ -265,7 +267,7 @@ function readTranslatorSettings(pathOverrides = null, { strict = false } = {}) {
       translateStaticUi: parsed.translateStaticUi !== false,
       provider: normalizeProviderId(parsed.provider),
       llmConfig: sanitizeLlmConfig(parsed.llmConfig, DEFAULT_LLM_CONFIG),
-      customProviders: sanitizeCustomProviders(parsed.customProviders, { strict: false }),
+      customProviders: sanitizeCustomProviders(parsed.customProviders, { strict }),
     };
   } catch (err) {
     if (strict) {

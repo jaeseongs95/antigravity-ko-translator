@@ -116,6 +116,10 @@ test('isPluginEnabled reads config.json read-only without mutating it', () => {
       'utf8'
     );
     assert.equal(isPluginEnabled(paths.CONFIG_JSON_PATH), false);
+
+    // F4: Corrupted existing config.json MUST fail closed (false)
+    fs.writeFileSync(paths.CONFIG_JSON_PATH, '{broken-config', 'utf8');
+    assert.equal(isPluginEnabled(paths.CONFIG_JSON_PATH), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

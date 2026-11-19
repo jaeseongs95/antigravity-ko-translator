@@ -221,6 +221,7 @@ export function createStandaloneHttpServer(handleRequest) {
         res.writeHead(413, {
           'content-type': 'application/json; charset=utf-8',
           'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
           'connection': 'close',
         });
         res.end(body);
@@ -248,14 +249,45 @@ export function createStandaloneHttpServer(handleRequest) {
 
 export function createSidecarAppRoutes(sdk, handleRequest) {
   const app = new sdk.SidecarApp();
-  const hasHostHeader = (headers) => {
-    const norm = normalizeHeaders(headers);
-    return Boolean(norm.host);
-  };
   const readBoundedRawBody = async (req) => {
     const contentLen = Number(normalizeHeaders(req?.headers)['content-length'] || 0);
     if (Number.isFinite(contentLen) && contentLen > MAX_BODY_BYTES) {
       return { tooLarge: true, rawBody: '' };
+    }
+    // Stream incremental byte counting when req.body is a ReadableStream / AsyncIterable (blocks chunked DoS).
+    if (req?.body && typeof req.body.getReader === 'function') {
+      const reader = req.body.getReader();
+      const chunks = [];
+      let total = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const buf = Buffer.isBuffer(value) ? value : Buffer.from(value);
+          total += buf.length;
+          if (total > MAX_BODY_BYTES) {
+            try { await reader.cancel(); } catch (_err) {}
+            return { tooLarge: true, rawBody: '' };
+          }
+          chunks.push(buf);
+        }
+      } finally {
+        try { reader.releaseLock(); } catch (_err) {}
+      }
+      return { tooLarge: false, rawBody: Buffer.concat(chunks).toString('utf8') };
+    }
+    if (req?.body && typeof req.body[Symbol.asyncIterator] === 'function') {
+      const chunks = [];
+      let total = 0;
+      for await (const chunk of req.body) {
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        total += buf.length;
+        if (total > MAX_BODY_BYTES) {
+          return { tooLarge: true, rawBody: '' };
+        }
+        chunks.push(buf);
+      }
+      return { tooLarge: false, rawBody: Buffer.concat(chunks).toString('utf8') };
     }
     let rawBody = '';
     if (typeof req?.text === 'function') {
@@ -276,7 +308,7 @@ export function createSidecarAppRoutes(sdk, handleRequest) {
       method: 'GET',
       urlPath: '/',
       headers: req?.headers,
-      requireHost: hasHostHeader(req?.headers),
+      requireHost: true,
     });
     return new sdk.Response(res.body, { status: res.status, headers: res.headers });
   };
@@ -287,7 +319,7 @@ export function createSidecarAppRoutes(sdk, handleRequest) {
       method: 'GET',
       urlPath: '/api/settings',
       headers: req?.headers,
-      requireHost: hasHostHeader(req?.headers),
+      requireHost: true,
     });
     return new sdk.Response(res.body, { status: res.status, headers: res.headers });
   });
@@ -296,7 +328,11 @@ export function createSidecarAppRoutes(sdk, handleRequest) {
     if (tooLarge) {
       return new sdk.Response(JSON.stringify({ ok: false, error: 'PAYLOAD_TOO_LARGE' }), {
         status: 413,
-        headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+        headers: {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+        },
       });
     }
     const res = handleRequest({
@@ -304,7 +340,7 @@ export function createSidecarAppRoutes(sdk, handleRequest) {
       urlPath: '/api/settings',
       rawBody,
       headers: req?.headers,
-      requireHost: hasHostHeader(req?.headers),
+      requireHost: true,
     });
     return new sdk.Response(res.body, { status: res.status, headers: res.headers });
   });

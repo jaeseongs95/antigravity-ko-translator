@@ -247,6 +247,10 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
     assert.equal(sdkIdx.status, 200);
     assert.match(sdkIdx.body, /ko-csrf-token/);
 
+    // F1: Missing Host header in sidecar_sdk route MUST be rejected (403 MISSING_HOST)
+    const sdkMissingHost = routes.get('GET /api/settings')({ headers: {} });
+    assert.equal(sdkMissingHost.status, 403);
+
     const sdkObjPost = await routes.get('POST /api/settings')({
       headers: validHeaders,
       body: { provider: 'google-translate', translateThinking: true },
@@ -254,11 +258,16 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
     assert.equal(sdkObjPost.status, 200);
     assert.equal(JSON.parse(sdkObjPost.body).settings.provider, 'google-translate');
 
-    const sdkHugePost = await routes.get('POST /api/settings')({
+    // F1: Chunked/streaming oversized body aborts early with 413 + x-content-type-options: nosniff
+    async function* hugeStream() {
+      for (let i = 0; i < 10; i++) yield Buffer.alloc(16 * 1024, 0x78);
+    }
+    const sdkHugeStream = await routes.get('POST /api/settings')({
       headers: validHeaders,
-      text: async () => 'x'.repeat(MAX_BODY_BYTES + 16),
+      body: hugeStream(),
     });
-    assert.equal(sdkHugePost.status, 413);
+    assert.equal(sdkHugeStream.status, 413);
+    assert.equal(sdkHugeStream.headers['x-content-type-options'], 'nosniff');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

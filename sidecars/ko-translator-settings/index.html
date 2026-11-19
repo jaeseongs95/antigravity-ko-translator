@@ -226,6 +226,20 @@
         <label for="opt-llm-model">모델 이름 (예: gemma3:4b)</label>
         <input type="text" id="opt-llm-model" placeholder="gemma3:4b" />
       </div>
+      <div class="field">
+        <label for="opt-llm-timeout">요청 시간 제한 (ms, 1000~120000)</label>
+        <input type="number" id="opt-llm-timeout" min="1000" max="120000" step="500" value="15000" />
+      </div>
+      <div class="row">
+        <div>
+          <label for="opt-llm-allow-remote"><strong>원격 HTTPS 엔드포인트 허용</strong></label>
+          <div class="hint">기본은 127.0.0.1/localhost만 허용합니다.</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="opt-llm-allow-remote" />
+          <span>허용</span>
+        </label>
+      </div>
     </div>
 
     <div class="actions">
@@ -245,6 +259,8 @@
       const elLlmFormat = document.getElementById('opt-llm-format');
       const elLlmUrl = document.getElementById('opt-llm-url');
       const elLlmModel = document.getElementById('opt-llm-model');
+      const elLlmTimeout = document.getElementById('opt-llm-timeout');
+      const elLlmAllowRemote = document.getElementById('opt-llm-allow-remote');
       const elSaveBtn = document.getElementById('btn-save');
       const elFeedback = document.getElementById('feedback');
       const csrfMeta = document.querySelector('meta[name="ko-csrf-token"]');
@@ -300,6 +316,8 @@
             : 'ollama';
         elLlmUrl.value = (s.llmConfig && s.llmConfig.baseUrl) || 'http://127.0.0.1:11434';
         elLlmModel.value = (s.llmConfig && s.llmConfig.model) || 'gemma3:4b';
+        elLlmTimeout.value = String((s.llmConfig && s.llmConfig.timeoutMs) || 15000);
+        elLlmAllowRemote.checked = Boolean(s.llmConfig && s.llmConfig.allowRemoteHttps);
         syncLlmVisibility();
 
         if (data.diagnostics) {
@@ -315,6 +333,9 @@
         try {
           const res = await fetch('/api/settings', { cache: 'no-store' });
           const data = await res.json();
+          if (!res.ok || !data.ok) {
+            throw new Error((data && data.error) || ('HTTP ' + res.status));
+          }
           renderPayload(data);
         } catch (err) {
           elFeedback.className = 'feedback err';
@@ -328,6 +349,7 @@
         elFeedback.className = 'feedback';
         elFeedback.textContent = '저장 중…';
         try {
+          const parsedTimeout = Number(elLlmTimeout.value);
           const payload = {
             translateThinking: elTranslateThinking.checked,
             showThinking: elShowThinking.checked,
@@ -337,6 +359,8 @@
               apiFormat: elLlmFormat.value,
               baseUrl: elLlmUrl.value.trim() || 'http://127.0.0.1:11434',
               model: elLlmModel.value.trim() || 'gemma3:4b',
+              timeoutMs: Number.isFinite(parsedTimeout) ? parsedTimeout : 15000,
+              allowRemoteHttps: elLlmAllowRemote.checked,
             },
           };
           const res = await fetch('/api/settings', {

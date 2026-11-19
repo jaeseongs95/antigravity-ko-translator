@@ -7,10 +7,20 @@ Antigravity 2.0 **데스크톱 네이티브 앱 전용**으로 처음부터 새�
 - **영문 고정 UI 한글화**: 코드 뷰어·diff·터미널·입력창·에이전트 본문 응답을 엄격히 제외하고 메뉴·버튼·설정 안내만 한글화합니다.
 - **공식 Sidecar(`AUX_PANE`) 설정·진단 패널**: 네이티브 설정창 DOM을 변조하지 않고 Antigravity 공식 보조 패널(`sidecars/ko-translator-settings/`)로 설정 UI를 제공합니다.
 - **완전 격리·무간섭 설계**:
-  - `fetch` / `lsClient` / Protobuf / `React Fiber` / `Angular` / `Worker` / `AudioWorklet` / `iframe` 후킹 **0%**.
-  - `statusbar_autoinject.js` 합본, `app_storage.json` 코드 저장, 상주 워처 데몬, 매 턴 `PreInvocation`/`PostInvocation` 훅 **전면 폐지**.
+  - `fetch` / `lsClient` / Protobuf / `React Fiber` / `Angular` / `Worker` / `iframe` 후킹 **0%**.
+  - 공용 주입 스크립트 합본, 호스트 내부 스토리지 코드 저장, 상주 워처 데몬, 매 턴 `PreInvocation`/`PostInvocation` 훅 **전면 폐지**.
   - 단독 드롭인 매니페스트(`~/.gemini/antigravity/ui-extensions.d/ko-thought-translator.json`) + `config.json` 실시간 `enabled` 게이트로 플러그인을 끄면 즉시 0줄 실행됩니다.
   - 원격 제어 웹(`antigravity.google.com/r/...`) 지원은 별도 프로젝트(`antigravity-remote-plugin`)로 완전 분리했습니다.
+
+## 아키텍처
+
+- `src/core/` — 벤더·DOM 비종속 핵심 도메인 (`disposable-registry`, `dictionary-port`, `text-tokenizer`, `provider-registry`, `translation-service`)
+- `src/adapters/translators/` — 번역기 어댑터 (`google-translate`, `local-llm`, `custom-provider`, `endpoint-validator`)
+- `src/adapters/antigravity/` — 순수 읽기 전용 DOM 어댑터 (`dictionaries/`, `dom-tokenizer`, `thinking-translator`, `trigger-controller`, `ui-localizer`, `storage-port`)
+- `src/runtime/` — `createKoTranslator({ win, doc, settings, onStatus })` 및 `observer-scheduler`
+- `sidecars/ko-translator-settings/` — Antigravity 공식 Sidecar(`AUX_PANE`) 설정·진단 패널
+- `host/` — 단독 드롭인 로더, fail-closed 설정 저장소, CLI (`--status`/`--install`/`--uninstall`/`--rollback`)
+- `dist/renderer.js` — 결정적 단일 렌더러 번들 (`scripts/build.js`)
 
 ## 명령어
 

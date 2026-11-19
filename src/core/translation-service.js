@@ -431,7 +431,19 @@ function createTranslationService({
           return candidate;
         }
         return text;
-      }, signal).catch(() => text);
+      }, signal).catch((err) => {
+        if (
+          err &&
+          err.message !== 'ABORTED' &&
+          err.message !== 'DISPOSED' &&
+          typeof onTranslationError === 'function'
+        ) {
+          try {
+            onTranslationError(err, reqEffectiveId);
+          } catch (_ignored) {}
+        }
+        return text;
+      });
 
     if (signal) {
       return runTask();

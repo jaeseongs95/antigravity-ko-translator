@@ -57,6 +57,24 @@ function resolveBooleanOption(overrideVal, storedVal, fallback) {
   return Boolean(fallback);
 }
 
+const PROVIDER_ALIAS_MAP = Object.freeze({
+  google: 'google-translate',
+  gtx: 'google-translate',
+  local: 'local-llm',
+  llm: 'local-llm',
+  ollama: 'local-llm',
+});
+
+function canonicalizeProviderId(rawId) {
+  if (typeof rawId !== 'string') return null;
+  const trimmed = rawId.trim().toLowerCase();
+  if (!trimmed || trimmed === '__proto__' || trimmed === 'constructor' || trimmed === 'prototype') return null;
+  const mapped = Object.prototype.hasOwnProperty.call(PROVIDER_ALIAS_MAP, trimmed)
+    ? PROVIDER_ALIAS_MAP[trimmed]
+    : trimmed;
+  return /^[a-z0-9][a-z0-9._:-]{0,63}$/.test(mapped) ? mapped : null;
+}
+
 function createKoTranslator({
   win = typeof window !== 'undefined' ? window : null,
   doc = null,
@@ -100,11 +118,9 @@ function createKoTranslator({
       storage.getItem(STORAGE_KEYS.translateStaticUi),
       true
     ),
-    provider: String(
-      initCfg.provider ||
-        storage.getItem(STORAGE_KEYS.provider) ||
-        'google-translate'
-    ).trim() || 'google-translate',
+    provider:
+      canonicalizeProviderId(initCfg.provider || storage.getItem(STORAGE_KEYS.provider) || 'google-translate') ||
+      'google-translate',
     llmConfig: {
       ...DEFAULT_LLM_CONFIG,
       ...(storage.getJson(STORAGE_KEYS.llmConfig, {}) || {}),
@@ -124,7 +140,8 @@ function createKoTranslator({
 
   const disposables = createDisposableRegistry();
   const catalog = createAntigravityDictionaryCatalog();
-  const providerRegistry = createProviderRegistry();
+  const providerRegistry = createProviderRegistry({ aliasMap: PROVIDER_ALIAS_MAP });
+  const customProviderSpecFingerprints = new Map();
   const llmConfigSubscribers = new Set();
 
   function notifyLlmConfigSubscribers() {
@@ -175,6 +192,10 @@ function createKoTranslator({
       try {
         const provider = createCustomProviderAdapter(spec, { fetchFn: effectiveFetch });
         providerRegistry.registerProvider(provider);
+        customProviderSpecFingerprints.set(
+          provider.id,
+          `${spec.endpointUrl || ''}|${spec.responsePath || ''}|${JSON.stringify(spec.bodyTemplate || null)}`
+        );
         nextIds.add(provider.id);
       } catch (err) {
         customProviderError = `custom-provider(${spec.id}): ${err && err.message ? err.message : String(err)}`;
@@ -183,6 +204,7 @@ function createKoTranslator({
     for (const oldId of Array.from(registeredDeclarativeIds)) {
       if (!nextIds.has(oldId)) {
         providerRegistry.unregisterProvider(oldId);
+        customProviderSpecFingerprints.delete(oldId);
         registeredDeclarativeIds.delete(oldId);
       }
     }
@@ -200,10 +222,12 @@ function createKoTranslator({
     cacheStorageKey: STORAGE_KEYS.cache,
     setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
     clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
-    getProviderCacheVariant: (pid) =>
-      pid === 'local-llm'
-        ? `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}`
-        : '',
+    getProviderCacheVariant: (pid) => {
+      if (pid === 'local-llm') {
+        return `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}`;
+      }
+      return customProviderSpecFingerprints.get(pid) || '';
+    },
     onTranslationError: (err, pid) => {
       translationError = `${pid}: ${err && err.message ? err.message : String(err)}`;
       emitStatus();
@@ -382,18 +406,25 @@ function createKoTranslator({
     if (llmConfigChanged) {
       notifyLlmConfigSubscribers();
     }
+    let customProvidersChanged = false;
     if (Array.isArray(next.customProviders)) {
+      customProvidersChanged = true;
       state.customProviders = next.customProviders;
       syncDeclarativeCustomProviders(state.customProviders);
+      if (state.provider && !providerRegistry.hasProvider(state.provider)) {
+        translationService.syncDesiredProviderFromExternal(state.provider);
+      }
     }
     if (typeof next.provider === 'string' && next.provider.trim()) {
-      const candidate = next.provider.trim();
-      state.provider = candidate;
-      translationError = null;
-      if (providerRegistry.hasProvider(candidate)) {
-        translationService.setProvider(candidate, { persist: true });
-      } else {
-        translationService.syncDesiredProviderFromExternal(candidate);
+      const candidate = canonicalizeProviderId(next.provider);
+      if (candidate) {
+        state.provider = candidate;
+        translationError = null;
+        if (providerRegistry.hasProvider(candidate)) {
+          translationService.setProvider(candidate, { persist: true });
+        } else {
+          translationService.syncDesiredProviderFromExternal(candidate);
+        }
       }
     }
 
@@ -409,6 +440,7 @@ function createKoTranslator({
       } else if (
         state.provider !== prevProvider ||
         next.clearCache === true ||
+        customProvidersChanged ||
         (llmConfigChanged && state.provider === 'local-llm')
       ) {
         translationService.bumpEpoch();

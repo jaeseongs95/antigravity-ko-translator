@@ -117,11 +117,13 @@ function isPluginEnabledInConfig(configJsonPath, pluginId) {
   try {
     if (!configJsonPath || !fs.existsSync(configJsonPath)) return true;
     const cfg = JSON.parse(fs.readFileSync(configJsonPath, 'utf8'));
-    const entry = cfg && cfg.plugins && cfg.plugins[pluginId];
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return false;
+    const entry = cfg.plugins && cfg.plugins[pluginId];
     if (entry && entry.enabled === false) return false;
     return true;
   } catch (_err) {
-    return true;
+    // Fail-closed: corrupted existing config.json MUST NOT silently execute plugins.
+    return false;
   }
 }
 
@@ -192,7 +194,6 @@ function attach(contents) {
       const url = typeof contents.getURL === 'function' ? String(contents.getURL() || '') : '';
       if (!ALLOWED_HUB_URL_RE.test(url)) return;
       if (lastInjectedUrl === url || inFlightUrl === url) return;
-      inFlightUrl = url;
 
       const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
       const agyDir = path.join(home, '.gemini', 'antigravity');
@@ -202,9 +203,18 @@ function attach(contents) {
       if (!fs.existsSync(extDir) || !fs.existsSync(pluginsRoot)) return;
 
       let cfg = {};
-      try { if (fs.existsSync(configPath)) cfg = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_e) {}
+      if (fs.existsSync(configPath)) {
+        try {
+          cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return;
+        } catch (err) {
+          try { console.error('[ko-thought-translator] corrupted config.json (fail-closed):', err && err.message ? err.message : err); } catch (_e) {}
+          return;
+        }
+      }
 
       const files = fs.readdirSync(extDir).filter((f) => f.endsWith('.json')).sort();
+      const scriptsToRun = [];
       for (const f of files) {
         try {
           const m = JSON.parse(fs.readFileSync(path.join(extDir, f), 'utf8'));
@@ -235,23 +245,28 @@ function attach(contents) {
             } catch (_e) {}
           }
           const wrapped = '(function(){try{\\n' + prelude + rawCode + '\\n}catch(err){try{console.error("[ko-thought-translator] renderer error:",err&&err.message?err.message:err);}catch(_e){}}})();';
-          Promise.resolve(contents.executeJavaScript(wrapped))
-            .then(() => {
-              if (inFlightUrl === url) {
-                lastInjectedUrl = url;
-                inFlightUrl = null;
-              }
-            })
-            .catch((err) => {
-              if (inFlightUrl === url) inFlightUrl = null;
-              try { console.error('[ko-thought-translator] executeJavaScript failed:', err && err.message ? err.message : err); } catch (_e) {}
-            });
+          scriptsToRun.push(wrapped);
         } catch (err) {
-          if (inFlightUrl === url) inFlightUrl = null;
           try { console.error('[ko-thought-translator] extension load failed:', f, err && err.message ? err.message : err); } catch (_e) {}
         }
       }
-      if (files.length === 0 && inFlightUrl === url) inFlightUrl = null;
+      if (scriptsToRun.length === 0) return;
+
+      inFlightUrl = url;
+      Promise.all(scriptsToRun.map((code) => Promise.resolve(contents.executeJavaScript(code))))
+        .then(() => {
+          if (inFlightUrl === url) {
+            lastInjectedUrl = url;
+          }
+        })
+        .catch((err) => {
+          try { console.error('[ko-thought-translator] executeJavaScript failed:', err && err.message ? err.message : err); } catch (_e) {}
+        })
+        .finally(() => {
+          if (inFlightUrl === url) {
+            inFlightUrl = null;
+          }
+        });
     } catch (err) {
       inFlightUrl = null;
       try { console.error('[ko-thought-translator] loader run failed:', err && err.message ? err.message : err); } catch (_e) {}
@@ -355,12 +370,26 @@ function verifyAllAsarIntegrity(archive) {
         walk(child, relPath ? `${relPath}/${name}` : name);
       }
     } else if (!node.unpacked && node.offset !== undefined && node.size !== undefined) {
+      const start = archive.dataOffset + Number(node.offset);
       const data = archive.fileMap.get(relPath);
-      if (!data || data.length !== node.size) {
+      if (
+        !Number.isFinite(start) ||
+        start < archive.dataOffset ||
+        start + node.size > archive.buf.length ||
+        !data ||
+        data.length !== node.size
+      ) {
         valid = false;
         return;
       }
       if (node.integrity && node.integrity.hash) {
+        if (
+          (node.integrity.algorithm && node.integrity.algorithm !== 'SHA256') ||
+          (node.integrity.blockSize !== undefined && node.integrity.blockSize !== BLOCK_SIZE)
+        ) {
+          valid = false;
+          return;
+        }
         const expected = computeIntegrity(data);
         if (expected.hash !== node.integrity.hash) {
           valid = false;
@@ -547,6 +576,9 @@ function installAsarDropinLoader(pathOverrides = null) {
       }
       archive = check.archive;
     } else if (isPureUnpatchedArchive(archive)) {
+      if (!verifyAllAsarIntegrity(archive)) {
+        return { status: 'ERR_ARCHIVE_INTEGRITY_MISMATCH', appVersion: archive.appVersion };
+      }
       writeBinaryAtomicStrictSync(backupPath, archive.buf);
       writeFileAtomicSync(
         metaPath,
