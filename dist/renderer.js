@@ -1808,8 +1808,9 @@ var __agyKoTranslatorBundleExports = (() => {
           setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
           clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
           getProviderCacheVariant: /* @__PURE__ */ __name((pid) => {
-            if (pid === "local-llm") {
-              return `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}`;
+            if (typeof providerBundle.getProviderCacheVariant === "function") {
+              const builtinVariant = providerBundle.getProviderCacheVariant(pid, state.llmConfig);
+              if (builtinVariant) return builtinVariant;
             }
             return customProviderSpecFingerprints.get(pid) || "";
           }, "getProviderCacheVariant"),
@@ -1963,7 +1964,8 @@ var __agyKoTranslatorBundleExports = (() => {
           const prevEnabled = state.enabled;
           const prevTranslateThinking = state.translateThinking;
           const prevTranslateStaticUi = state.translateStaticUi;
-          const prevLlmSig = `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}|${state.llmConfig.allowRemoteHttps}|${state.llmConfig.timeoutMs}`;
+          const getConfigSig = /* @__PURE__ */ __name((cfg) => typeof providerBundle.getRuntimeConfigSignature === "function" ? providerBundle.getRuntimeConfigSignature(cfg) : JSON.stringify(cfg || null), "getConfigSig");
+          const prevLlmSig = getConfigSig(state.llmConfig);
           if (typeof next.enabled === "boolean") state.enabled = next.enabled;
           if (typeof next.translateThinking === "boolean") {
             state.translateThinking = next.translateThinking;
@@ -1981,7 +1983,7 @@ var __agyKoTranslatorBundleExports = (() => {
             state.llmConfig = { ...state.llmConfig, ...next.llmConfig };
             storage.setJson(storageKeys.llmConfig, state.llmConfig);
           }
-          const nextLlmSig = `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}|${state.llmConfig.allowRemoteHttps}|${state.llmConfig.timeoutMs}`;
+          const nextLlmSig = getConfigSig(state.llmConfig);
           const llmConfigChanged = nextLlmSig !== prevLlmSig;
           if (llmConfigChanged) {
             notifyLlmConfigSubscribers();
@@ -2015,7 +2017,7 @@ var __agyKoTranslatorBundleExports = (() => {
           } else if (state.enabled && started) {
             if (!runtimeActive) {
               activateRuntime();
-            } else if (state.provider !== prevProvider || next.clearCache === true || customProvidersChanged || llmConfigChanged && state.provider === "local-llm") {
+            } else if (state.provider !== prevProvider || next.clearCache === true || customProvidersChanged || llmConfigChanged && (typeof providerBundle.shouldRetranslateOnConfigChange === "function" ? providerBundle.shouldRetranslateOnConfigChange(state.provider) : true)) {
               translationService.bumpEpoch();
               thinkingTranslator.retranslateVisibleThoughts(false);
             } else if (state.translateThinking !== prevTranslateThinking || state.translateStaticUi !== prevTranslateStaticUi) {
@@ -4489,7 +4491,9 @@ var __agyKoTranslatorBundleExports = (() => {
               const leading = (raw.match(/^\s*/) || [""])[0];
               const trailing = (raw.match(/\s*$/) || [""])[0];
               const nextVal = leading + syncKo + trailing;
-              if (!textNode.__agyOrigValue) textNode.__agyOrigValue = raw;
+              if (!textNode.__agyOrigValue || textNode.__agyKoApplied !== trimmed) {
+                textNode.__agyOrigValue = raw;
+              }
               textNode.__agyKoApplied = syncKo;
               textNode.nodeValue = nextVal;
             }
@@ -6964,6 +6968,19 @@ var __agyKoTranslatorBundleExports = (() => {
           },
           createCustomProvider(spec, { fetchFn }) {
             return createCustomProviderAdapter(spec, { fetchFn });
+          },
+          getRuntimeConfigSignature(cfg) {
+            if (!cfg || typeof cfg !== "object") return "";
+            return `${cfg.apiFormat || ""}|${cfg.baseUrl || ""}|${cfg.model || ""}|${Boolean(cfg.allowRemoteHttps)}|${cfg.timeoutMs || ""}`;
+          },
+          getProviderCacheVariant(providerId, cfg) {
+            if (providerId === "local-llm" && cfg && typeof cfg === "object") {
+              return `${cfg.apiFormat || ""}|${cfg.baseUrl || ""}|${cfg.model || ""}|${cfg.timeoutMs || ""}`;
+            }
+            return "";
+          },
+          shouldRetranslateOnConfigChange(providerId) {
+            return providerId === "local-llm";
           }
         };
       }

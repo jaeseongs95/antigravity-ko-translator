@@ -239,8 +239,11 @@ export function createStandaloneHttpServer(handleRequest) {
           'x-content-type-options': 'nosniff',
           'connection': 'close',
         });
-        res.end(body);
-        req.resume();
+        res.end(body, () => {
+          try {
+            req.destroy();
+          } catch (_err) {}
+        });
         return;
       }
       chunks.push(chunk);
@@ -305,12 +308,19 @@ export function createSidecarAppRoutes(sdk, handleRequest) {
       return { tooLarge: false, rawBody: Buffer.concat(chunks).toString('utf8') };
     }
     let rawBody = '';
-    if (typeof req?.text === 'function') {
-      rawBody = await req.text();
-    } else if (req?.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
+    if (req?.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
       rawBody = JSON.stringify(req.body);
+    } else if (typeof req?.body === 'string' || Buffer.isBuffer(req?.body)) {
+      rawBody = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : req.body;
+    } else if (typeof req?.text === 'function') {
+      // Only use req.text() when content-length was explicitly declared within MAX_BODY_BYTES (prevents unbounded buffering).
+      const rawCl = normalizeHeaders(req?.headers)['content-length'];
+      if (rawCl !== undefined && (!Number.isFinite(Number(rawCl)) || Number(rawCl) > MAX_BODY_BYTES)) {
+        return { tooLarge: true, rawBody: '' };
+      }
+      rawBody = await req.text();
     } else {
-      rawBody = String(req?.body ?? '');
+      rawBody = '';
     }
     if (Buffer.byteLength(rawBody, 'utf8') > MAX_BODY_BYTES) {
       return { tooLarge: true, rawBody: '' };

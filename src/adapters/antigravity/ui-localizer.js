@@ -398,7 +398,10 @@ function createAntigravityUiLocalizer({
         const leading = (raw.match(/^\s*/) || [''])[0];
         const trailing = (raw.match(/\s*$/) || [''])[0];
         const nextVal = leading + syncKo + trailing;
-        if (!textNode.__agyOrigValue) textNode.__agyOrigValue = raw;
+        // NB5: Always update __agyOrigValue when React replaced the text node in-place with new source text.
+        if (!textNode.__agyOrigValue || textNode.__agyKoApplied !== trimmed) {
+          textNode.__agyOrigValue = raw;
+        }
         textNode.__agyKoApplied = syncKo;
         textNode.nodeValue = nextVal;
       }

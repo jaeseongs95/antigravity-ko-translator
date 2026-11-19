@@ -4,7 +4,8 @@
  * Default Translation Provider Bundle.
  *
  * Isolates concrete translator vendor wiring (Google Translate, Local LLM/Ollama,
- * and declarative Custom Provider) outside the vendor-neutral runtime bootstrap.
+ * and declarative Custom Provider) as well as vendor-specific config signatures
+ * and cache variants outside the vendor-neutral runtime bootstrap.
  */
 
 const { createGoogleTranslateAdapter } = require('./google-translate');
@@ -45,6 +46,19 @@ function createDefaultProviderBundle() {
     },
     createCustomProvider(spec, { fetchFn }) {
       return createCustomProviderAdapter(spec, { fetchFn });
+    },
+    getRuntimeConfigSignature(cfg) {
+      if (!cfg || typeof cfg !== 'object') return '';
+      return `${cfg.apiFormat || ''}|${cfg.baseUrl || ''}|${cfg.model || ''}|${Boolean(cfg.allowRemoteHttps)}|${cfg.timeoutMs || ''}`;
+    },
+    getProviderCacheVariant(providerId, cfg) {
+      if (providerId === 'local-llm' && cfg && typeof cfg === 'object') {
+        return `${cfg.apiFormat || ''}|${cfg.baseUrl || ''}|${cfg.model || ''}|${cfg.timeoutMs || ''}`;
+      }
+      return '';
+    },
+    shouldRetranslateOnConfigChange(providerId) {
+      return providerId === 'local-llm';
     },
   };
 }

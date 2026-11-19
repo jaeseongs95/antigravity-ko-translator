@@ -219,8 +219,9 @@ function createTranslatorRuntime({
     setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
     clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
     getProviderCacheVariant: (pid) => {
-      if (pid === 'local-llm') {
-        return `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}`;
+      if (typeof providerBundle.getProviderCacheVariant === 'function') {
+        const builtinVariant = providerBundle.getProviderCacheVariant(pid, state.llmConfig);
+        if (builtinVariant) return builtinVariant;
       }
       return customProviderSpecFingerprints.get(pid) || '';
     },
@@ -380,7 +381,11 @@ function createTranslatorRuntime({
     const prevEnabled = state.enabled;
     const prevTranslateThinking = state.translateThinking;
     const prevTranslateStaticUi = state.translateStaticUi;
-    const prevLlmSig = `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}|${state.llmConfig.allowRemoteHttps}|${state.llmConfig.timeoutMs}`;
+    const getConfigSig = (cfg) =>
+      typeof providerBundle.getRuntimeConfigSignature === 'function'
+        ? providerBundle.getRuntimeConfigSignature(cfg)
+        : JSON.stringify(cfg || null);
+    const prevLlmSig = getConfigSig(state.llmConfig);
 
     if (typeof next.enabled === 'boolean') state.enabled = next.enabled;
     if (typeof next.translateThinking === 'boolean') {
@@ -399,7 +404,7 @@ function createTranslatorRuntime({
       state.llmConfig = { ...state.llmConfig, ...next.llmConfig };
       storage.setJson(storageKeys.llmConfig, state.llmConfig);
     }
-    const nextLlmSig = `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}|${state.llmConfig.allowRemoteHttps}|${state.llmConfig.timeoutMs}`;
+    const nextLlmSig = getConfigSig(state.llmConfig);
     const llmConfigChanged = nextLlmSig !== prevLlmSig;
     if (llmConfigChanged) {
       notifyLlmConfigSubscribers();
@@ -439,7 +444,10 @@ function createTranslatorRuntime({
         state.provider !== prevProvider ||
         next.clearCache === true ||
         customProvidersChanged ||
-        (llmConfigChanged && state.provider === 'local-llm')
+        (llmConfigChanged &&
+          (typeof providerBundle.shouldRetranslateOnConfigChange === 'function'
+            ? providerBundle.shouldRetranslateOnConfigChange(state.provider)
+            : true))
       ) {
         translationService.bumpEpoch();
         thinkingTranslator.retranslateVisibleThoughts(false);

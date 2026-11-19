@@ -1,6 +1,6 @@
 # `antigravity-ko-translator` v2.0.0 — Verification & Test Case Matrix (`docs/TEST_CASES.md`)
 
-All 12 unit, security, real-Chromium E2E, and host-lifecycle suites are executed by `npm test` (`node ./scripts/build.js --check && node --test test/unit/*.test.js`) across both `windows-latest` and `ubuntu-latest` in GitHub Actions CI.
+All 12 unit, security, real-Chromium E2E, and host-lifecycle suites are executed by `npm test` (`node ./scripts/build.js --check && node --test test/unit/*.test.js`) across both `windows-latest` and `ubuntu-latest` in GitHub Actions CI. The isolated local real-`app.asar` copy test (`HAS_REAL_ASAR` in `dropin-loader.test.js`) runs automatically on developer hosts containing `app.asar.v2.33.0.orig` and is explicitly reported as `skipped` (never silently omitted) on CI runners where the proprietary binary fixture is absent.
 
 | # | Suite | Module(s) Under Test | Key Assertions |
 |---|---|---|---|

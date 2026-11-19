@@ -44,9 +44,10 @@ function sha256Hex(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
 }
 
-function isAllowedHubUrl(rawUrl) {
+function isAllowedHubUrl(rawUrl, profile = ANTIGRAVITY_HOST_PROFILE) {
   if (typeof rawUrl !== 'string' || !rawUrl) return false;
-  return ALLOWED_HUB_URL_RE.test(rawUrl.trim());
+  const re = (profile && profile.allowedHubUrlRe) || ALLOWED_HUB_URL_RE;
+  return re.test(rawUrl.trim());
 }
 
 function isPathStrictlyInside(parentDir, candidatePath) {
@@ -173,19 +174,95 @@ function collectExecutableExtensions({ uiExtensionsDir, pluginsRootDir, configJs
   return results;
 }
 
-function buildHostLoaderScriptSource() {
+function buildHostLoaderScriptSource(profile = ANTIGRAVITY_HOST_PROFILE) {
+  const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
+  const appSegmentsJson = JSON.stringify(Array.from(activeProfile.appDirSegments || ['.gemini', 'antigravity']));
+  const cfgSegmentsJson = JSON.stringify(Array.from(activeProfile.configDirSegments || ['.gemini', 'config']));
+  const extDirNameJson = JSON.stringify(activeProfile.uiExtensionsDirName || 'ui-extensions.d');
+  const pluginIdJson = JSON.stringify(activeProfile.pluginId || PLUGIN_ID);
+  const settingsFileJson = JSON.stringify(activeProfile.settingsFileName || 'ko_translator_settings.json');
+  const hubReSource = ((activeProfile.allowedHubUrlRe || ALLOWED_HUB_URL_RE).source).replace(/\\/g, '\\');
+  const hubReFlags = (activeProfile.allowedHubUrlRe || ALLOWED_HUB_URL_RE).flags || 'i';
+
   return `'use strict';
-// ${PATCH_MARKER} — Shared Drop-In UI Extensions Loader (Zero-Daemon, Top-Frame Hub Only)
+// ${activeProfile.patchMarker || PATCH_MARKER} — Shared Drop-In UI Extensions Loader (Zero-Daemon, Top-Frame Hub Only)
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-const ALLOWED_HUB_URL_RE = /^https?:\\/\\/(?:127\\.0\\.0\\.1|localhost)(?::\\d+)?(?:\\/|$)/i;
+const PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._:-]{0,63}$/;
+const FORBIDDEN_PROVIDER_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+const SECRET_HEADER_RE = /^(?:authorization|proxy-authorization|x-api-key|api-key|x-goog-api-key|x-auth-token|x-access-token|x-secret|cookie)$/i;
+const SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
+const ALLOWED_HUB_URL_RE = new RegExp(${JSON.stringify(hubReSource)}, ${JSON.stringify(hubReFlags)});
+const APP_SEGMENTS = ${appSegmentsJson};
+const CFG_SEGMENTS = ${cfgSegmentsJson};
+const EXT_DIR_NAME = ${extDirNameJson};
+const TARGET_PLUGIN_ID = ${pluginIdJson};
+const SETTINGS_FILE_NAME = ${settingsFileJson};
 
 function isInside(parentDir, childPath) {
   const rel = path.relative(parentDir, childPath);
   return Boolean(rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+function validateSettingsStrictFallback(parsed) {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('NOT_OBJECT');
+  if (parsed.schemaVersion !== undefined && parsed.schemaVersion !== 1) throw new Error('BAD_SCHEMA');
+  for (const k of ['enabled', 'translateThinking', 'showThinking', 'translateStaticUi']) {
+    if (parsed[k] !== undefined && typeof parsed[k] !== 'boolean') throw new Error('BAD_BOOL:' + k);
+  }
+  if (parsed.provider !== undefined && parsed.provider !== null && parsed.provider !== '') {
+    if (typeof parsed.provider !== 'string') throw new Error('BAD_PROVIDER_TYPE');
+    const pid = parsed.provider.trim().toLowerCase();
+    if (FORBIDDEN_PROVIDER_IDS.has(pid) || !PROVIDER_ID_RE.test(pid)) throw new Error('BAD_PROVIDER_ID');
+  }
+  if (parsed.llmConfig !== undefined && parsed.llmConfig !== null) {
+    if (typeof parsed.llmConfig !== 'object' || Array.isArray(parsed.llmConfig)) throw new Error('BAD_LLM_CFG');
+    const lc = parsed.llmConfig;
+    if (lc.allowRemoteHttps !== undefined && typeof lc.allowRemoteHttps !== 'boolean') throw new Error('BAD_ALLOW_REMOTE');
+    if (lc.apiFormat !== undefined) {
+      const f = typeof lc.apiFormat === 'string' ? lc.apiFormat.trim().toLowerCase() : '';
+      if (f !== 'ollama' && f !== 'openai' && f !== 'openai-compat') throw new Error('BAD_API_FORMAT');
+    }
+    if (lc.timeoutMs !== undefined && (typeof lc.timeoutMs !== 'number' || !Number.isFinite(lc.timeoutMs) || lc.timeoutMs < 1000 || lc.timeoutMs > 120000)) {
+      throw new Error('BAD_TIMEOUT');
+    }
+    if (lc.baseUrl !== undefined) {
+      const u = new URL(String(lc.baseUrl));
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('BAD_SCHEME');
+      const h = u.hostname.replace(/^\\[|\\]$/g, '').toLowerCase();
+      const isLoop = h === '127.0.0.1' || h === 'localhost' || h === '::1';
+      if (!isLoop && (!lc.allowRemoteHttps || u.protocol !== 'https:')) throw new Error('SSRF_BLOCKED');
+    }
+  }
+  if (parsed.customProviders !== undefined) {
+    if (!Array.isArray(parsed.customProviders)) throw new Error('BAD_CUSTOM_PROVIDERS');
+    for (const cp of parsed.customProviders) {
+      if (!cp || typeof cp !== 'object' || Array.isArray(cp)) throw new Error('BAD_CP_ITEM');
+      if (cp.headers && typeof cp.headers === 'object') {
+        for (const hk of Object.keys(cp.headers)) {
+          if (SECRET_HEADER_RE.test(String(hk || '').trim())) throw new Error('SECRET_HEADER');
+        }
+      }
+      const ep = cp.endpointUrl !== undefined ? cp.endpointUrl : cp.url;
+      if (SECRET_QUERY_RE.test(String(ep || ''))) throw new Error('SECRET_QUERY');
+    }
+  }
+  return parsed;
+}
+
+function loadValidatedSettings(realPDir, sp) {
+  const storePath = path.join(realPDir, 'host', 'config-store.js');
+  if (fs.existsSync(storePath)) {
+    const store = require(storePath);
+    if (store && typeof store.readTranslatorSettings === 'function') {
+      return store.readTranslatorSettings({ SETTINGS_PATH: sp }, { strict: true });
+    }
+  }
+  const parsed = JSON.parse(fs.readFileSync(sp, 'utf8'));
+  return validateSettingsStrictFallback(parsed);
 }
 
 function attach(contents) {
@@ -200,10 +277,11 @@ function attach(contents) {
       if (lastInjectedUrl === url || inFlightUrl === url) return;
 
       const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
-      const agyDir = path.join(home, '.gemini', 'antigravity');
-      const extDir = path.join(agyDir, 'ui-extensions.d');
-      const pluginsRoot = path.join(home, '.gemini', 'config', 'plugins');
-      const configPath = path.join(home, '.gemini', 'config', 'config.json');
+      const agyDir = path.join(home, ...APP_SEGMENTS);
+      const extDir = path.join(agyDir, EXT_DIR_NAME);
+      const cfgDir = path.join(home, ...CFG_SEGMENTS);
+      const pluginsRoot = path.join(cfgDir, 'plugins');
+      const configPath = path.join(cfgDir, 'config.json');
       if (!fs.existsSync(extDir) || !fs.existsSync(pluginsRoot)) return;
 
       let cfg = {};
@@ -233,20 +311,16 @@ function attach(contents) {
           if (!isInside(realPDir, realEntry)) continue;
           const rawCode = fs.readFileSync(realEntry, 'utf8');
           let prelude = '';
-          if (m.pluginId === 'ko-thought-translator') {
-            const sp = path.join(agyDir, 'ko_translator_settings.json');
+          if (m.pluginId === TARGET_PLUGIN_ID) {
+            const sp = path.join(agyDir, SETTINGS_FILE_NAME);
             try {
               if (fs.existsSync(sp)) {
-                const parsedSettings = JSON.parse(fs.readFileSync(sp, 'utf8'));
-                if (parsedSettings && typeof parsedSettings === 'object' && !Array.isArray(parsedSettings)) {
-                  const safeJson = JSON.stringify(parsedSettings)
-                    .replace(/</g, '\\\\u003c')
-                    .replace(/\\u2028/g, '\\\\u2028')
-                    .replace(/\\u2029/g, '\\\\u2029');
-                  prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__=' + safeJson + ';\\n';
-                } else {
-                  prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__={"enabled":false,"settingsCorrupted":true};\\n';
-                }
+                const validatedSettings = loadValidatedSettings(realPDir, sp);
+                const safeJson = JSON.stringify(validatedSettings)
+                  .replace(/</g, '\\\\u003c')
+                  .replace(/\\u2028/g, '\\\\u2028')
+                  .replace(/\\u2029/g, '\\\\u2029');
+                prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__=' + safeJson + ';\\n';
               }
             } catch (_e) {
               prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__={"enabled":false,"settingsCorrupted":true};\\n';
@@ -261,14 +335,17 @@ function attach(contents) {
       if (scriptsToRun.length === 0) return;
 
       inFlightUrl = url;
-      Promise.all(scriptsToRun.map((code) => Promise.resolve(contents.executeJavaScript(code))))
-        .then(() => {
-          if (inFlightUrl === url) {
+      Promise.allSettled(scriptsToRun.map((code) => Promise.resolve(contents.executeJavaScript(code))))
+        .then((results) => {
+          const anyFulfilled = results.some((r) => r.status === 'fulfilled');
+          for (const r of results) {
+            if (r.status === 'rejected') {
+              try { console.error('[ko-thought-translator] executeJavaScript failed:', r.reason && r.reason.message ? r.reason.message : r.reason); } catch (_e) {}
+            }
+          }
+          if (anyFulfilled && inFlightUrl === url) {
             lastInjectedUrl = url;
           }
-        })
-        .catch((err) => {
-          try { console.error('[ko-thought-translator] executeJavaScript failed:', err && err.message ? err.message : err); } catch (_e) {}
         })
         .finally(() => {
           if (inFlightUrl === url) {
@@ -342,30 +419,38 @@ function computeIntegrity(buf) {
   };
 }
 
-function isAsarLoaderInstalled(asarPath) {
+function isAsarLoaderInstalled(asarPath, profile = ANTIGRAVITY_HOST_PROFILE) {
+  const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
+  const mainEntry = activeProfile.mainEntryInAsar || 'dist/main.js';
+  const marker = activeProfile.patchMarker || PATCH_MARKER;
   try {
     if (!asarPath || !fs.existsSync(asarPath)) return false;
     const archive = readAsarArchive(asarPath);
-    const mainBuf = archive.fileMap.get('dist/main.js');
-    return Boolean(mainBuf && mainBuf.toString('utf8').includes(PATCH_MARKER));
+    const mainBuf = archive.fileMap.get(mainEntry);
+    return Boolean(mainBuf && mainBuf.toString('utf8').includes(marker));
   } catch (_err) {
     return false;
   }
 }
 
-function isPureUnpatchedArchive(archive) {
-  const mainBuf = archive && archive.fileMap ? archive.fileMap.get('dist/main.js') : null;
+function isPureUnpatchedArchive(archive, profile = ANTIGRAVITY_HOST_PROFILE) {
+  const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
+  const mainEntry = activeProfile.mainEntryInAsar || 'dist/main.js';
+  const marker = activeProfile.patchMarker || PATCH_MARKER;
+  const legacyMarkers = Array.isArray(activeProfile.legacyPatchMarkers)
+    ? activeProfile.legacyPatchMarkers
+    : ['AGY_STATUSBAR', 'AGY_KO_THOUGHT', 'ui-extensions-loader'];
+  const mainBuf = archive && archive.fileMap ? archive.fileMap.get(mainEntry) : null;
   if (!mainBuf || mainBuf.length === 0) return false;
   const mainText = mainBuf.toString('utf8');
   const utilsText = archive.fileMap.get('dist/utils.js')?.toString('utf8') || '';
   const preloadText = archive.fileMap.get('dist/preload.js')?.toString('utf8') || '';
   const all = mainText + '\n' + utilsText + '\n' + preloadText;
-  return (
-    !all.includes(PATCH_MARKER) &&
-    !all.includes('AGY_STATUSBAR') &&
-    !all.includes('AGY_KO_THOUGHT') &&
-    !all.includes('ui-extensions-loader')
-  );
+  if (all.includes(marker)) return false;
+  for (const legacy of legacyMarkers) {
+    if (all.includes(legacy)) return false;
+  }
+  return true;
 }
 
 function verifyAllAsarIntegrity(archive) {
@@ -561,8 +646,13 @@ function verifyOrigBackupStrict(backupPath, metaPath, expectedVersion, { backfil
   return { ok: true, archive: origArchive, sha256: origHash };
 }
 
-function installAsarDropinLoader(pathOverrides = null) {
-  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+function installAsarDropinLoader(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROFILE) {
+  const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
+  const mainEntry = activeProfile.mainEntryInAsar || 'dist/main.js';
+  const marker = activeProfile.patchMarker || PATCH_MARKER;
+  const anchorTarget = activeProfile.mainAnchorTarget || MAIN_ANCHOR_TARGET;
+  const anchorReplacement = activeProfile.mainAnchorReplacement || MAIN_ANCHOR_REPLACEMENT;
+  const p = { ...resolveHostPaths(process.env, activeProfile), ...(pathOverrides || {}) };
   if (!fs.existsSync(p.ASAR_PATH)) {
     return { status: 'SKIPPED_NO_ASAR' };
   }
@@ -572,7 +662,8 @@ function installAsarDropinLoader(pathOverrides = null) {
   }
   try {
     let archive = readAsarArchive(p.ASAR_PATH);
-    if (isAsarLoaderInstalled(p.ASAR_PATH)) {
+    const existingMainBuf = archive.fileMap.get(mainEntry);
+    if (existingMainBuf && existingMainBuf.toString('utf8').includes(marker)) {
       return { status: 'ALREADY_INSTALLED', appVersion: archive.appVersion };
     }
     const backupPath = `${p.ASAR_PATH}.v${archive.appVersion}.orig`;
@@ -584,7 +675,7 @@ function installAsarDropinLoader(pathOverrides = null) {
         return { status: check.status, appVersion: archive.appVersion };
       }
       archive = check.archive;
-    } else if (isPureUnpatchedArchive(archive)) {
+    } else if (isPureUnpatchedArchive(archive, activeProfile)) {
       if (!verifyAllAsarIntegrity(archive)) {
         return { status: 'ERR_ARCHIVE_INTEGRITY_MISMATCH', appVersion: archive.appVersion };
       }
@@ -606,13 +697,13 @@ function installAsarDropinLoader(pathOverrides = null) {
       return { status: 'ERR_ORIG_MISSING_FOR_PATCHED_ASAR', appVersion: archive.appVersion };
     }
 
-    const mainBuf = archive.fileMap.get('dist/main.js');
+    const mainBuf = archive.fileMap.get(mainEntry);
     if (!mainBuf) {
       return { status: 'ERR_MAIN_MISSING', appVersion: archive.appVersion };
     }
 
-    const patchedMainBuf = transformExactSize(mainBuf, MAIN_ANCHOR_TARGET, MAIN_ANCHOR_REPLACEMENT);
-    archive.fileMap.set('dist/main.js', patchedMainBuf);
+    const patchedMainBuf = transformExactSize(mainBuf, anchorTarget, anchorReplacement);
+    archive.fileMap.set(mainEntry, patchedMainBuf);
 
     const chunks = [];
     let currentOffset = 0n;

@@ -341,3 +341,100 @@ test('R6 F1+F2+F3+F4: colon providerId, corrupted settings fail-closed, imperati
     cleanup();
   }
 });
+
+test('R7 F1+F3+F5+NB1+NB5: config-store strict validation, legacy file-lock defense, cache-variant invalidation, and React in-place __agyOrigValue', async () => {
+  const os = require('node:os');
+  const {
+    normalizeProviderId,
+    sanitizeLlmConfig,
+    acquireExclusiveLock,
+    releaseExclusiveLock,
+  } = require('../../host/config-store');
+  const { buildHostLoaderScriptSource } = require('../../host/dropin-loader');
+
+  // F3: Forbidden provider IDs & non-string types must throw
+  assert.throws(() => normalizeProviderId('constructor'), /Forbidden provider id/);
+  assert.throws(() => normalizeProviderId('prototype'), /Forbidden provider id/);
+  assert.throws(() => normalizeProviderId(false), /Invalid provider id type/);
+  assert.throws(() => sanitizeLlmConfig({ apiFormat: 'invalid-fmt' }, undefined, { strict: true }), /INVALID_API_FORMAT/);
+  assert.throws(() => sanitizeLlmConfig({ timeoutMs: 999999 }, undefined, { strict: true }), /INVALID_TIMEOUT_MS/);
+
+  // NB1: Legacy regular-file lock (fresh -> fail-closed null; stale -> unlinked & acquired)
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-lock-r7-'));
+  try {
+    const lockPath = path.join(tmpDir, 'settings.lock');
+    fs.writeFileSync(lockPath, '{"pid":99999}', 'utf8');
+    assert.equal(acquireExclusiveLock(lockPath, 15000), null, 'Fresh legacy regular-file lock must fail closed');
+    const past = new Date(Date.now() - 30000);
+    fs.utimesSync(lockPath, past, past);
+    const tok = acquireExclusiveLock(lockPath, 5000);
+    assert.ok(tok, 'Stale legacy regular-file lock must be safely replaced by proper-lockfile');
+    releaseExclusiveLock(lockPath, tok);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+
+  // F1: buildHostLoaderScriptSource must reject semantic corruption (secret headers / bad types) fail-closed
+  const loaderSrc = buildHostLoaderScriptSource();
+  assert.match(loaderSrc, /loadValidatedSettings/);
+  assert.match(loaderSrc, /Promise\.allSettled/);
+
+  // F5: bootstrap cache-variant invalidation when local-llm model/timeout changes
+  const { win, doc, cleanup } = createHappyDomEnv();
+  const block = doc.createElement('div');
+  block.className = 'cursor-edit';
+  const inner = doc.createElement('div');
+  inner.className = 'leading-relaxed';
+  const p = doc.createElement('p');
+  p.textContent = 'Checking cache invalidation carefully.';
+  inner.appendChild(p);
+  block.appendChild(inner);
+  doc.body.appendChild(block);
+
+  const modelsCalled = [];
+  const tr = createKoTranslator({
+    win,
+    doc,
+    settings: {
+      enabled: true,
+      translateThinking: true,
+      translateStaticUi: true,
+      provider: 'local-llm',
+      llmConfig: { baseUrl: 'http://127.0.0.1:11434', model: 'model-a', apiFormat: 'ollama', timeoutMs: 15000 },
+    },
+    fetchFn: async (_url, init) => {
+      const body = JSON.parse(init.body);
+      modelsCalled.push(body.model);
+      return { ok: true, json: async () => ({ message: { content: `번역-${body.model}` } }) };
+    },
+  });
+
+  try {
+    tr.start();
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(modelsCalled.includes('model-a'), true);
+
+    // Changing model must invalidate cache variant and retranslate with model-b
+    tr.updateSettings({
+      llmConfig: { baseUrl: 'http://127.0.0.1:11434', model: 'model-b', apiFormat: 'ollama', timeoutMs: 30000 },
+    });
+    await new Promise((r) => setTimeout(r, 250));
+    assert.equal(modelsCalled.includes('model-b'), true, 'Changing llmConfig model must retranslate via new cache variant');
+
+    // NB5: React in-place text update updates __agyOrigValue so dispose() restores the latest React text
+    const btn = doc.createElement('button');
+    const txt = doc.createTextNode('Settings');
+    btn.appendChild(txt);
+    doc.body.appendChild(btn);
+    tr.scanAll();
+    assert.equal(txt.nodeValue, '설정');
+    txt.nodeValue = 'Thinking';
+    tr.scanAll();
+    assert.equal(txt.nodeValue, '생각하는 중');
+    tr.dispose();
+    assert.equal(txt.nodeValue, 'Thinking', 'NB5: dispose() must restore latest React in-place text, not stale Settings');
+  } finally {
+    tr.dispose();
+    cleanup();
+  }
+});

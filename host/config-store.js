@@ -40,16 +40,26 @@ const DEFAULT_SETTINGS = Object.freeze({
 
 function acquireExclusiveLock(lockPath, staleMs = 15000) {
   if (!lockPath) return null;
+  const effectiveStaleMs = Math.max(Number(staleMs) || 15000, 2000);
   try {
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-    // proper-lockfile locks a sentinel target using an atomic mkdir at `lockfilePath`.
+    // NB1: Guard against legacy regular-file locks colliding with proper-lockfile's directory lock (ENOTDIR/EEXIST).
+    if (fs.existsSync(lockPath)) {
+      const st = fs.lstatSync(lockPath);
+      if (st.isFile()) {
+        if (Date.now() - st.mtimeMs <= effectiveStaleMs) {
+          return null;
+        }
+        fs.unlinkSync(lockPath);
+      }
+    }
     const sentinelPath = `${lockPath}.target`;
     if (!fs.existsSync(sentinelPath)) {
       fs.writeFileSync(sentinelPath, '', { encoding: 'utf8', mode: 0o600 });
     }
     const release = lockfile.lockSync(sentinelPath, {
       lockfilePath: lockPath,
-      stale: Math.max(Number(staleMs) || 15000, 2000),
+      stale: effectiveStaleMs,
       realpath: false,
     });
     const token = crypto.randomBytes(12).toString('hex');
@@ -86,41 +96,72 @@ function writeFileAtomicSync(targetPath, content) {
   }
 }
 
+const FORBIDDEN_PROVIDER_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function normalizeProviderId(raw) {
-  const s = String(raw || '').trim().toLowerCase();
+  if (raw === undefined || raw === null || raw === '') return 'google-translate';
+  if (typeof raw !== 'string') {
+    throw new Error(`Invalid provider id type: ${typeof raw}`);
+  }
+  const s = raw.trim().toLowerCase();
   if (!s) return 'google-translate';
+  if (FORBIDDEN_PROVIDER_IDS.has(s)) {
+    throw new Error(`Forbidden provider id: ${raw}`);
+  }
   if (s === 'google' || s === 'gtx' || s === 'google-translate') return 'google-translate';
   if (s === 'local' || s === 'llm' || s === 'ollama' || s === 'local-llm') return 'local-llm';
   if (/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(s)) return s;
   throw new Error(`Invalid provider id: ${raw}`);
 }
 
-function sanitizeLlmConfig(raw, existing = DEFAULT_LLM_CONFIG) {
+function sanitizeLlmConfig(raw, existing = DEFAULT_LLM_CONFIG, { strict = false } = {}) {
   const base = { ...DEFAULT_LLM_CONFIG, ...(existing || {}) };
-  if (!raw || typeof raw !== 'object') return base;
+  if (raw === undefined || raw === null) return base;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    if (strict) throw new Error('INVALID_LLM_CONFIG');
+    return base;
+  }
 
+  if (raw.allowRemoteHttps !== undefined && typeof raw.allowRemoteHttps !== 'boolean') {
+    if (strict) throw new Error('INVALID_ALLOW_REMOTE_HTTPS');
+  }
   const allowRemoteHttps =
     typeof raw.allowRemoteHttps === 'boolean' ? raw.allowRemoteHttps : Boolean(base.allowRemoteHttps);
   const rawUrl = raw.baseUrl !== undefined ? String(raw.baseUrl).trim() : base.baseUrl;
   const parsedUrl = validateTranslationEndpointUrl(rawUrl, { allowRemoteHttps });
 
+  if (raw.model !== undefined && typeof raw.model !== 'string') {
+    if (strict) throw new Error('INVALID_LLM_MODEL');
+  }
   const model =
-    raw.model !== undefined && String(raw.model).trim()
-      ? String(raw.model).trim().slice(0, 128)
+    typeof raw.model === 'string' && raw.model.trim()
+      ? raw.model.trim().slice(0, 128)
       : base.model;
-  const rawFormat = String(raw.apiFormat || '').trim().toLowerCase();
-  const apiFormat =
-    rawFormat === 'openai' || rawFormat === 'openai-compat'
-      ? 'openai'
-      : rawFormat === 'ollama'
-        ? 'ollama'
-        : base.apiFormat === 'openai-compat'
-          ? 'openai'
-          : base.apiFormat;
-  const timeoutMs =
-    typeof raw.timeoutMs === 'number' && Number.isFinite(raw.timeoutMs) && raw.timeoutMs >= 1000 && raw.timeoutMs <= 120000
-      ? Math.floor(raw.timeoutMs)
-      : base.timeoutMs;
+
+  let apiFormat = base.apiFormat === 'openai-compat' ? 'openai' : base.apiFormat;
+  if (raw.apiFormat !== undefined) {
+    if (typeof raw.apiFormat !== 'string') {
+      if (strict) throw new Error('INVALID_API_FORMAT');
+    } else {
+      const rawFormat = raw.apiFormat.trim().toLowerCase();
+      if (rawFormat === 'openai' || rawFormat === 'openai-compat') {
+        apiFormat = 'openai';
+      } else if (rawFormat === 'ollama') {
+        apiFormat = 'ollama';
+      } else if (strict) {
+        throw new Error(`INVALID_API_FORMAT:${raw.apiFormat}`);
+      }
+    }
+  }
+
+  let timeoutMs = base.timeoutMs;
+  if (raw.timeoutMs !== undefined) {
+    if (typeof raw.timeoutMs === 'number' && Number.isFinite(raw.timeoutMs) && raw.timeoutMs >= 1000 && raw.timeoutMs <= 120000) {
+      timeoutMs = Math.floor(raw.timeoutMs);
+    } else if (strict) {
+      throw new Error(`INVALID_TIMEOUT_MS:${raw.timeoutMs}`);
+    }
+  }
 
   return {
     baseUrl: parsedUrl.href.replace(/\/+$/, ''),
@@ -216,14 +257,27 @@ function readTranslatorSettings(pathOverrides = null, { strict = false } = {}) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('SETTINGS_FILE_CORRUPTED');
     }
+    if (parsed.schemaVersion !== undefined && parsed.schemaVersion !== 1) {
+      throw new Error(`UNSUPPORTED_SETTINGS_SCHEMA_VERSION:${parsed.schemaVersion}`);
+    }
+    if (strict) {
+      for (const boolKey of ['enabled', 'translateThinking', 'showThinking', 'translateStaticUi']) {
+        if (parsed[boolKey] !== undefined && typeof parsed[boolKey] !== 'boolean') {
+          throw new Error(`INVALID_BOOLEAN_SETTING:${boolKey}`);
+        }
+      }
+    }
     return {
       schemaVersion: 1,
       translateThinking: parsed.translateThinking !== false,
       showThinking: parsed.showThinking !== false,
       translateStaticUi: parsed.translateStaticUi !== false,
       provider: normalizeProviderId(parsed.provider),
-      llmConfig: sanitizeLlmConfig(parsed.llmConfig, DEFAULT_LLM_CONFIG),
-      customProviders: sanitizeCustomProviders(parsed.customProviders, { strict }),
+      llmConfig: sanitizeLlmConfig(parsed.llmConfig, DEFAULT_LLM_CONFIG, { strict }),
+      customProviders:
+        parsed.customProviders === undefined
+          ? []
+          : sanitizeCustomProviders(parsed.customProviders, { strict }),
     };
   } catch (err) {
     if (strict) {
@@ -255,7 +309,7 @@ function saveTranslatorSettings(patch, pathOverrides = null) {
       provider: patch.provider !== undefined ? normalizeProviderId(patch.provider) : current.provider,
       llmConfig:
         patch.llmConfig !== undefined
-          ? sanitizeLlmConfig(patch.llmConfig, current.llmConfig)
+          ? sanitizeLlmConfig(patch.llmConfig, current.llmConfig, { strict: true })
           : current.llmConfig,
       customProviders:
         patch.customProviders !== undefined

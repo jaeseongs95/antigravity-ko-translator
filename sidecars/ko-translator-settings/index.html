@@ -292,9 +292,22 @@
       }
 
       function renderPayload(data) {
-        if (!data || !data.settings) return;
+        if (!data || typeof data !== 'object') return;
         if (typeof data.csrfToken === 'string' && data.csrfToken) {
           csrfToken = data.csrfToken;
+        }
+        if (data.diagnostics) {
+          setBadge('diag-plugin', 'diag-plugin-val', data.diagnostics.pluginEnabled, '활성', '비활성');
+          setBadge('diag-manifest', 'diag-manifest-val', data.diagnostics.manifestRegistered, '등록됨', '미등록');
+          setBadge('diag-asar', 'diag-asar-val', data.diagnostics.asarLoaderInstalled, '설치됨', '미설치');
+        }
+        if (data.settingsCorrupted || !data.settings) {
+          elFeedback.className = 'feedback err';
+          elFeedback.textContent =
+            '설정 파일이 손상되어 안전을 위해 번역이 중지되었습니다: ' +
+            (data.settingsError || 'SETTINGS_FILE_CORRUPTED');
+          syncLlmVisibility();
+          return;
         }
         const s = data.settings;
         elTranslateThinking.checked = s.translateThinking !== false;
@@ -319,12 +332,6 @@
         elLlmTimeout.value = String((s.llmConfig && s.llmConfig.timeoutMs) || 15000);
         elLlmAllowRemote.checked = Boolean(s.llmConfig && s.llmConfig.allowRemoteHttps);
         syncLlmVisibility();
-
-        if (data.diagnostics) {
-          setBadge('diag-plugin', 'diag-plugin-val', data.diagnostics.pluginEnabled, '활성', '비활성');
-          setBadge('diag-manifest', 'diag-manifest-val', data.diagnostics.manifestRegistered, '등록됨', '미등록');
-          setBadge('diag-asar', 'diag-asar-val', data.diagnostics.asarLoaderInstalled, '설치됨', '미설치');
-        }
       }
 
       elProvider.addEventListener('change', syncLlmVisibility);
