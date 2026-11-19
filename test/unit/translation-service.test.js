@@ -127,6 +127,37 @@ test('TranslationService (D-0026, D-0032, D-0033): lowercase normalization, remo
   // Stale result must NOT enter memCache of the new epoch
   assert.equal(pendingSvc.getCachedSync('Verifying stale epoch protection.'), null);
   assert.ok(typeof staleRes === 'string');
+
+  // 4) F5: When local-llm or custom provider fails, MUST NOT silently fall back to google-translate (zero data leakage)
+  let leakGoogleCalls = 0;
+  const isoReg = createProviderRegistry();
+  isoReg.registerProvider({
+    id: 'google-translate',
+    label: 'Google',
+    supportsRemote: true,
+    async translate(t) {
+      leakGoogleCalls += 1;
+      return `[유출] ${t}`;
+    },
+  });
+  isoReg.registerProvider({
+    id: 'local-llm',
+    label: 'Local LLM',
+    supportsRemote: false,
+    async translate() {
+      throw new Error('ECONNREFUSED');
+    },
+  });
+  const isoSvc = createTranslationService({
+    registry: isoReg,
+    storage: createMemStorage({ 'ko-thought-provider': 'local-llm' }),
+    defaultProviderId: 'google-translate',
+  });
+  const fallbackResult = await isoSvc.translateText('Private internal secret thought.');
+  assert.equal(fallbackResult, 'Private internal secret thought.');
+  assert.equal(leakGoogleCalls, 0, 'F5: Failed local-llm must NEVER silently leak text to google-translate');
+  isoSvc.dispose();
+
   pendingSvc.dispose();
 });
 

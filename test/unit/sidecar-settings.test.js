@@ -47,7 +47,8 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
     const htmlRes = handle({ method: 'GET', urlPath: '/' });
     assert.equal(htmlRes.status, 200);
     assert.match(htmlRes.body, /한글 번역 설정/);
-    assert.ok(htmlRes.body.includes(handle.csrfToken), 'HTML must embed per-instance CSRF token');
+    const metaMatch = htmlRes.body.match(/<meta name="ko-csrf-token" content="([^"]+)" \/>/);
+    assert.ok(metaMatch && metaMatch[1] === handle.csrfToken, 'HTML must embed per-instance CSRF token in meta tag');
 
     const getRes = handle({ method: 'GET', urlPath: '/api/settings' });
     assert.equal(getRes.status, 200);
@@ -59,7 +60,7 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
       host: '127.0.0.1:43210',
       origin: 'http://127.0.0.1:43210',
       'content-type': 'application/json',
-      'x-ko-csrf-token': handle.csrfToken,
+      'x-ko-csrf-token': metaMatch[1],
     };
 
     // 1. Missing CSRF token -> 403
@@ -127,24 +128,38 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
     });
     assert.equal(badCustomRes.status, 400);
 
-    // 7. Valid save canonicalizes apiFormat 'openai-compat' -> 'openai'
+    // 7. Valid save canonicalizes apiFormat 'openai-compat' -> 'openai' & persists F2 customProviders with endpointUrl/allowRemoteHttps
     const saveRes = handle({
       method: 'POST',
       urlPath: '/api/settings',
       headers: validHeaders,
       rawBody: JSON.stringify({
-        provider: 'local-llm',
+        provider: 'my-custom',
         translateThinking: true,
         showThinking: false,
         translateStaticUi: false,
         llmConfig: { baseUrl: 'http://127.0.0.1:11434', model: 'gemma3:4b', apiFormat: 'openai-compat' },
+        customProviders: [
+          {
+            id: 'my-custom',
+            label: 'My Custom',
+            endpointUrl: 'https://api.example.com/translate',
+            allowRemoteHttps: true,
+            method: 'POST',
+            bodyTemplate: { q: '{{text}}' },
+            responsePath: 'data.text',
+          },
+        ],
       }),
     });
     assert.equal(saveRes.status, 200);
     const saved = JSON.parse(saveRes.body);
     assert.equal(saved.ok, true);
-    assert.equal(saved.settings.provider, 'local-llm');
+    assert.equal(saved.settings.provider, 'my-custom');
     assert.equal(saved.settings.llmConfig.apiFormat, 'openai');
+    assert.equal(saved.settings.customProviders.length, 1);
+    assert.equal(saved.settings.customProviders[0].endpointUrl, 'https://api.example.com/translate');
+    assert.equal(saved.settings.customProviders[0].allowRemoteHttps, true);
 
     // 8. Standalone HTTP server returns 413 Payload Too Large (zero silent truncation)
     const server = createStandaloneHttpServer(handle);

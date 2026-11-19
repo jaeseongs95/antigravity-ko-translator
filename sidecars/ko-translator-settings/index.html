@@ -285,6 +285,13 @@
         elShowThinking.checked = s.showThinking !== false;
         elTranslateStaticUi.checked = s.translateStaticUi !== false;
         const targetProvider = typeof s.provider === 'string' && s.provider.trim() ? s.provider.trim() : 'google-translate';
+        if (Array.isArray(s.customProviders)) {
+          for (const cp of s.customProviders) {
+            if (cp && typeof cp.id === 'string' && cp.id.trim()) {
+              ensureProviderOption(cp.id.trim(), s.customProviders);
+            }
+          }
+        }
         ensureProviderOption(targetProvider, s.customProviders);
         elProvider.value = targetProvider;
         elLlmFormat.value =

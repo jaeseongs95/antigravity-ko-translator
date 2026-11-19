@@ -234,7 +234,12 @@ test('F4+F5: buildHostLoaderScriptSource executes cleanly, safely handles corrup
     handlers['dom-ready']();
     assert.equal(executedScripts.length, 1);
 
-    // Flip enabled -> false and fire again -> must execute 0 new scripts
+    // F3: did-finish-load on the SAME URL must NOT double-inject (zero FOUC)
+    handlers['did-finish-load']();
+    assert.equal(executedScripts.length, 1);
+
+    // After top-frame navigation starts and enabled -> false, firing again must execute 0 new scripts
+    handlers['did-start-navigation']({}, 'http://127.0.0.1:4173/index.html', false, true);
     fs.writeFileSync(
       path.join(cfgDir, 'config.json'),
       JSON.stringify({ plugins: { 'ko-thought-translator': { enabled: false } } }),

@@ -15,6 +15,7 @@ const crypto = require('crypto');
 
 const { resolveHostPaths, PLUGIN_ID } = require('./paths');
 const { validateTranslationEndpointUrl } = require('../src/adapters/translators/endpoint-validator');
+const { validateCustomProviderSpec } = require('../src/adapters/translators/custom-provider');
 
 const DEFAULT_LLM_CONFIG = Object.freeze({
   baseUrl: 'http://127.0.0.1:11434',
@@ -66,12 +67,31 @@ function acquireExclusiveLock(lockPath, staleMs = 15000) {
 
   try {
     const stat = fs.statSync(lockPath);
-    const raw = fs.readFileSync(lockPath, 'utf8');
-    const info = JSON.parse(raw);
-    const ownerAlive = info && info.pid ? isProcessAlive(info.pid) : false;
-    const isStale = !ownerAlive && Date.now() - stat.mtimeMs > staleMs;
+    let ownerAlive = false;
+    let corrupt = false;
+    try {
+      const raw = fs.readFileSync(lockPath, 'utf8');
+      const info = JSON.parse(raw);
+      ownerAlive = Boolean(info && info.pid && isProcessAlive(info.pid));
+    } catch (_parseErr) {
+      corrupt = true;
+      ownerAlive = false;
+    }
+    const ageMs = Date.now() - stat.mtimeMs;
+    const isStale = !ownerAlive && (ageMs > staleMs || (corrupt && ageMs >= Math.min(staleMs, 1000)));
     if (!isStale) return null;
-    fs.unlinkSync(lockPath);
+
+    // Atomic stale-lock quarantine via renameSync prevents unlink->open TOCTOU races.
+    const quarantinePath = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+    try {
+      fs.renameSync(lockPath, quarantinePath);
+    } catch (_renameErr) {
+      return null;
+    }
+    try {
+      fs.unlinkSync(quarantinePath);
+    } catch (_unlinkErr) {}
+
     const fd = fs.openSync(lockPath, 'wx', 0o600);
     try {
       fs.writeFileSync(fd, payload, 'utf8');
@@ -155,7 +175,7 @@ function sanitizeLlmConfig(raw, existing = DEFAULT_LLM_CONFIG) {
   };
 }
 
-const FORBIDDEN_HEADER_RE = /^(?:cookie|host|origin|referer|sec-|proxy-|content-length|transfer-encoding|connection|authorization)$/i;
+const SECRET_HEADER_RE = /^(?:authorization|x-api-key|api-key)$/i;
 
 function sanitizeCustomProviders(rawList, { strict = false } = {}) {
   if (!Array.isArray(rawList)) return [];
@@ -166,37 +186,34 @@ function sanitizeCustomProviders(rawList, { strict = false } = {}) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) {
         throw new Error('INVALID_CUSTOM_PROVIDER_SPEC');
       }
-      const id = normalizeProviderId(item.id);
-      if (id === 'google-translate' || id === 'local-llm' || seen.has(id)) {
-        throw new Error(`INVALID_CUSTOM_PROVIDER_ID:${id}`);
-      }
-      const parsedUrl = validateTranslationEndpointUrl(String(item.url || '').trim(), {
-        allowRemoteHttps: true,
-      });
-      const method = String(item.method || 'POST').trim().toUpperCase();
-      if (method !== 'POST' && method !== 'GET') {
-        throw new Error(`INVALID_CUSTOM_PROVIDER_METHOD:${method}`);
-      }
-      const headers = {};
       if (item.headers && typeof item.headers === 'object' && !Array.isArray(item.headers)) {
-        for (const [k, v] of Object.entries(item.headers)) {
-          const hk = String(k || '').trim();
-          const hv = String(v ?? '');
-          if (!hk || FORBIDDEN_HEADER_RE.test(hk) || /[\r\n]/.test(hk) || /[\r\n]/.test(hv)) {
-            throw new Error(`FORBIDDEN_CUSTOM_PROVIDER_HEADER:${hk}`);
+        for (const k of Object.keys(item.headers)) {
+          if (SECRET_HEADER_RE.test(String(k || '').trim())) {
+            throw new Error(`FORBIDDEN_SECRET_HEADER_IN_HOST_SETTINGS:${k}`);
           }
-          headers[hk] = hv;
         }
       }
-      seen.add(id);
+      const normalizedInput = {
+        ...item,
+        endpointUrl: item.endpointUrl !== undefined ? item.endpointUrl : item.url,
+        allowRemoteHttps: Boolean(item.allowRemoteHttps),
+      };
+      const spec = validateCustomProviderSpec(normalizedInput);
+      if (seen.has(spec.id)) {
+        throw new Error(`DUPLICATE_CUSTOM_PROVIDER_ID:${spec.id}`);
+      }
+      seen.add(spec.id);
       out.push({
-        id,
-        label: typeof item.label === 'string' && item.label.trim() ? item.label.trim().slice(0, 64) : id,
-        url: parsedUrl.href,
-        method,
-        headers,
-        bodyTemplate: item.bodyTemplate !== undefined ? item.bodyTemplate : null,
-        responsePath: typeof item.responsePath === 'string' ? item.responsePath.trim().slice(0, 128) : '',
+        id: spec.id,
+        label: spec.label,
+        endpointUrl: spec.endpointUrl,
+        method: spec.method,
+        headers: spec.headers,
+        bodyTemplate: spec.bodyTemplate,
+        responsePath: spec.responsePath,
+        allowRemoteHttps: spec.allowRemoteHttps,
+        maxConcurrency: spec.maxConcurrency,
+        timeoutMs: spec.timeoutMs,
       });
     } catch (err) {
       if (strict) throw err;

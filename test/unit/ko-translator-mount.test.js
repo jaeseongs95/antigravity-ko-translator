@@ -2,8 +2,12 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 
 const { createKoTranslator, STYLE_ID } = require('../../src/runtime/bootstrap');
+const BUNDLE_PATH = path.resolve(__dirname, '..', '..', 'dist', 'renderer.js');
 
 function createRealLikeDom() {
   const elementsById = new Map();
@@ -354,5 +358,52 @@ test('F3: start() with enabled:false activates observer & listeners cleanly when
     assert.equal(label.textContent, 'Settings');
   } finally {
     translator.dispose();
+  }
+});
+
+test('F4 (D-0042): real built dist/renderer.js bundle localizes UI while strictly excluding diff/code-viewer lines in VM', () => {
+  const { win, doc } = createRealLikeDom();
+  const uiBtn = doc.createElement('button');
+  uiBtn.appendChild(doc.createTextNode('Settings'));
+  doc.body.appendChild(uiBtn);
+
+  // D-0042: diff line with code token "Change" MUST NOT be localized into "변경"
+  const diffLine = doc.createElement('div');
+  diffLine.setAttribute('data-diff-line', '1');
+  const codeSpan = doc.createElement('span');
+  codeSpan.appendChild(doc.createTextNode('Change'));
+  diffLine.appendChild(codeSpan);
+  doc.body.appendChild(diffLine);
+
+  const bundleSrc = fs.readFileSync(BUNDLE_PATH, 'utf8');
+  const sandbox = {
+    window: win,
+    document: doc,
+    Node: win.Node,
+    NodeFilter: win.NodeFilter,
+    MutationObserver: win.MutationObserver,
+    localStorage: win.localStorage,
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    console,
+    URL,
+    fetch: async () => ({ ok: true, json: async () => [[['번역']]] }),
+  };
+  sandbox.globalThis = sandbox;
+  sandbox.self = sandbox;
+  vm.runInNewContext(bundleSrc, sandbox);
+  assert.equal(typeof sandbox.window.__agyCreateKoTranslator, 'function');
+  assert.ok(sandbox.window.__agyKoTranslator, 'dist/renderer.js must auto-mount window.__agyKoTranslator');
+
+  try {
+    const st = sandbox.window.__agyKoTranslator.getStatus();
+    assert.equal(st.started, true);
+    assert.equal(st.lastError, null);
+    assert.equal(uiBtn.textContent, '설정');
+    assert.equal(codeSpan.textContent, 'Change', 'D-0042: code/diff lines must never be translated');
+  } finally {
+    sandbox.window.__agyKoTranslator.dispose();
   }
 });

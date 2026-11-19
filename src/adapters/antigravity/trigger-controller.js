@@ -183,12 +183,15 @@ function createAntigravityTriggerController({
     }
 
     const thinkingBtns = Array.from(doc.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]'));
+    const latestTurnThinkingBtns = thinkingBtns.filter((b) => isElementInLatestTurn(b, doc, NodeCtor));
+    const activeLatestThinkingBtn =
+      latestTurnThinkingBtns.length > 0 ? latestTurnThinkingBtns[latestTurnThinkingBtns.length - 1] : null;
     for (let i = 0; i < thinkingBtns.length; i++) {
       const btn = thinkingBtns[i];
       processTriggerButton(btn);
-      const isLatest = isElementInLatestTurn(btn, doc, NodeCtor);
+      const isActiveLatestSegment = btn === activeLatestThinkingBtn;
       if (showThinking && !forceCollapse) {
-        if (isLatest && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+        if (isActiveLatestSegment && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
           expandIfNeeded(btn);
         }
       } else if (!showThinking && btn.getAttribute('aria-expanded') === 'true') {

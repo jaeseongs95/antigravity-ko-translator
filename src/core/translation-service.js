@@ -395,19 +395,6 @@ function createTranslationService({
         }
 
         if (signal && signal.aborted) return text;
-
-        if ((!candidate || isInvalidCachedOrTranslatedText(candidate, clean)) && provider.id !== normalizedDefaultId) {
-          const fallbackProv = registry.getProvider(normalizedDefaultId);
-          if (fallbackProv && fallbackProv.id !== provider.id) {
-            try {
-              candidate = await invokeProviderWithFallback(fallbackProv, clean, protectedText, savedTokens, signal);
-            } catch (_err) {
-              candidate = null;
-            }
-          }
-        }
-
-        if (signal && signal.aborted) return text;
         if (candidate && candidate !== clean && !isInvalidCachedOrTranslatedText(candidate, clean)) {
           if (!disposed && epoch === reqEpoch && getEffectiveProviderId() === reqEffectiveId) {
             memCache.set(clean, candidate);

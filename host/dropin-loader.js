@@ -183,11 +183,14 @@ function isInside(parentDir, childPath) {
 
 function attach(contents) {
   if (!contents || typeof contents.getType !== 'function' || contents.getType() !== 'window') return;
+  let lastInjectedUrl = null;
   const run = () => {
     try {
       if (contents.isDestroyed()) return;
       const url = typeof contents.getURL === 'function' ? String(contents.getURL() || '') : '';
       if (!ALLOWED_HUB_URL_RE.test(url)) return;
+      if (lastInjectedUrl === url) return;
+      lastInjectedUrl = url;
 
       const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
       const agyDir = path.join(home, '.gemini', 'antigravity');
@@ -235,6 +238,9 @@ function attach(contents) {
       }
     } catch (_e) {}
   };
+  contents.on('did-start-navigation', (_ev, _url, _isInPlace, isMainFrame) => {
+    if (isMainFrame !== false) lastInjectedUrl = null;
+  });
   contents.on('dom-ready', run);
   contents.on('did-finish-load', run);
 }
@@ -442,6 +448,16 @@ function installAsarDropinLoader(pathOverrides = null) {
       archive = readAsarArchive(backupPath);
       if (!isPureUnpatchedArchive(archive)) {
         return { status: 'ERR_ORIG_NOT_PURE', appVersion: archive.appVersion };
+      }
+      if (fs.existsSync(metaPath)) {
+        try {
+          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+          if (!meta || meta.sha256 !== sha256Hex(archive.buf) || meta.bytes !== archive.buf.length) {
+            return { status: 'ERR_ORIG_META_MISMATCH', appVersion: archive.appVersion };
+          }
+        } catch (_err) {
+          return { status: 'ERR_ORIG_META_MISMATCH', appVersion: archive.appVersion };
+        }
       }
     } else {
       return { status: 'ERR_ORIG_MISSING_FOR_PATCHED_ASAR', appVersion: archive.appVersion };

@@ -126,3 +126,46 @@ test('F3 (D-0016/D-0023): trigger-controller does NOT force-expand previous comp
   ctrl.scanTriggerButtonsSync(false);
   assert.equal(prevBtnClicked, false, 'Previous turn Thinking button must NOT be force-expanded');
 });
+
+test('F3 (D-0023): within [data-turn-content="latest"], ONLY the last Thinking segment expands (earlier completed segments stay collapsed)', () => {
+  const clicked = [];
+  const makeBtn = (name) => ({
+    name,
+    attrs: new Map([
+      ['data-testid', 'thinking-collapsible-trigger'],
+      ['aria-expanded', 'false'],
+    ]),
+    getAttribute(k) { return this.attrs.has(k) ? this.attrs.get(k) : null; },
+    setAttribute(k, v) { this.attrs.set(k, String(v)); },
+    removeAttribute(k) { this.attrs.delete(k); },
+    closest: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    click() {
+      clicked.push(name);
+      this.attrs.set('aria-expanded', 'true');
+    },
+  });
+
+  const earlierSeg = makeBtn('seg-1-completed');
+  const activeSeg = makeBtn('seg-2-active');
+  const latestTurnEl = {
+    contains: (el) => el === earlierSeg || el === activeSeg,
+  };
+  const doc = {
+    documentElement: { setAttribute() {}, removeAttribute() {}, getAttribute: () => null },
+    querySelector: (sel) => (sel === '[data-turn-content="latest"]' ? latestTurnEl : null),
+    querySelectorAll: (sel) =>
+      sel === 'button[data-testid="thinking-collapsible-trigger"]' ? [earlierSeg, activeSeg] : [],
+  };
+
+  const ctrl = createAntigravityTriggerController({
+    targetDoc: doc,
+    targetWin: { Node: { DOCUMENT_POSITION_FOLLOWING: 4 } },
+    catalog: createAntigravityDictionaryCatalog(),
+    getShowThinkingEnabled: () => true,
+  });
+
+  ctrl.scanTriggerButtonsSync(false);
+  assert.deepEqual(clicked, ['seg-2-active'], 'D-0023: only the active last Thinking segment may expand');
+});

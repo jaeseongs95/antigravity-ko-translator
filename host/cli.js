@@ -50,8 +50,15 @@ async function runCli(argv = process.argv.slice(2), pathOverrides = null) {
   if (argv.includes('--install')) {
     const manifest = registerPluginManifest(p);
     const asar = installAsarDropinLoader(p);
-    const out = { status: 'INSTALLED', manifest, asar };
+    const succeeded =
+      asar.status === 'INSTALLED' ||
+      asar.status === 'ALREADY_INSTALLED' ||
+      asar.status === 'SKIPPED_NO_ASAR';
+    const out = { status: succeeded ? 'INSTALLED' : 'FAILED', manifest, asar };
     process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+    if (!succeeded) {
+      process.exitCode = 1;
+    }
     return out;
   }
 

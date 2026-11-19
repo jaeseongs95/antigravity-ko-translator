@@ -118,7 +118,8 @@ function createKoTranslator({
   let started = false;
   let runtimeActive = false;
   let disposed = false;
-  let lastError = null;
+  let scanError = null;
+  let customProviderError = null;
 
   const disposables = createDisposableRegistry();
   const catalog = createAntigravityDictionaryCatalog();
@@ -136,6 +137,7 @@ function createKoTranslator({
   providerRegistry.registerProvider(localLlmProvider);
 
   function syncDeclarativeCustomProviders(list) {
+    customProviderError = null;
     if (!Array.isArray(list)) return;
     for (const spec of list) {
       if (!spec || typeof spec !== 'object' || !spec.id) continue;
@@ -143,7 +145,7 @@ function createKoTranslator({
         const provider = createCustomProviderAdapter(spec, { fetchFn: effectiveFetch });
         providerRegistry.registerProvider(provider);
       } catch (err) {
-        lastError = `custom-provider(${spec.id}): ${err && err.message ? err.message : String(err)}`;
+        customProviderError = `custom-provider(${spec.id}): ${err && err.message ? err.message : String(err)}`;
       }
     }
   }
@@ -235,9 +237,9 @@ function createKoTranslator({
       if (scheduler && typeof scheduler.takeRecords === 'function') {
         scheduler.takeRecords();
       }
-      lastError = null;
+      scanError = null;
     } catch (err) {
-      lastError = err && err.message ? err.message : String(err);
+      scanError = err && err.message ? err.message : String(err);
       emitStatus();
     }
   }
@@ -261,7 +263,7 @@ function createKoTranslator({
         onEnsureStyle: ensureStyleElement,
         onScanAll: scanAll,
         onError: (err) => {
-          lastError = err && err.message ? err.message : String(err);
+          scanError = err && err.message ? err.message : String(err);
           emitStatus();
         },
         periodicIntervalMs: 2500,
@@ -391,7 +393,7 @@ function createKoTranslator({
       provider: state.provider,
       availableProviders: providerRegistry.listProviderIds(),
       cacheSize: translationService.getCacheSize(),
-      lastError,
+      lastError: scanError || customProviderError,
     };
   }
 
