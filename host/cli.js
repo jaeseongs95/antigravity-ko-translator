@@ -73,6 +73,9 @@ async function runCli(argv = process.argv.slice(2), pathOverrides = null) {
       asar.status === 'INSTALLED' ||
       asar.status === 'ALREADY_INSTALLED' ||
       asar.status === 'SKIPPED_NO_ASAR';
+    if (!succeeded) {
+      unregisterPluginManifest(p);
+    }
     const out = { status: succeeded ? 'INSTALLED' : 'FAILED', manifest, manifestValidation, asar };
     process.stdout.write(JSON.stringify(out, null, 2) + '\n');
     if (!succeeded) {

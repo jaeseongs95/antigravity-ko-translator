@@ -19,6 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const vm = require('vm');
 
 const { resolveHostPaths, PLUGIN_ID } = require('./paths');
 const {
@@ -33,7 +34,7 @@ const MAIN_ANCHOR_TARGET = "electron_1.app.on('web-contents-created', (_event, c
 const MAIN_ANCHOR_REPLACEMENT =
   "electron_1.app.on('web-contents-created', (_event, contents) => {\n" +
   `    // ${PATCH_MARKER}\n` +
-  "    try { const _p = require('path').join(require('os').homedir(), '.gemini', 'antigravity', 'ui-extensions-loader.js'); if (require('fs').existsSync(_p)) require(_p).attach(contents); } catch (_e) {}";
+  "    try { const _h = process.env.USERPROFILE || process.env.HOME || require('os').homedir(); const _p = require('path').join(_h, '.gemini', 'antigravity', 'ui-extensions-loader.js'); if (require('fs').existsSync(_p)) require(_p).attach(contents); } catch (_e) { try { console.error('[ko-thought-translator] loader bootstrap error:', _e && _e.message ? _e.message : _e); } catch (_i) {} }";
 
 const BLOCK_SIZE = 4 * 1024 * 1024;
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -184,13 +185,14 @@ function isInside(parentDir, childPath) {
 function attach(contents) {
   if (!contents || typeof contents.getType !== 'function' || contents.getType() !== 'window') return;
   let lastInjectedUrl = null;
+  let inFlightUrl = null;
   const run = () => {
     try {
       if (contents.isDestroyed()) return;
       const url = typeof contents.getURL === 'function' ? String(contents.getURL() || '') : '';
       if (!ALLOWED_HUB_URL_RE.test(url)) return;
-      if (lastInjectedUrl === url) return;
-      lastInjectedUrl = url;
+      if (lastInjectedUrl === url || inFlightUrl === url) return;
+      inFlightUrl = url;
 
       const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
       const agyDir = path.join(home, '.gemini', 'antigravity');
@@ -233,19 +235,33 @@ function attach(contents) {
             } catch (_e) {}
           }
           const wrapped = '(function(){try{\\n' + prelude + rawCode + '\\n}catch(err){try{console.error("[ko-thought-translator] renderer error:",err&&err.message?err.message:err);}catch(_e){}}})();';
-          void contents.executeJavaScript(wrapped).catch((err) => {
-            try { console.error('[ko-thought-translator] executeJavaScript failed:', err && err.message ? err.message : err); } catch (_e) {}
-          });
+          Promise.resolve(contents.executeJavaScript(wrapped))
+            .then(() => {
+              if (inFlightUrl === url) {
+                lastInjectedUrl = url;
+                inFlightUrl = null;
+              }
+            })
+            .catch((err) => {
+              if (inFlightUrl === url) inFlightUrl = null;
+              try { console.error('[ko-thought-translator] executeJavaScript failed:', err && err.message ? err.message : err); } catch (_e) {}
+            });
         } catch (err) {
+          if (inFlightUrl === url) inFlightUrl = null;
           try { console.error('[ko-thought-translator] extension load failed:', f, err && err.message ? err.message : err); } catch (_e) {}
         }
       }
+      if (files.length === 0 && inFlightUrl === url) inFlightUrl = null;
     } catch (err) {
+      inFlightUrl = null;
       try { console.error('[ko-thought-translator] loader run failed:', err && err.message ? err.message : err); } catch (_e) {}
     }
   };
   contents.on('did-start-navigation', (_ev, _url, _isInPlace, isMainFrame) => {
-    if (isMainFrame !== false) lastInjectedUrl = null;
+    if (isMainFrame !== false) {
+      lastInjectedUrl = null;
+      inFlightUrl = null;
+    }
   });
   contents.on('dom-ready', run);
   contents.on('did-finish-load', run);
@@ -314,7 +330,9 @@ function isAsarLoaderInstalled(asarPath) {
 }
 
 function isPureUnpatchedArchive(archive) {
-  const mainText = archive.fileMap.get('dist/main.js')?.toString('utf8') || '';
+  const mainBuf = archive && archive.fileMap ? archive.fileMap.get('dist/main.js') : null;
+  if (!mainBuf || mainBuf.length === 0) return false;
+  const mainText = mainBuf.toString('utf8');
   const utilsText = archive.fileMap.get('dist/utils.js')?.toString('utf8') || '';
   const preloadText = archive.fileMap.get('dist/preload.js')?.toString('utf8') || '';
   const all = mainText + '\n' + utilsText + '\n' + preloadText;
@@ -324,6 +342,48 @@ function isPureUnpatchedArchive(archive) {
     !all.includes('AGY_KO_THOUGHT') &&
     !all.includes('ui-extensions-loader')
   );
+}
+
+function verifyAllAsarIntegrity(archive) {
+  if (!archive || !archive.header || !archive.fileMap) return false;
+  let valid = true;
+  let checkedCount = 0;
+  function walk(node, relPath) {
+    if (!valid || !node) return;
+    if (node.files) {
+      for (const [name, child] of Object.entries(node.files)) {
+        walk(child, relPath ? `${relPath}/${name}` : name);
+      }
+    } else if (!node.unpacked && node.offset !== undefined && node.size !== undefined) {
+      const data = archive.fileMap.get(relPath);
+      if (!data || data.length !== node.size) {
+        valid = false;
+        return;
+      }
+      if (node.integrity && node.integrity.hash) {
+        const expected = computeIntegrity(data);
+        if (expected.hash !== node.integrity.hash) {
+          valid = false;
+          return;
+        }
+        if (Array.isArray(node.integrity.blocks)) {
+          if (node.integrity.blocks.length !== expected.blocks.length) {
+            valid = false;
+            return;
+          }
+          for (let i = 0; i < expected.blocks.length; i++) {
+            if (node.integrity.blocks[i] !== expected.blocks[i]) {
+              valid = false;
+              return;
+            }
+          }
+        }
+        checkedCount += 1;
+      }
+    }
+  }
+  walk(archive.header, '');
+  return valid && checkedCount > 0;
 }
 
 function transformExactSize(origBuf, targetStr, replacementStr) {
@@ -340,11 +400,14 @@ function transformExactSize(origBuf, targetStr, replacementStr) {
   let delta = Buffer.byteLength(nextText, 'utf8') - origBuf.length;
 
   if (delta > 0) {
-    // Strip pure single-line `//` comment lines outside the injected marker line to reclaim exact bytes.
+    // Strip only pure standalone single-line `//` comment lines (never touching code or template literals).
     const lines = nextText.split('\n');
     const kept = [];
     for (const line of lines) {
-      if (delta > 0 && /^\s*\/\/(?!.*AGY_UI_EXTENSIONS_LOADER_V1)/.test(line)) {
+      if (
+        delta > 0 &&
+        /^\s*\/\/(?!.*AGY_UI_EXTENSIONS_LOADER_V1)\s*[A-Za-z0-9#*\-_=.,:;()[\]{}@/'" ]*$/.test(line)
+      ) {
         delta -= Buffer.byteLength(line, 'utf8') + 1;
         continue;
       }
@@ -360,6 +423,8 @@ function transformExactSize(origBuf, targetStr, replacementStr) {
   if (finalDiff > 0) {
     nextText = nextText + ' '.repeat(finalDiff);
   }
+  // Syntactic verification: fail closed if comment stripping or anchor replacement broke JS parsing.
+  new vm.Script(nextText);
   const outBuf = Buffer.from(nextText, 'utf8');
   if (outBuf.length !== origBuf.length) {
     throw new Error('EXACT_SIZE_MISMATCH');
@@ -435,10 +500,8 @@ function verifyOrigBackupStrict(backupPath, metaPath, expectedVersion, { backfil
       return { ok: false, status: 'ERR_ORIG_META_MISMATCH', appVersion: origArchive.appVersion };
     }
   } else {
-    // Verify packed ASAR header integrity hash for dist/main.js when .orig.json is absent.
-    const mainNode = origArchive.header?.files?.dist?.files?.['main.js'];
-    const mainBuf = origArchive.fileMap.get('dist/main.js');
-    if (mainNode?.integrity?.hash && mainBuf && sha256Hex(mainBuf) !== mainNode.integrity.hash) {
+    // Verify EVERY packed file's integrity.hash and 4MiB integrity.blocks in the ASAR header when .orig.json is absent.
+    if (!verifyAllAsarIntegrity(origArchive)) {
       return { ok: false, status: 'ERR_ORIG_INTEGRITY_MISMATCH', appVersion: origArchive.appVersion };
     }
     if (backfillMeta) {

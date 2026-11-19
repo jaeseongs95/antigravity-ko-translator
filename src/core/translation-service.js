@@ -19,6 +19,8 @@ function createTranslationService({
   setTimer = setTimeout,
   clearTimer = clearTimeout,
   sharedMemCache = null,
+  getProviderCacheVariant = null,
+  onTranslationError = null,
 } = {}) {
   if (!registry || typeof registry.getProvider !== 'function' || typeof registry.normalizeId !== 'function') {
     throw new TypeError('registry implementing ProviderRegistry is required');
@@ -104,7 +106,15 @@ function createTranslationService({
   }
 
   function makeCacheKey(providerId, cleanText) {
-    return `${providerId}\u0000${cleanText}`;
+    let variant = '';
+    if (typeof getProviderCacheVariant === 'function') {
+      try {
+        variant = String(getProviderCacheVariant(providerId) || '');
+      } catch (_err) {
+        variant = '';
+      }
+    }
+    return variant ? `${providerId}\u0001${variant}\u0000${cleanText}` : `${providerId}\u0000${cleanText}`;
   }
 
   function getEffectiveProvider() {
@@ -403,8 +413,13 @@ function createTranslationService({
         let candidate = null;
         try {
           candidate = await invokeProviderWithFallback(provider, clean, protectedText, savedTokens, signal);
-        } catch (_err) {
+        } catch (err) {
           candidate = null;
+          if (typeof onTranslationError === 'function') {
+            try {
+              onTranslationError(err, provider.id);
+            } catch (_ignored) {}
+          }
         }
 
         if (signal && signal.aborted) return text;
@@ -442,6 +457,13 @@ function createTranslationService({
   }
 
   function dispose() {
+    if (disposed) return;
+    const activeProv = resolveEffectiveProvider();
+    if (activeProv && typeof activeProv.onDeactivate === 'function') {
+      try {
+        activeProv.onDeactivate();
+      } catch (_err) {}
+    }
     disposed = true;
     offRegistry();
     abortAllPending('DISPOSED');

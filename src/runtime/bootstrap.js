@@ -120,16 +120,31 @@ function createKoTranslator({
   let disposed = false;
   let scanError = null;
   let customProviderError = null;
+  let translationError = null;
 
   const disposables = createDisposableRegistry();
   const catalog = createAntigravityDictionaryCatalog();
   const providerRegistry = createProviderRegistry();
+  const llmConfigSubscribers = new Set();
+
+  function notifyLlmConfigSubscribers() {
+    for (const fn of Array.from(llmConfigSubscribers)) {
+      try {
+        fn(state.llmConfig);
+      } catch (_err) {}
+    }
+  }
 
   const googleProvider = createGoogleTranslateAdapter({ fetchFn: effectiveFetch });
   const localLlmProvider = createLocalLlmAdapter({
     fetchFn: effectiveFetch,
     llmConfigPort: {
       getLlmConfig: () => state.llmConfig,
+      subscribe(fn) {
+        if (typeof fn !== 'function') return () => {};
+        llmConfigSubscribers.add(fn);
+        return () => llmConfigSubscribers.delete(fn);
+      },
     },
   });
 
@@ -138,17 +153,25 @@ function createKoTranslator({
 
   const registeredDeclarativeIds = new Set();
 
-  function syncDeclarativeCustomProviders(list) {
+  function syncDeclarativeCustomProviders(hostList) {
     customProviderError = null;
     const nextIds = new Set();
-    const combined = [
-      ...(Array.isArray(list) ? list : []),
-      ...(Array.isArray(storage.getJson(STORAGE_KEYS.customProviders, []))
-        ? storage.getJson(STORAGE_KEYS.customProviders, [])
-        : []),
-    ];
-    for (const spec of combined) {
-      if (!spec || typeof spec !== 'object' || !spec.id) continue;
+    const localRuntimeList = Array.isArray(storage.getJson(STORAGE_KEYS.customProviders, []))
+      ? storage.getJson(STORAGE_KEYS.customProviders, [])
+      : [];
+    // Host declarative customProviders ALWAYS take precedence over stale localStorage entries with the same id.
+    const mergedById = new Map();
+    for (const spec of localRuntimeList) {
+      if (spec && typeof spec === 'object' && spec.id) {
+        mergedById.set(String(spec.id).trim().toLowerCase(), spec);
+      }
+    }
+    for (const spec of Array.isArray(hostList) ? hostList : []) {
+      if (spec && typeof spec === 'object' && spec.id) {
+        mergedById.set(String(spec.id).trim().toLowerCase(), spec);
+      }
+    }
+    for (const spec of mergedById.values()) {
       try {
         const provider = createCustomProviderAdapter(spec, { fetchFn: effectiveFetch });
         providerRegistry.registerProvider(provider);
@@ -177,6 +200,14 @@ function createKoTranslator({
     cacheStorageKey: STORAGE_KEYS.cache,
     setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
     clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
+    getProviderCacheVariant: (pid) =>
+      pid === 'local-llm'
+        ? `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}`
+        : '',
+    onTranslationError: (err, pid) => {
+      translationError = `${pid}: ${err && err.message ? err.message : String(err)}`;
+      emitStatus();
+    },
   });
   // Sync configured provider without ever silently overwriting a missing/unregistered non-default provider to google-translate.
   if (state.provider) {
@@ -327,6 +358,7 @@ function createKoTranslator({
     const prevEnabled = state.enabled;
     const prevTranslateThinking = state.translateThinking;
     const prevTranslateStaticUi = state.translateStaticUi;
+    const prevLlmSig = `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}|${state.llmConfig.allowRemoteHttps}`;
 
     if (typeof next.enabled === 'boolean') state.enabled = next.enabled;
     if (typeof next.translateThinking === 'boolean') {
@@ -345,16 +377,23 @@ function createKoTranslator({
       state.llmConfig = { ...state.llmConfig, ...next.llmConfig };
       storage.setJson(STORAGE_KEYS.llmConfig, state.llmConfig);
     }
+    const nextLlmSig = `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}|${state.llmConfig.allowRemoteHttps}`;
+    const llmConfigChanged = nextLlmSig !== prevLlmSig;
+    if (llmConfigChanged) {
+      notifyLlmConfigSubscribers();
+    }
     if (Array.isArray(next.customProviders)) {
       state.customProviders = next.customProviders;
-      storage.setJson(STORAGE_KEYS.customProviders, state.customProviders);
       syncDeclarativeCustomProviders(state.customProviders);
     }
     if (typeof next.provider === 'string' && next.provider.trim()) {
       const candidate = next.provider.trim();
+      state.provider = candidate;
+      translationError = null;
       if (providerRegistry.hasProvider(candidate)) {
-        state.provider = candidate;
         translationService.setProvider(candidate, { persist: true });
+      } else {
+        translationService.syncDesiredProviderFromExternal(candidate);
       }
     }
 
@@ -367,7 +406,11 @@ function createKoTranslator({
     } else if (state.enabled && started) {
       if (!runtimeActive) {
         activateRuntime();
-      } else if (state.provider !== prevProvider || next.clearCache === true) {
+      } else if (
+        state.provider !== prevProvider ||
+        next.clearCache === true ||
+        (llmConfigChanged && state.provider === 'local-llm')
+      ) {
         translationService.bumpEpoch();
         thinkingTranslator.retranslateVisibleThoughts(false);
       } else if (state.translateThinking !== prevTranslateThinking || state.translateStaticUi !== prevTranslateStaticUi) {
@@ -408,7 +451,7 @@ function createKoTranslator({
       provider: state.provider,
       availableProviders: providerRegistry.listProviderIds(),
       cacheSize: translationService.getCacheSize(),
-      lastError: scanError || customProviderError,
+      lastError: scanError || customProviderError || translationError,
     };
   }
 

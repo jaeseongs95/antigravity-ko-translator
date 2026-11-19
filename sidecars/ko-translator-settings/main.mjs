@@ -246,6 +246,71 @@ export function createStandaloneHttpServer(handleRequest) {
   });
 }
 
+export function createSidecarAppRoutes(sdk, handleRequest) {
+  const app = new sdk.SidecarApp();
+  const hasHostHeader = (headers) => {
+    const norm = normalizeHeaders(headers);
+    return Boolean(norm.host);
+  };
+  const readBoundedRawBody = async (req) => {
+    const contentLen = Number(normalizeHeaders(req?.headers)['content-length'] || 0);
+    if (Number.isFinite(contentLen) && contentLen > MAX_BODY_BYTES) {
+      return { tooLarge: true, rawBody: '' };
+    }
+    let rawBody = '';
+    if (typeof req?.text === 'function') {
+      rawBody = await req.text();
+    } else if (req?.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
+      rawBody = JSON.stringify(req.body);
+    } else {
+      rawBody = String(req?.body ?? '');
+    }
+    if (Buffer.byteLength(rawBody, 'utf8') > MAX_BODY_BYTES) {
+      return { tooLarge: true, rawBody: '' };
+    }
+    return { tooLarge: false, rawBody };
+  };
+
+  const serveHtml = (req) => {
+    const res = handleRequest({
+      method: 'GET',
+      urlPath: '/',
+      headers: req?.headers,
+      requireHost: hasHostHeader(req?.headers),
+    });
+    return new sdk.Response(res.body, { status: res.status, headers: res.headers });
+  };
+  app.route('GET', '/', serveHtml);
+  app.route('GET', '/index.html', serveHtml);
+  app.route('GET', '/api/settings', (req) => {
+    const res = handleRequest({
+      method: 'GET',
+      urlPath: '/api/settings',
+      headers: req?.headers,
+      requireHost: hasHostHeader(req?.headers),
+    });
+    return new sdk.Response(res.body, { status: res.status, headers: res.headers });
+  });
+  app.route('POST', '/api/settings', async (req) => {
+    const { tooLarge, rawBody } = await readBoundedRawBody(req);
+    if (tooLarge) {
+      return new sdk.Response(JSON.stringify({ ok: false, error: 'PAYLOAD_TOO_LARGE' }), {
+        status: 413,
+        headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+      });
+    }
+    const res = handleRequest({
+      method: 'POST',
+      urlPath: '/api/settings',
+      rawBody,
+      headers: req?.headers,
+      requireHost: hasHostHeader(req?.headers),
+    });
+    return new sdk.Response(res.body, { status: res.status, headers: res.headers });
+  });
+  return app;
+}
+
 async function startSidecar() {
   const handleRequest = createSettingsRequestHandler();
 
@@ -261,25 +326,7 @@ async function startSidecar() {
   }
 
   if (sdk && typeof sdk.SidecarApp === 'function' && typeof sdk.Response === 'function') {
-    const app = new sdk.SidecarApp();
-    app.route('GET', '/', (req) => {
-      const res = handleRequest({ method: 'GET', urlPath: '/', headers: req?.headers });
-      return new sdk.Response(res.body, { status: res.status, headers: res.headers });
-    });
-    app.route('GET', '/api/settings', (req) => {
-      const res = handleRequest({ method: 'GET', urlPath: '/api/settings', headers: req?.headers });
-      return new sdk.Response(res.body, { status: res.status, headers: res.headers });
-    });
-    app.route('POST', '/api/settings', async (req) => {
-      const rawBody = typeof req?.text === 'function' ? await req.text() : String(req?.body || '');
-      const res = handleRequest({
-        method: 'POST',
-        urlPath: '/api/settings',
-        rawBody,
-        headers: req?.headers,
-      });
-      return new sdk.Response(res.body, { status: res.status, headers: res.headers });
-    });
+    const app = createSidecarAppRoutes(sdk, handleRequest);
     await app.start();
     return;
   }

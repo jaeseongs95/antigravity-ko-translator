@@ -177,7 +177,7 @@ test('installAsarDropinLoader patches dist/main.js exact-size and rollbackAsarDr
   }
 });
 
-test('F4+F5: buildHostLoaderScriptSource executes cleanly, safely handles corrupted settings JSON, and honors config.json enabled gate', () => {
+test('F4+F5: buildHostLoaderScriptSource executes REAL dist/renderer.js, safely handles corrupted settings JSON, retries on failure, and honors config.json enabled gate', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-loader-exec-'));
   try {
     const agyDir = path.join(dir, '.gemini', 'antigravity');
@@ -187,8 +187,9 @@ test('F4+F5: buildHostLoaderScriptSource executes cleanly, safely handles corrup
     fs.mkdirSync(extDir, { recursive: true });
     fs.mkdirSync(pluginDir, { recursive: true });
 
+    const realBundlePath = path.resolve(__dirname, '..', '..', 'dist', 'renderer.js');
     const entryScript = path.join(pluginDir, 'renderer.js');
-    fs.writeFileSync(entryScript, 'window.__KO_EXECUTED__ = true;\n', 'utf8');
+    fs.copyFileSync(realBundlePath, entryScript);
     fs.writeFileSync(
       path.join(extDir, 'ko-thought-translator.json'),
       JSON.stringify({ schemaVersion: 1, pluginId: 'ko-thought-translator', entryScript }),
@@ -208,12 +209,15 @@ test('F4+F5: buildHostLoaderScriptSource executes cleanly, safely handles corrup
       module: loaderMod,
       exports: loaderMod.exports,
       process: { env: { USERPROFILE: dir, HOME: dir } },
+      console: { error() {} },
     };
     vm.runInNewContext(buildHostLoaderScriptSource(), sandbox);
     assert.equal(typeof loaderMod.exports.attach, 'function');
 
     const executedScripts = [];
     const handlers = {};
+    let failOnce = true;
+    let exportedFactoryType = '';
     const mockContents = {
       getType: () => 'window',
       isDestroyed: () => false,
@@ -223,20 +227,37 @@ test('F4+F5: buildHostLoaderScriptSource executes cleanly, safely handles corrup
       },
       executeJavaScript: async (code) => {
         executedScripts.push(code);
-        // Verify injected wrapper is syntactically valid JS and runs cleanly
-        const winCtx = { window: {} };
+        if (failOnce) {
+          failOnce = false;
+          throw new Error('TRANSIENT_RENDERER_NOT_READY');
+        }
+        // Execute REAL dist/renderer.js wrapper in VM (with auto-mount disabled so no timers leak)
+        const winObj = { __AGY_KO_TRANSLATOR_AUTO_MOUNT__: false };
+        const winCtx = { window: winObj, document: {}, globalThis: null, self: null, console: { error() {} } };
+        winCtx.globalThis = winCtx;
+        winCtx.self = winCtx;
         vm.runInNewContext(code, winCtx);
-        return winCtx.window.__KO_EXECUTED__;
+        exportedFactoryType = typeof winObj.__agyCreateKoTranslator;
+        return exportedFactoryType;
       },
     };
 
     loaderMod.exports.attach(mockContents);
+    // First dom-ready fails transiently -> Defect-3: must NOT lock lastInjectedUrl so did-finish-load retries!
     handlers['dom-ready']();
+    await new Promise((r) => setTimeout(r, 15));
     assert.equal(executedScripts.length, 1);
 
-    // F3: did-finish-load on the SAME URL must NOT double-inject (zero FOUC)
+    // did-finish-load retries and succeeds with REAL dist/renderer.js
     handlers['did-finish-load']();
-    assert.equal(executedScripts.length, 1);
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(executedScripts.length, 2);
+    assert.equal(exportedFactoryType, 'function');
+
+    // Subsequent duplicate event on SAME URL after success must NOT double-inject (zero FOUC)
+    handlers['did-finish-load']();
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(executedScripts.length, 2);
 
     // After top-frame navigation starts and enabled -> false, firing again must execute 0 new scripts
     handlers['did-start-navigation']({}, 'http://127.0.0.1:4173/index.html', false, true);
@@ -246,7 +267,8 @@ test('F4+F5: buildHostLoaderScriptSource executes cleanly, safely handles corrup
       'utf8'
     );
     handlers['did-finish-load']();
-    assert.equal(executedScripts.length, 1);
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(executedScripts.length, 2);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -332,6 +354,18 @@ if (realAsarOrigPath && fs.existsSync(realAsarOrigPath)) {
       assert.equal(rb.status, 'ROLLED_BACK');
       const restoredHash = crypto.createHash('sha256').update(fs.readFileSync(asarPath)).digest('hex');
       assert.equal(restoredHash, origHash);
+      console.log(
+        JSON.stringify({
+          realAsarVerified: true,
+          appVersion: inst.appVersion,
+          bytes: origBuf.length,
+          origSha256: origHash,
+          patchedSha256: inst.sha256,
+          restoredSha256: restoredHash,
+          preloadUnchanged: patchedPreloadHash === origPreloadHash,
+          utilsUnchanged: patchedUtilsHash === origUtilsHash,
+        })
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

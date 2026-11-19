@@ -74,6 +74,33 @@ test('config-store persists settings atomically to ko_translator_settings.json a
 
     assert.equal(removeTranslatorSettings(paths), true);
     assert.equal(fs.existsSync(paths.SETTINGS_PATH), false);
+
+    // Defect-4: Corrupted settings file MUST fail closed on save (never silently reset to google-translate)
+    fs.writeFileSync(paths.SETTINGS_PATH, '{corrupted-user-settings', 'utf8');
+    assert.throws(() => saveTranslatorSettings({ showThinking: false }, paths), /SETTINGS_FILE_CORRUPTED/);
+    assert.equal(fs.readFileSync(paths.SETTINGS_PATH, 'utf8'), '{corrupted-user-settings');
+    fs.unlinkSync(paths.SETTINGS_PATH);
+
+    // Defect-4: Non-array customProviders and secret headers/query params MUST fail closed
+    assert.throws(() => saveTranslatorSettings({ customProviders: 'invalid' }, paths), /INVALID_CUSTOM_PROVIDERS_LIST/);
+    assert.throws(
+      () =>
+        saveTranslatorSettings(
+          {
+            customProviders: [
+              {
+                id: 'goog-leak',
+                endpointUrl: 'https://api.example.com/v1?api_key=secret',
+                allowRemoteHttps: true,
+                bodyTemplate: { q: '{{text}}' },
+                responsePath: 'text',
+              },
+            ],
+          },
+          paths
+        ),
+      /FORBIDDEN_SECRET_QUERY_IN_HOST_SETTINGS/
+    );
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

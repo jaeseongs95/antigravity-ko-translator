@@ -175,10 +175,15 @@ function sanitizeLlmConfig(raw, existing = DEFAULT_LLM_CONFIG) {
   };
 }
 
-const SECRET_HEADER_RE = /^(?:authorization|x-api-key|api-key)$/i;
+const SECRET_HEADER_RE =
+  /^(?:authorization|proxy-authorization|x-api-key|api-key|x-goog-api-key|x-auth-token|x-access-token|x-secret|cookie)$/i;
+const SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
 
 function sanitizeCustomProviders(rawList, { strict = false } = {}) {
-  if (!Array.isArray(rawList)) return [];
+  if (!Array.isArray(rawList)) {
+    if (strict) throw new Error('INVALID_CUSTOM_PROVIDERS_LIST');
+    return [];
+  }
   const out = [];
   const seen = new Set();
   for (const item of rawList.slice(0, 16)) {
@@ -193,9 +198,13 @@ function sanitizeCustomProviders(rawList, { strict = false } = {}) {
           }
         }
       }
+      const rawEndpoint = item.endpointUrl !== undefined ? item.endpointUrl : item.url;
+      if (SECRET_QUERY_RE.test(String(rawEndpoint || ''))) {
+        throw new Error('FORBIDDEN_SECRET_QUERY_IN_HOST_SETTINGS');
+      }
       const normalizedInput = {
         ...item,
-        endpointUrl: item.endpointUrl !== undefined ? item.endpointUrl : item.url,
+        endpointUrl: rawEndpoint,
         allowRemoteHttps: Boolean(item.allowRemoteHttps),
       };
       const spec = validateCustomProviderSpec(normalizedInput);
@@ -235,7 +244,7 @@ function isPluginEnabled(configJsonPath) {
   }
 }
 
-function readTranslatorSettings(pathOverrides = null) {
+function readTranslatorSettings(pathOverrides = null, { strict = false } = {}) {
   const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
   try {
     if (!fs.existsSync(p.SETTINGS_PATH)) {
@@ -246,6 +255,9 @@ function readTranslatorSettings(pathOverrides = null) {
       };
     }
     const parsed = JSON.parse(fs.readFileSync(p.SETTINGS_PATH, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('SETTINGS_FILE_CORRUPTED');
+    }
     return {
       schemaVersion: 1,
       translateThinking: parsed.translateThinking !== false,
@@ -255,7 +267,10 @@ function readTranslatorSettings(pathOverrides = null) {
       llmConfig: sanitizeLlmConfig(parsed.llmConfig, DEFAULT_LLM_CONFIG),
       customProviders: sanitizeCustomProviders(parsed.customProviders, { strict: false }),
     };
-  } catch (_err) {
+  } catch (err) {
+    if (strict) {
+      throw new Error(`SETTINGS_FILE_CORRUPTED: ${err && err.message ? err.message : String(err)}`);
+    }
     return {
       ...DEFAULT_SETTINGS,
       llmConfig: { ...DEFAULT_LLM_CONFIG },
@@ -271,7 +286,7 @@ function saveTranslatorSettings(patch, pathOverrides = null) {
     throw new Error('SETTINGS_LOCK_BUSY');
   }
   try {
-    const current = readTranslatorSettings(p);
+    const current = readTranslatorSettings(p, { strict: true });
     const next = {
       schemaVersion: 1,
       translateThinking:

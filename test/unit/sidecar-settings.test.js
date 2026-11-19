@@ -24,7 +24,12 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-sidecar-test-'));
   try {
     const mainUrl = pathToFileURL(path.join(REPO_ROOT, 'sidecars', 'ko-translator-settings', 'main.mjs')).href;
-    const { createSettingsRequestHandler, createStandaloneHttpServer, MAX_BODY_BYTES } = await import(mainUrl);
+    const {
+      createSettingsRequestHandler,
+      createStandaloneHttpServer,
+      createSidecarAppRoutes,
+      MAX_BODY_BYTES,
+    } = await import(mainUrl);
 
     const agyDir = path.join(dir, '.gemini', 'antigravity');
     const cfgDir = path.join(dir, '.gemini', 'config');
@@ -214,6 +219,46 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
       if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
       server.close();
     }
+
+    // 9. Defect-1 & Defect-4: Direct sidecar_sdk route wiring (GET /, GET /index.html, object req.body, 413 cap)
+    const routes = new Map();
+    const mockSdk = {
+      SidecarApp: class MockSidecarApp {
+        route(method, routePath, fn) {
+          routes.set(`${method} ${routePath}`, fn);
+        }
+        async start() {}
+      },
+      Response: class MockResponse {
+        constructor(body, init) {
+          this.body = body;
+          this.status = init.status;
+          this.headers = init.headers;
+        }
+      },
+    };
+    createSidecarAppRoutes(mockSdk, handle);
+    assert.equal(routes.has('GET /'), true);
+    assert.equal(routes.has('GET /index.html'), true);
+    assert.equal(routes.has('GET /api/settings'), true);
+    assert.equal(routes.has('POST /api/settings'), true);
+
+    const sdkIdx = routes.get('GET /index.html')({ headers: { host: '127.0.0.1:43210' } });
+    assert.equal(sdkIdx.status, 200);
+    assert.match(sdkIdx.body, /ko-csrf-token/);
+
+    const sdkObjPost = await routes.get('POST /api/settings')({
+      headers: validHeaders,
+      body: { provider: 'google-translate', translateThinking: true },
+    });
+    assert.equal(sdkObjPost.status, 200);
+    assert.equal(JSON.parse(sdkObjPost.body).settings.provider, 'google-translate');
+
+    const sdkHugePost = await routes.get('POST /api/settings')({
+      headers: validHeaders,
+      text: async () => 'x'.repeat(MAX_BODY_BYTES + 16),
+    });
+    assert.equal(sdkHugePost.status, 413);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
