@@ -28,7 +28,9 @@ const {
   saveTranslatorSettings,
   isPluginEnabled,
 } = require(path.join(REPO_ROOT, 'host', 'config-store.js'));
-const { isAsarLoaderInstalled, readDropinManifest } = require(path.join(REPO_ROOT, 'host', 'dropin-loader.js'));
+const { isAsarLoaderInstalled, readDropinManifest, validateDropinManifest } = require(
+  path.join(REPO_ROOT, 'host', 'dropin-loader.js')
+);
 
 const INDEX_HTML_PATH = path.join(__dirname, 'index.html');
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -85,18 +87,31 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
   }
 
   function buildStatusPayload() {
-    const settings = readTranslatorSettings(paths);
+    let settings = null;
+    let settingsCorrupted = false;
+    let settingsError = null;
+    try {
+      settings = readTranslatorSettings(paths, { strict: true });
+    } catch (err) {
+      settingsCorrupted = true;
+      settingsError = err && err.message ? err.message : 'SETTINGS_FILE_CORRUPTED';
+    }
     const pluginEnabled = isPluginEnabled(paths.CONFIG_JSON_PATH);
     const manifest = readDropinManifest(paths.MANIFEST_PATH);
+    const manifestValidation = manifest
+      ? validateDropinManifest(manifest, paths.PLUGINS_ROOT_DIR)
+      : { ok: false, reason: 'MANIFEST_NOT_FOUND' };
     const asarLoaderInstalled = isAsarLoaderInstalled(paths.ASAR_PATH);
     return {
       ok: true,
       version: '2.0.0',
       csrfToken,
       settings,
+      settingsCorrupted,
+      settingsError,
       diagnostics: {
         pluginEnabled,
-        manifestRegistered: Boolean(manifest),
+        manifestRegistered: Boolean(manifestValidation.ok),
         asarLoaderInstalled,
         settingsPath: paths.SETTINGS_PATH,
       },

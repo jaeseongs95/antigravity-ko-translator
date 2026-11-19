@@ -64,9 +64,12 @@ function runChromeDumpDom(chromeBin, url) {
 }
 
 const CHROME_BIN = findChromiumBinary();
+const CHROME_SKIP_REASON = CHROME_BIN ? false : 'Chrome/Chromium binary not available in this environment';
 
-if (CHROME_BIN) {
-  test('Defect-1+F2 (Real Chromium Blink CSS + V8): dist/renderer.js translates Thinking + UI while preserving ALL 11 D-0042 selectors', async () => {
+test(
+  'Defect-1+F2 (Real Chromium Blink CSS + V8): dist/renderer.js translates Thinking + UI while preserving ALL 11 D-0042 selectors',
+  { skip: CHROME_SKIP_REASON },
+  async () => {
     const bundleSrc = fs.readFileSync(BUNDLE_PATH, 'utf8');
     const html = `<!doctype html>
 <html>
@@ -149,7 +152,10 @@ if (CHROME_BIN) {
     }
   });
 
-  test('Defect-1+F2 (Real Chromium): Official Sidecar index.html loads diagnostics, submits POST /api/settings with CSRF, and persists to disk', async () => {
+  test(
+    'Defect-1+F2 (Real Chromium): Official Sidecar index.html loads diagnostics, submits POST /api/settings with CSRF, and persists to disk',
+    { skip: CHROME_SKIP_REASON },
+    async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-chrome-sidecar-'));
     try {
       const mainUrl = pathToFileURL(path.join(REPO_ROOT, 'sidecars', 'ko-translator-settings', 'main.mjs')).href;
@@ -211,4 +217,3 @@ if (CHROME_BIN) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
-}

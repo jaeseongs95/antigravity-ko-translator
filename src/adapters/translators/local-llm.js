@@ -77,7 +77,7 @@ function createLocalLlmAdapter({
       allowRemoteHttps: Boolean(cfg.allowRemoteHttps),
     });
     const timeoutRaw = Number(cfg.timeoutMs);
-    const timeoutMs = Number.isFinite(timeoutRaw) ? Math.min(60000, Math.max(1000, Math.trunc(timeoutRaw))) : 15000;
+    const timeoutMs = Number.isFinite(timeoutRaw) ? Math.min(120000, Math.max(1000, Math.trunc(timeoutRaw))) : 15000;
     const apiFormat = cfg.apiFormat === 'openai' || cfg.apiFormat === 'openai-compat' ? 'openai' : 'ollama';
     const model = typeof cfg.model === 'string' && cfg.model.trim() ? cfg.model.trim() : 'gemma3:4b';
     return {

@@ -1,40 +1,44 @@
 'use strict';
 
 /**
- * Clean-Slate Host Filesystem Paths for Antigravity Desktop ko-thought-translator.
+ * Profile-Driven Host Filesystem Path Resolver.
  *
- * Strictly isolated from Antigravity host internal storage and sibling plugin files.
+ * Defaults to `ANTIGRAVITY_HOST_PROFILE` while allowing any compatible HostProfile
+ * to be injected for vendor-independent testing or alternate desktop hosts.
  */
 
 const os = require('os');
 const path = require('path');
 
-const PLUGIN_ID = 'ko-thought-translator';
+const { ANTIGRAVITY_HOST_PROFILE } = require('./profiles/antigravity');
+
+const PLUGIN_ID = ANTIGRAVITY_HOST_PROFILE.pluginId;
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
 const RENDERER_BUNDLE_PATH = path.join(PLUGIN_ROOT, 'dist', 'renderer.js');
 
-function resolveHostPaths(env = process.env) {
+function resolveHostPaths(env = process.env, profile = ANTIGRAVITY_HOST_PROFILE) {
+  const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
   const HOME_DIR = (env && (env.USERPROFILE || env.HOME)) || os.homedir();
   const LOCAL_APPDATA = (env && env.LOCALAPPDATA) || path.join(HOME_DIR, 'AppData', 'Local');
-  const GEMINI_DIR = path.join(HOME_DIR, '.gemini');
-  const AGY_DIR = path.join(GEMINI_DIR, 'antigravity');
-  const CONFIG_DIR = path.join(GEMINI_DIR, 'config');
+  const GEMINI_DIR = path.join(HOME_DIR, ...activeProfile.configRootSegments);
+  const AGY_DIR = path.join(HOME_DIR, ...activeProfile.appDirSegments);
+  const CONFIG_DIR = path.join(HOME_DIR, ...activeProfile.configDirSegments);
   const PLUGINS_ROOT_DIR = path.join(CONFIG_DIR, 'plugins');
   const CONFIG_JSON_PATH = path.join(CONFIG_DIR, 'config.json');
 
-  const UI_EXTENSIONS_DIR = path.join(AGY_DIR, 'ui-extensions.d');
-  const MANIFEST_PATH = path.join(UI_EXTENSIONS_DIR, `${PLUGIN_ID}.json`);
-  const LOADER_SCRIPT_PATH = path.join(AGY_DIR, 'ui-extensions-loader.js');
-  const SETTINGS_PATH = path.join(AGY_DIR, 'ko_translator_settings.json');
-  const SETTINGS_LOCK_PATH = path.join(AGY_DIR, 'ko_translator_settings.lock');
-  const ASAR_LOCK_PATH = path.join(AGY_DIR, 'ui_extensions_asar.lock');
+  const UI_EXTENSIONS_DIR = path.join(AGY_DIR, activeProfile.uiExtensionsDirName);
+  const MANIFEST_PATH = path.join(UI_EXTENSIONS_DIR, `${activeProfile.pluginId}.json`);
+  const LOADER_SCRIPT_PATH = path.join(AGY_DIR, activeProfile.loaderScriptName);
+  const SETTINGS_PATH = path.join(AGY_DIR, activeProfile.settingsFileName);
+  const SETTINGS_LOCK_PATH = path.join(AGY_DIR, activeProfile.settingsLockName);
+  const ASAR_LOCK_PATH = path.join(AGY_DIR, activeProfile.asarLockName);
 
   const ASAR_PATH =
-    (env && env.AGY_ASAR_PATH) ||
-    path.join(LOCAL_APPDATA, 'Programs', 'antigravity', 'resources', 'app.asar');
+    (env && activeProfile.asarEnvVar && env[activeProfile.asarEnvVar]) ||
+    path.join(LOCAL_APPDATA, ...activeProfile.asarRelativeSegments);
 
   return {
-    PLUGIN_ID,
+    PLUGIN_ID: activeProfile.pluginId,
     PLUGIN_ROOT,
     RENDERER_BUNDLE_PATH,
     HOME_DIR,

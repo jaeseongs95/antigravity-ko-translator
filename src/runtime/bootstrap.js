@@ -1,54 +1,20 @@
 'use strict';
 
 /**
- * Clean-Slate Desktop-Only Pure Read-Only DOM Overlay Bootstrap.
+ * Vendor-Neutral Pure Read-Only DOM Overlay Runtime Bootstrap.
  *
- * Exports `createKoTranslator({ win, doc, settings, onStatus }) -> { start(), updateSettings(next), dispose(), getStatus() }`.
- * - ZERO host `fetch` / `lsClient` / Protobuf interception
- * - ZERO React Fiber / Angular inspection
- * - ZERO `Worker` / `iframe` / TrustedTypes hijacking
- * - ZERO cross-plugin coupling (no sibling plugin files or shared host storage)
- * - ZERO native Settings modal DOM hacking (settings live in the official Sidecar AUX_PANE)
+ * Exports `createTranslatorRuntime({ win, doc, hostAdapter, providerBundle, settings, version, fetchFn, onStatus })`
+ * -> `{ start(), updateSettings(next), registerCustomProvider(spec), unregisterCustomProvider(id), dispose(), getStatus(), scanAll() }`.
+ *
+ * Zero concrete host/vendor or translator-provider imports:
+ * - Host DOM rules, selectors, CSS, dictionaries, and storage port are injected via `hostAdapter`.
+ * - Built-in / custom translation providers and aliases are injected via `providerBundle`.
  */
 
 const { createDisposableRegistry } = require('../core/disposable-registry');
 const { createProviderRegistry } = require('../core/provider-registry');
 const { createTranslationService } = require('../core/translation-service');
-const { createGoogleTranslateAdapter } = require('../adapters/translators/google-translate');
-const { createLocalLlmAdapter } = require('../adapters/translators/local-llm');
-const { createCustomProviderAdapter } = require('../adapters/translators/custom-provider');
-const { createAntigravityDictionaryCatalog } = require('../adapters/antigravity/dictionaries');
-const { createStoragePort, STORAGE_KEYS } = require('../adapters/antigravity/storage-port');
-const { createAntigravityUiLocalizer } = require('../adapters/antigravity/ui-localizer');
-const { createAntigravityTriggerController } = require('../adapters/antigravity/trigger-controller');
-const { createAntigravityThinkingTranslator } = require('../adapters/antigravity/thinking-translator');
 const { createObserverScheduler } = require('./observer-scheduler');
-
-const DEFAULT_LLM_CONFIG = Object.freeze({
-  baseUrl: 'http://127.0.0.1:11434',
-  model: 'gemma3:4b',
-  apiFormat: 'ollama',
-  allowRemoteHttps: false,
-  timeoutMs: 15000,
-});
-
-const STYLE_ID = 'agy-ko-thought-localizer-style';
-
-function buildMinimalOverlayCss() {
-  return `
-.cursor-edit[data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap),
-[data-agy-ko-thought-host="1"][data-agy-ko-ready="1"] > div:not(.agy-ko-thought-wrap) {
-  display: none !important;
-}
-.agy-ko-thought-wrap {
-  display: block;
-}
-[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"],
-[data-agy-hide-thinking="1"] button[data-testid="thinking-collapsible-trigger"] + div {
-  display: none !important;
-}
-`.trim();
-}
 
 function resolveBooleanOption(overrideVal, storedVal, fallback) {
   if (typeof overrideVal === 'boolean') return overrideVal;
@@ -57,27 +23,22 @@ function resolveBooleanOption(overrideVal, storedVal, fallback) {
   return Boolean(fallback);
 }
 
-const PROVIDER_ALIAS_MAP = Object.freeze({
-  google: 'google-translate',
-  gtx: 'google-translate',
-  local: 'local-llm',
-  llm: 'local-llm',
-  ollama: 'local-llm',
-});
-
-function canonicalizeProviderId(rawId) {
+function canonicalizeProviderId(rawId, aliasMap = {}) {
   if (typeof rawId !== 'string') return null;
   const trimmed = rawId.trim().toLowerCase();
   if (!trimmed || trimmed === '__proto__' || trimmed === 'constructor' || trimmed === 'prototype') return null;
-  const mapped = Object.prototype.hasOwnProperty.call(PROVIDER_ALIAS_MAP, trimmed)
-    ? PROVIDER_ALIAS_MAP[trimmed]
-    : trimmed;
+  const mapped =
+    aliasMap && Object.prototype.hasOwnProperty.call(aliasMap, trimmed)
+      ? aliasMap[trimmed]
+      : trimmed;
   return /^[a-z0-9][a-z0-9._:-]{0,63}$/.test(mapped) ? mapped : null;
 }
 
-function createKoTranslator({
+function createTranslatorRuntime({
   win = typeof window !== 'undefined' ? window : null,
   doc = null,
+  hostAdapter = null,
+  providerBundle = null,
   settings = null,
   version = '2.0.0',
   fetchFn = null,
@@ -86,7 +47,13 @@ function createKoTranslator({
   const targetWin = win;
   const targetDoc = doc || (targetWin && targetWin.document) || null;
   if (!targetWin || !targetDoc) {
-    throw new Error('createKoTranslator requires valid window and document objects');
+    throw new Error('createTranslatorRuntime requires valid window and document objects');
+  }
+  if (!hostAdapter || typeof hostAdapter !== 'object') {
+    throw new Error('createTranslatorRuntime requires a hostAdapter port');
+  }
+  if (!providerBundle || typeof providerBundle !== 'object') {
+    throw new Error('createTranslatorRuntime requires a providerBundle port');
   }
 
   const effectiveFetch =
@@ -98,37 +65,58 @@ function createKoTranslator({
           ? fetch.bind(globalThis)
           : null;
 
-  const storage = createStoragePort({ targetWin, initialSettings: settings });
+  const storageKeys = hostAdapter.storageKeys || {};
+  const defaultProviderId = providerBundle.defaultProviderId || 'default';
+  const defaultLlmConfig = providerBundle.defaultLlmConfig || {};
+  const aliasMap = providerBundle.aliasMap || {};
+  const builtinProviderIds = new Set(
+    Array.isArray(providerBundle.builtinProviderIds) ? providerBundle.builtinProviderIds : [defaultProviderId]
+  );
+
+  const storage = hostAdapter.createStoragePort({ targetWin, initialSettings: settings });
   const initCfg = storage.getInitialSettings() || {};
+  const settingsCorrupted = initCfg.settingsCorrupted === true;
+  const rawInitialProvider =
+    initCfg.provider !== undefined && initCfg.provider !== null
+      ? initCfg.provider
+      : storage.getItem(storageKeys.provider);
+  const resolvedInitialProvider =
+    rawInitialProvider !== undefined && rawInitialProvider !== null && String(rawInitialProvider).trim() !== ''
+      ? canonicalizeProviderId(String(rawInitialProvider), aliasMap)
+      : defaultProviderId;
+  const invalidInitialProvider =
+    !settingsCorrupted &&
+    rawInitialProvider !== undefined &&
+    rawInitialProvider !== null &&
+    String(rawInitialProvider).trim() !== '' &&
+    !resolvedInitialProvider;
 
   let state = {
-    enabled: initCfg.enabled !== false,
+    enabled: settingsCorrupted || invalidInitialProvider ? false : initCfg.enabled !== false,
     translateThinking: resolveBooleanOption(
       initCfg.translateThinking,
-      storage.getItem(STORAGE_KEYS.translateThinking),
+      storage.getItem(storageKeys.translateThinking),
       true
     ),
     showThinking: resolveBooleanOption(
       initCfg.showThinking,
-      storage.getItem(STORAGE_KEYS.showThinking),
+      storage.getItem(storageKeys.showThinking),
       true
     ),
     translateStaticUi: resolveBooleanOption(
       initCfg.translateStaticUi,
-      storage.getItem(STORAGE_KEYS.translateStaticUi),
+      storage.getItem(storageKeys.translateStaticUi),
       true
     ),
-    provider:
-      canonicalizeProviderId(initCfg.provider || storage.getItem(STORAGE_KEYS.provider) || 'google-translate') ||
-      'google-translate',
+    provider: settingsCorrupted || invalidInitialProvider ? null : resolvedInitialProvider,
     llmConfig: {
-      ...DEFAULT_LLM_CONFIG,
-      ...(storage.getJson(STORAGE_KEYS.llmConfig, {}) || {}),
+      ...defaultLlmConfig,
+      ...(storage.getJson(storageKeys.llmConfig, {}) || {}),
       ...(initCfg.llmConfig && typeof initCfg.llmConfig === 'object' ? initCfg.llmConfig : {}),
     },
     customProviders: Array.isArray(initCfg.customProviders)
       ? initCfg.customProviders
-      : storage.getJson(STORAGE_KEYS.customProviders, []) || [],
+      : storage.getJson(storageKeys.customProviders, []) || [],
   };
 
   let started = false;
@@ -136,11 +124,15 @@ function createKoTranslator({
   let disposed = false;
   let scanError = null;
   let customProviderError = null;
-  let translationError = null;
+  let translationError = settingsCorrupted
+    ? 'SETTINGS_FILE_CORRUPTED'
+    : invalidInitialProvider
+      ? `INVALID_PROVIDER_ID:${String(rawInitialProvider)}`
+      : null;
 
   const disposables = createDisposableRegistry();
-  const catalog = createAntigravityDictionaryCatalog();
-  const providerRegistry = createProviderRegistry({ aliasMap: PROVIDER_ALIAS_MAP });
+  const catalog = hostAdapter.createDictionaryCatalog();
+  const providerRegistry = createProviderRegistry({ aliasMap });
   const customProviderSpecFingerprints = new Map();
   const llmConfigSubscribers = new Set();
 
@@ -152,29 +144,36 @@ function createKoTranslator({
     }
   }
 
-  const googleProvider = createGoogleTranslateAdapter({ fetchFn: effectiveFetch });
-  const localLlmProvider = createLocalLlmAdapter({
-    fetchFn: effectiveFetch,
-    llmConfigPort: {
-      getLlmConfig: () => state.llmConfig,
-      subscribe(fn) {
-        if (typeof fn !== 'function') return () => {};
-        llmConfigSubscribers.add(fn);
-        return () => llmConfigSubscribers.delete(fn);
-      },
+  const llmConfigPort = {
+    getLlmConfig: () => state.llmConfig,
+    subscribe(fn) {
+      if (typeof fn !== 'function') return () => {};
+      llmConfigSubscribers.add(fn);
+      return () => llmConfigSubscribers.delete(fn);
     },
-  });
+  };
 
-  providerRegistry.registerProvider(googleProvider);
-  providerRegistry.registerProvider(localLlmProvider);
+  const builtinProviders =
+    typeof providerBundle.createBuiltinProviders === 'function'
+      ? providerBundle.createBuiltinProviders({ fetchFn: effectiveFetch, llmConfigPort })
+      : [];
+  for (const provider of builtinProviders) {
+    providerRegistry.registerProvider(provider);
+  }
 
   const registeredDeclarativeIds = new Set();
 
+  function buildCustomProviderFingerprint(spec) {
+    if (!spec || typeof spec !== 'object') return '';
+    return `${spec.endpointUrl || ''}|${spec.responsePath || ''}|${spec.timeoutMs || ''}|${JSON.stringify(spec.headers || null)}|${JSON.stringify(spec.bodyTemplate || null)}`;
+  }
+
   function syncDeclarativeCustomProviders(hostList) {
     customProviderError = null;
+    if (typeof providerBundle.createCustomProvider !== 'function') return;
     const nextIds = new Set();
-    const localRuntimeList = Array.isArray(storage.getJson(STORAGE_KEYS.customProviders, []))
-      ? storage.getJson(STORAGE_KEYS.customProviders, [])
+    const localRuntimeList = Array.isArray(storage.getJson(storageKeys.customProviders, []))
+      ? storage.getJson(storageKeys.customProviders, [])
       : [];
     // Host declarative customProviders ALWAYS take precedence over stale localStorage entries with the same id.
     const mergedById = new Map();
@@ -190,12 +189,9 @@ function createKoTranslator({
     }
     for (const spec of mergedById.values()) {
       try {
-        const provider = createCustomProviderAdapter(spec, { fetchFn: effectiveFetch });
+        const provider = providerBundle.createCustomProvider(spec, { fetchFn: effectiveFetch });
         providerRegistry.registerProvider(provider);
-        customProviderSpecFingerprints.set(
-          provider.id,
-          `${spec.endpointUrl || ''}|${spec.responsePath || ''}|${JSON.stringify(spec.bodyTemplate || null)}`
-        );
+        customProviderSpecFingerprints.set(provider.id, buildCustomProviderFingerprint(provider.spec || spec));
         nextIds.add(provider.id);
       } catch (err) {
         customProviderError = `custom-provider(${spec.id}): ${err && err.message ? err.message : String(err)}`;
@@ -217,9 +213,9 @@ function createKoTranslator({
   const translationService = createTranslationService({
     registry: providerRegistry,
     storage,
-    defaultProviderId: 'google-translate',
-    providerStorageKey: STORAGE_KEYS.provider,
-    cacheStorageKey: STORAGE_KEYS.cache,
+    defaultProviderId,
+    providerStorageKey: storageKeys.provider,
+    cacheStorageKey: storageKeys.cache,
     setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
     clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
     getProviderCacheVariant: (pid) => {
@@ -233,20 +229,19 @@ function createKoTranslator({
       emitStatus();
     },
   });
-  // Sync configured provider without ever silently overwriting a missing/unregistered non-default provider to google-translate.
   if (state.provider) {
     translationService.syncDesiredProviderFromExternal(state.provider);
   }
   disposables.register(() => translationService.dispose());
 
-  const uiLocalizer = createAntigravityUiLocalizer({
+  const uiLocalizer = hostAdapter.createUiLocalizer({
     targetDoc,
     catalog,
     translationService,
     isDisposed: () => disposed,
   });
 
-  const triggerController = createAntigravityTriggerController({
+  const triggerController = hostAdapter.createTriggerController({
     targetDoc,
     targetWin,
     catalog,
@@ -254,7 +249,7 @@ function createKoTranslator({
     isDisposed: () => disposed,
   });
 
-  const thinkingTranslator = createAntigravityThinkingTranslator({
+  const thinkingTranslator = hostAdapter.createThinkingTranslator({
     targetDoc,
     catalog,
     translationService,
@@ -275,14 +270,16 @@ function createKoTranslator({
   }
 
   function ensureStyleElement() {
-    if (disposed || !targetDoc) return;
-    const existing = targetDoc.getElementById && targetDoc.getElementById(STYLE_ID);
+    if (disposed || !targetDoc || !hostAdapter.styleId) return;
+    const existing = targetDoc.getElementById && targetDoc.getElementById(hostAdapter.styleId);
     if (existing) return;
     const parent = targetDoc.head || targetDoc.documentElement;
     if (!parent || typeof targetDoc.createElement !== 'function') return;
+    const cssText = typeof hostAdapter.buildOverlayCss === 'function' ? hostAdapter.buildOverlayCss() : '';
+    if (!cssText) return;
     const styleEl = targetDoc.createElement('style');
-    styleEl.id = STYLE_ID;
-    styleEl.textContent = buildMinimalOverlayCss();
+    styleEl.id = hostAdapter.styleId;
+    styleEl.textContent = cssText;
     parent.appendChild(styleEl);
   }
 
@@ -327,6 +324,7 @@ function createKoTranslator({
         uiLocalizer,
         triggerController,
         thinkingTranslator,
+        selectors: hostAdapter.selectors || null,
         isEnabled: () => !disposed && state.enabled,
         isTranslateThinkingEnabled: () => state.translateThinking,
         isTranslateStaticUiEnabled: () => state.translateStaticUi,
@@ -362,7 +360,7 @@ function createKoTranslator({
 
   function start() {
     if (disposed) {
-      throw new Error('Cannot start a disposed ko-thought-translator instance');
+      throw new Error('Cannot start a disposed translator runtime instance');
     }
     if (started) return getStatus();
     started = true;
@@ -382,26 +380,26 @@ function createKoTranslator({
     const prevEnabled = state.enabled;
     const prevTranslateThinking = state.translateThinking;
     const prevTranslateStaticUi = state.translateStaticUi;
-    const prevLlmSig = `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}|${state.llmConfig.allowRemoteHttps}`;
+    const prevLlmSig = `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}|${state.llmConfig.allowRemoteHttps}|${state.llmConfig.timeoutMs}`;
 
     if (typeof next.enabled === 'boolean') state.enabled = next.enabled;
     if (typeof next.translateThinking === 'boolean') {
       state.translateThinking = next.translateThinking;
-      storage.setItem(STORAGE_KEYS.translateThinking, state.translateThinking ? '1' : '0');
+      storage.setItem(storageKeys.translateThinking, state.translateThinking ? '1' : '0');
     }
     if (typeof next.showThinking === 'boolean') {
       state.showThinking = next.showThinking;
-      storage.setItem(STORAGE_KEYS.showThinking, state.showThinking ? '1' : '0');
+      storage.setItem(storageKeys.showThinking, state.showThinking ? '1' : '0');
     }
     if (typeof next.translateStaticUi === 'boolean') {
       state.translateStaticUi = next.translateStaticUi;
-      storage.setItem(STORAGE_KEYS.translateStaticUi, state.translateStaticUi ? '1' : '0');
+      storage.setItem(storageKeys.translateStaticUi, state.translateStaticUi ? '1' : '0');
     }
     if (next.llmConfig && typeof next.llmConfig === 'object') {
       state.llmConfig = { ...state.llmConfig, ...next.llmConfig };
-      storage.setJson(STORAGE_KEYS.llmConfig, state.llmConfig);
+      storage.setJson(storageKeys.llmConfig, state.llmConfig);
     }
-    const nextLlmSig = `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}|${state.llmConfig.allowRemoteHttps}`;
+    const nextLlmSig = `${state.llmConfig.apiFormat}|${state.llmConfig.baseUrl}|${state.llmConfig.model}|${state.llmConfig.allowRemoteHttps}|${state.llmConfig.timeoutMs}`;
     const llmConfigChanged = nextLlmSig !== prevLlmSig;
     if (llmConfigChanged) {
       notifyLlmConfigSubscribers();
@@ -416,7 +414,7 @@ function createKoTranslator({
       }
     }
     if (typeof next.provider === 'string' && next.provider.trim()) {
-      const candidate = canonicalizeProviderId(next.provider);
+      const candidate = canonicalizeProviderId(next.provider, aliasMap);
       if (candidate) {
         state.provider = candidate;
         translationError = null;
@@ -464,7 +462,7 @@ function createKoTranslator({
     thinkingTranslator.restoreOriginalCursorEdits();
     uiLocalizer.restoreAllMutatedNodes();
     triggerController.restoreTriggerButtons();
-    const styleEl = targetDoc.getElementById && targetDoc.getElementById(STYLE_ID);
+    const styleEl = hostAdapter.styleId && targetDoc.getElementById && targetDoc.getElementById(hostAdapter.styleId);
     if (styleEl && typeof styleEl.remove === 'function') {
       styleEl.remove();
     }
@@ -474,6 +472,7 @@ function createKoTranslator({
   function getStatus() {
     return {
       version,
+      hostId: hostAdapter.id || 'unknown',
       started,
       disposed,
       enabled: state.enabled,
@@ -489,28 +488,42 @@ function createKoTranslator({
 
   function registerCustomProvider(spec) {
     if (disposed) throw new Error('Cannot register custom provider on disposed instance');
-    const provider = createCustomProviderAdapter(spec, { fetchFn: effectiveFetch });
+    if (typeof providerBundle.createCustomProvider !== 'function') {
+      throw new Error('Active providerBundle does not support custom providers');
+    }
+    const provider = providerBundle.createCustomProvider(spec, { fetchFn: effectiveFetch });
+    const normalizedSpec = provider.spec ? { ...provider.spec } : { ...spec, id: provider.id };
     providerRegistry.registerProvider(provider);
-    registeredDeclarativeIds.add(provider.id);
-    const localList = storage.getJson(STORAGE_KEYS.customProviders, []) || [];
-    const filtered = Array.isArray(localList) ? localList.filter((p) => p && p.id !== provider.id) : [];
-    filtered.push(spec);
-    storage.setJson(STORAGE_KEYS.customProviders, filtered);
+    customProviderSpecFingerprints.set(provider.id, buildCustomProviderFingerprint(normalizedSpec));
+    const localList = storage.getJson(storageKeys.customProviders, []) || [];
+    const filtered = Array.isArray(localList)
+      ? localList.filter((p) => p && providerRegistry.normalizeId(p.id) !== provider.id)
+      : [];
+    filtered.push(normalizedSpec);
+    storage.setJson(storageKeys.customProviders, filtered);
+    translationService.bumpEpoch();
+    if (started && runtimeActive && state.enabled && state.provider === provider.id) {
+      thinkingTranslator.retranslateVisibleThoughts(false);
+    }
     emitStatus();
     return provider.id;
   }
 
   function unregisterCustomProvider(rawId) {
     const normId = providerRegistry.normalizeId(rawId);
-    if (!normId || normId === 'google-translate' || normId === 'local-llm') return false;
+    if (!normId || builtinProviderIds.has(normId)) return false;
     const removed = providerRegistry.unregisterProvider(normId);
     registeredDeclarativeIds.delete(normId);
-    const localList = storage.getJson(STORAGE_KEYS.customProviders, []) || [];
+    customProviderSpecFingerprints.delete(normId);
+    const localList = storage.getJson(storageKeys.customProviders, []) || [];
     if (Array.isArray(localList)) {
       storage.setJson(
-        STORAGE_KEYS.customProviders,
+        storageKeys.customProviders,
         localList.filter((p) => p && providerRegistry.normalizeId(p.id) !== normId)
       );
+    }
+    if (removed) {
+      translationService.bumpEpoch();
     }
     emitStatus();
     return removed;
@@ -528,7 +541,6 @@ function createKoTranslator({
 }
 
 module.exports = {
-  STYLE_ID,
-  buildMinimalOverlayCss,
-  createKoTranslator,
+  canonicalizeProviderId,
+  createTranslatorRuntime,
 };

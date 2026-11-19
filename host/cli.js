@@ -33,6 +33,15 @@ function buildStatusReport(pathOverrides = null) {
   const manifestValidation = manifest
     ? validateDropinManifest(manifest, p.PLUGINS_ROOT_DIR)
     : { ok: false, reason: 'MANIFEST_NOT_FOUND' };
+  let settings = null;
+  let settingsCorrupted = false;
+  let settingsError = null;
+  try {
+    settings = readTranslatorSettings(p, { strict: true });
+  } catch (err) {
+    settingsCorrupted = true;
+    settingsError = err && err.message ? err.message : 'SETTINGS_FILE_CORRUPTED';
+  }
   return {
     version: '2.0.0',
     patchMarker: PATCH_MARKER,
@@ -40,7 +49,9 @@ function buildStatusReport(pathOverrides = null) {
     manifestRegistered: Boolean(manifestValidation.ok),
     manifestValidation,
     asarLoaderInstalled: isAsarLoaderInstalled(p.ASAR_PATH),
-    settings: readTranslatorSettings(p),
+    settings,
+    settingsCorrupted,
+    settingsError,
   };
 }
 

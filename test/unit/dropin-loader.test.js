@@ -318,8 +318,12 @@ const realAsarOrigPath =
   process.env.AGY_REAL_ASAR_ORIG ||
   (defaultLocalOrig && fs.existsSync(defaultLocalOrig) ? defaultLocalOrig : '');
 
-if (realAsarOrigPath && fs.existsSync(realAsarOrigPath)) {
-  test('Real Antigravity app.asar copy: exact-size dist/main.js patch preserves preload/utils and rolls back byte-identically', () => {
+const HAS_REAL_ASAR = Boolean(realAsarOrigPath && fs.existsSync(realAsarOrigPath));
+
+test(
+  'Real Antigravity app.asar copy: exact-size dist/main.js patch preserves preload/utils and rolls back byte-identically',
+  { skip: HAS_REAL_ASAR ? false : 'Local Antigravity app.asar.orig fixture not present in this environment' },
+  () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-asar-real-'));
     try {
       const asarPath = path.join(dir, 'app.asar');
@@ -370,4 +374,3 @@ if (realAsarOrigPath && fs.existsSync(realAsarOrigPath)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
-}

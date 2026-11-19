@@ -1,15 +1,25 @@
 'use strict';
 
 /**
- * Clean-Slate Desktop-Only DOM MutationObserver & Periodic Scan Scheduler.
+ * Vendor-Neutral DOM MutationObserver & Periodic Scan Scheduler.
  *
- * - Zero v1.x remnants (no pretranslator, native settingsUi, statusbarPort, workbenchPromoter, or companion modals).
- * - Coalesces DOM mutations into a 0ms microtask fast-pass and 16ms full-pass while draining self-induced records.
- * - Guards session-switch transitions (D-0015) to prevent scroll/animation flashes.
+ * All host-specific CSS selectors and attribute names are injected via `selectors`
+ * from the active HostUiAdapter port rather than hardcoded here.
  */
 
-const NO_TRANSLATE_SUBTREE_SELECTOR =
-  '.agy-ko-thought-wrap, [data-agy-no-translate="true"]';
+const DEFAULT_SELECTORS = Object.freeze({
+  noTranslateSubtree: '[data-ko-no-translate="true"]',
+  triggerLabelClass: '',
+  conversationViews: '',
+  conversationViewFallbackList: Object.freeze([]),
+  mountedTurn: '',
+  fastPassRoots: '',
+  cascadeIdAttr: '',
+  viewTestIdAttr: 'data-testid',
+  primaryViewTestId: '',
+  autoExpandedAttr: '',
+  origLabelAttr: '',
+});
 
 function createObserverScheduler({
   targetWin,
@@ -18,6 +28,7 @@ function createObserverScheduler({
   uiLocalizer = null,
   triggerController = null,
   thinkingTranslator = null,
+  selectors = null,
   isEnabled = () => true,
   isTranslateThinkingEnabled = () => true,
   isTranslateStaticUiEnabled = () => true,
@@ -29,6 +40,7 @@ function createObserverScheduler({
 } = {}) {
   const win = targetWin || (typeof window !== 'undefined' ? window : null);
   const doc = targetDoc || (typeof document !== 'undefined' ? document : null);
+  const sel = { ...DEFAULT_SELECTORS, ...(selectors && typeof selectors === 'object' ? selectors : {}) };
   const effectiveIntervalMs =
     typeof scanIntervalMs === 'number' && Number.isFinite(scanIntervalMs) ? scanIntervalMs : periodicIntervalMs;
 
@@ -68,46 +80,49 @@ function createObserverScheduler({
     }
   }
 
-  // D-0015: Guard session-switch transitions to prevent height/scroll flash during cascade swap
+  function queryConversationViews() {
+    if (!doc || !sel.conversationViews) return [];
+    const views =
+      typeof doc.querySelectorAll === 'function'
+        ? Array.from(doc.querySelectorAll(sel.conversationViews))
+        : [];
+    if (views.length === 0 && typeof doc.querySelector === 'function' && Array.isArray(sel.conversationViewFallbackList)) {
+      for (const fallbackSelector of sel.conversationViewFallbackList) {
+        const single = doc.querySelector(fallbackSelector);
+        if (single) {
+          views.push(single);
+          break;
+        }
+      }
+    }
+    return views;
+  }
+
+  // Guard session-switch transitions to prevent height/scroll flash during view swap.
   function guardSessionSwitchTransitions() {
     try {
-      if (!doc) return;
-      const views =
-        typeof doc.querySelectorAll === 'function'
-          ? Array.from(
-              doc.querySelectorAll(
-                '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]'
-              )
-            )
-          : [];
-      if (views.length === 0 && typeof doc.querySelector === 'function') {
-        const single =
-          doc.querySelector('[data-testid="conversation-view"]') ||
-          doc.querySelector('[data-testid="subagent-tab-conversation"]') ||
-          doc.querySelector('[data-testid="side-question-tab-conversation"]');
-        if (single) views.push(single);
-      }
+      if (!doc || !sel.conversationViews || !sel.cascadeIdAttr) return;
+      const views = queryConversationViews();
       if (views.length === 0) return;
 
       const hasMountedTurnElement = (viewEl) =>
         Boolean(
-          viewEl &&
+          sel.mountedTurn &&
+            viewEl &&
             typeof viewEl.querySelector === 'function' &&
-            viewEl.querySelector(
-              'button[data-testid="worked-for-collapsible"], button[data-testid="thinking-collapsible-trigger"], [data-testid="user-message-bubble"]'
-            )
+            viewEl.querySelector(sel.mountedTurn)
         );
 
       let switched = false;
       for (const convView of views) {
         if (!convView || typeof convView.getAttribute !== 'function') continue;
-        const currentCascadeId = convView.getAttribute('data-cascade-id') || null;
+        const currentCascadeId = convView.getAttribute(sel.cascadeIdAttr) || null;
         if (!currentCascadeId) continue;
-        const testId = convView.getAttribute('data-testid') || '';
-        const isPrimaryConv = testId === 'conversation-view';
-        const prevElementCascadeId = convView.__agyLastObservedCascadeId ?? null;
+        const testId = sel.viewTestIdAttr ? convView.getAttribute(sel.viewTestIdAttr) || '' : '';
+        const isPrimaryConv = Boolean(sel.primaryViewTestId && testId === sel.primaryViewTestId);
+        const prevElementCascadeId = convView.__koLastObservedCascadeId ?? null;
         if (currentCascadeId !== prevElementCascadeId) {
-          convView.__agyLastObservedCascadeId = currentCascadeId;
+          convView.__koLastObservedCascadeId = currentCascadeId;
           if (
             prevElementCascadeId !== null ||
             (isPrimaryConv && lastObservedCascadeId !== null && currentCascadeId !== lastObservedCascadeId)
@@ -148,15 +163,9 @@ function createObserverScheduler({
           sessionSwitchFreezeTimer = null;
           sessionSwitchFreezeUntil = 0;
           try {
-            const liveViews =
-              typeof doc.querySelectorAll === 'function'
-                ? Array.from(
-                    doc.querySelectorAll(
-                      '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]'
-                    )
-                  )
-                : targetViews;
-            for (const v of liveViews) {
+            const liveViews = queryConversationViews();
+            const viewsToClear = liveViews.length > 0 ? liveViews : targetViews;
+            for (const v of viewsToClear) {
               if (!v) continue;
               if (typeof v.removeAttribute === 'function') {
                 v.removeAttribute('data-agy-session-switching');
@@ -181,27 +190,27 @@ function createObserverScheduler({
       if (switched) {
         for (const v of views) {
           if (!v) continue;
-          const cid = v.getAttribute ? v.getAttribute('data-cascade-id') : null;
+          const cid = v.getAttribute ? v.getAttribute(sel.cascadeIdAttr) : null;
           if (hasMountedTurnElement(v)) {
-            v.__agyTrajectoryMountedForCascade = cid;
-            v.__agyAwaitingAsyncTrajectoryForCascade = null;
+            v.__koTrajectoryMountedForCascade = cid;
+            v.__koAwaitingAsyncTrajectoryForCascade = null;
           } else {
-            v.__agyTrajectoryMountedForCascade = null;
-            v.__agyAwaitingAsyncTrajectoryForCascade = cid;
+            v.__koTrajectoryMountedForCascade = null;
+            v.__koAwaitingAsyncTrajectoryForCascade = cid;
           }
         }
         armFreezeTimer(views, 650);
       } else {
         for (const v of views) {
           if (!v || typeof v.querySelector !== 'function') continue;
-          const cid = v.getAttribute ? v.getAttribute('data-cascade-id') : null;
-          if (cid && v.__agyTrajectoryMountedForCascade !== cid && hasMountedTurnElement(v)) {
+          const cid = v.getAttribute ? v.getAttribute(sel.cascadeIdAttr) : null;
+          if (cid && v.__koTrajectoryMountedForCascade !== cid && hasMountedTurnElement(v)) {
             const wasSwitching =
-              v.__agyAwaitingAsyncTrajectoryForCascade === cid ||
+              v.__koAwaitingAsyncTrajectoryForCascade === cid ||
               v.getAttribute('data-agy-session-switching') === '1' ||
               Boolean(sessionSwitchFreezeTimer);
-            v.__agyTrajectoryMountedForCascade = cid;
-            v.__agyAwaitingAsyncTrajectoryForCascade = null;
+            v.__koTrajectoryMountedForCascade = cid;
+            v.__koAwaitingAsyncTrajectoryForCascade = null;
             if (wasSwitching) {
               armFreezeTimer(views, 250);
             }
@@ -211,7 +220,6 @@ function createObserverScheduler({
     } catch (_err) {}
   }
 
-  // D-0014: 0ms microtask fast-pass for Thinking/Worked triggers and active conversation view
   function runFastPass() {
     guardSessionSwitchTransitions();
     if (disposed || !running || inFastScan || !doc || !isEnabled()) return;
@@ -224,18 +232,15 @@ function createObserverScheduler({
         triggerController.scanTriggerButtonsSync(false);
       }
       if (uiLocalizer && isTranslateStaticUiEnabled()) {
-        if (typeof doc.querySelectorAll === 'function') {
+        if (sel.fastPassRoots && typeof doc.querySelectorAll === 'function') {
           doc
-            .querySelectorAll(
-              '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"], [data-testid="idle-status-text"], [data-testid="conversation-navigator"]'
-            )
+            .querySelectorAll(sel.fastPassRoots)
             .forEach((convEl) => uiLocalizer.localizeStaticUiInRoot(convEl, observer));
-        } else if (typeof doc.querySelector === 'function') {
-          const convEl =
-            doc.querySelector('[data-testid="conversation-view"]') ||
-            doc.querySelector('[data-testid="subagent-tab-conversation"]') ||
-            doc.querySelector('[data-testid="side-question-tab-conversation"]');
-          if (convEl) uiLocalizer.localizeStaticUiInRoot(convEl, observer);
+        } else {
+          const fallbackViews = queryConversationViews();
+          if (fallbackViews.length > 0) {
+            fallbackViews.forEach((convEl) => uiLocalizer.localizeStaticUiInRoot(convEl, observer));
+          }
         }
       }
       if (thinkingTranslator && isTranslateThinkingEnabled()) {
@@ -291,6 +296,15 @@ function createObserverScheduler({
     }
   }
 
+  function isIgnoredSubtree(el) {
+    if (!el || typeof el.closest !== 'function' || !sel.noTranslateSubtree) return false;
+    return Boolean(el.closest(sel.noTranslateSubtree));
+  }
+
+  function isTriggerLabelElement(el) {
+    return Boolean(sel.triggerLabelClass && el && el.classList && el.classList.contains(sel.triggerLabelClass));
+  }
+
   function createMutationObserver() {
     const ObsCtor = (win && win.MutationObserver) || (typeof MutationObserver !== 'undefined' ? MutationObserver : null);
     if (typeof ObsCtor !== 'function') return null;
@@ -302,12 +316,7 @@ function createObserverScheduler({
           ((m.addedNodes && m.addedNodes.length > 0) || (m.removedNodes && m.removedNodes.length > 0))
         ) {
           const tEl = m.target && m.target.nodeType === 1 ? m.target : m.target && m.target.parentElement;
-          if (
-            tEl &&
-            typeof tEl.closest === 'function' &&
-            (tEl.closest(NO_TRANSLATE_SUBTREE_SELECTOR) ||
-              (tEl.classList && tEl.classList.contains('agy-ko-trigger-label')))
-          ) {
+          if (tEl && (isIgnoredSubtree(tEl) || isTriggerLabelElement(tEl))) {
             continue;
           }
           scheduleCoalescedScan();
@@ -317,8 +326,8 @@ function createObserverScheduler({
           const parent = m.target.parentElement;
           if (
             parent &&
-            (!parent.classList || !parent.classList.contains('agy-ko-trigger-label')) &&
-            (typeof parent.closest !== 'function' || !parent.closest(NO_TRANSLATE_SUBTREE_SELECTOR)) &&
+            !isTriggerLabelElement(parent) &&
+            !isIgnoredSubtree(parent) &&
             m.target.__agyKoApplied !== String(m.target.nodeValue || '').trim()
           ) {
             scheduleCoalescedScan();
@@ -326,10 +335,10 @@ function createObserverScheduler({
           }
         }
         if (m.type === 'attributes' && m.target && typeof m.target.closest === 'function') {
-          if (m.target.closest(NO_TRANSLATE_SUBTREE_SELECTOR)) {
+          if (isIgnoredSubtree(m.target)) {
             continue;
           }
-          if (m.attributeName === 'data-cascade-id') {
+          if (sel.cascadeIdAttr && m.attributeName === sel.cascadeIdAttr) {
             guardSessionSwitchTransitions();
             scheduleCoalescedScan();
             return;
@@ -337,8 +346,9 @@ function createObserverScheduler({
           if (m.attributeName === 'aria-expanded') {
             if (
               m.target.__agyProgrammaticClick ||
-              (typeof m.target.getAttribute === 'function' &&
-                m.target.getAttribute('data-agy-auto-expanded') === '1' &&
+              (sel.autoExpandedAttr &&
+                typeof m.target.getAttribute === 'function' &&
+                m.target.getAttribute(sel.autoExpandedAttr) === '1' &&
                 m.target.getAttribute('aria-expanded') === 'true')
             ) {
               continue;
@@ -348,8 +358,9 @@ function createObserverScheduler({
           }
           if (
             m.attributeName === 'class' &&
+            sel.origLabelAttr &&
             typeof m.target.getAttribute === 'function' &&
-            m.target.getAttribute('data-agy-orig-label') === '1'
+            m.target.getAttribute(sel.origLabelAttr) === '1'
           ) {
             scheduleCoalescedScan();
             return;
@@ -373,12 +384,16 @@ function createObserverScheduler({
       observer = createMutationObserver();
     }
     if (observer && typeof observer.observe === 'function') {
+      const attributeFilter = ['style', 'aria-expanded', 'class', 'aria-hidden'];
+      if (sel.cascadeIdAttr && !attributeFilter.includes(sel.cascadeIdAttr)) {
+        attributeFilter.push(sel.cascadeIdAttr);
+      }
       observer.observe(root, {
         childList: true,
         subtree: true,
         characterData: true,
         attributes: true,
-        attributeFilter: ['style', 'aria-expanded', 'class', 'data-cascade-id', 'aria-hidden'],
+        attributeFilter,
       });
     }
     scanAll();
@@ -456,6 +471,6 @@ function createObserverScheduler({
 }
 
 module.exports = {
-  NO_TRANSLATE_SUBTREE_SELECTOR,
+  DEFAULT_SELECTORS,
   createObserverScheduler,
 };

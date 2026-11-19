@@ -167,7 +167,7 @@ function validateCustomProviderSpec(rawSpec) {
     : 2;
   const timeoutRaw = Number(rawSpec.timeoutMs);
   const timeoutMs = Number.isFinite(timeoutRaw)
-    ? Math.min(60000, Math.max(1000, Math.trunc(timeoutRaw)))
+    ? Math.min(120000, Math.max(1000, Math.trunc(timeoutRaw)))
     : 15000;
 
   return Object.freeze({

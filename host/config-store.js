@@ -12,10 +12,13 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const lockfile = require('proper-lockfile');
 
 const { resolveHostPaths, PLUGIN_ID } = require('./paths');
 const { validateTranslationEndpointUrl } = require('../src/adapters/translators/endpoint-validator');
 const { validateCustomProviderSpec } = require('../src/adapters/translators/custom-provider');
+
+const activeLockReleases = new Map();
 
 const DEFAULT_LLM_CONFIG = Object.freeze({
   baseUrl: 'http://127.0.0.1:11434',
@@ -35,69 +38,22 @@ const DEFAULT_SETTINGS = Object.freeze({
   customProviders: Object.freeze([]),
 });
 
-function isProcessAlive(pid) {
-  const num = Number(pid);
-  if (!Number.isInteger(num) || num <= 0) return false;
-  try {
-    process.kill(num, 0);
-    return true;
-  } catch (err) {
-    return Boolean(err && err.code === 'EPERM');
-  }
-}
-
 function acquireExclusiveLock(lockPath, staleMs = 15000) {
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-  const token = crypto.randomBytes(12).toString('hex');
-  const payload = JSON.stringify({ pid: process.pid, token, ts: Date.now() });
-
+  if (!lockPath) return null;
   try {
-    const fd = fs.openSync(lockPath, 'wx', 0o600);
-    try {
-      fs.writeFileSync(fd, payload, 'utf8');
-    } finally {
-      fs.closeSync(fd);
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    // proper-lockfile locks a sentinel target using an atomic mkdir at `lockfilePath`.
+    const sentinelPath = `${lockPath}.target`;
+    if (!fs.existsSync(sentinelPath)) {
+      fs.writeFileSync(sentinelPath, '', { encoding: 'utf8', mode: 0o600 });
     }
-    return token;
-  } catch (err) {
-    if (!err || err.code !== 'EEXIST') {
-      return null;
-    }
-  }
-
-  try {
-    const stat = fs.statSync(lockPath);
-    let ownerAlive = false;
-    let corrupt = false;
-    try {
-      const raw = fs.readFileSync(lockPath, 'utf8');
-      const info = JSON.parse(raw);
-      ownerAlive = Boolean(info && info.pid && isProcessAlive(info.pid));
-    } catch (_parseErr) {
-      corrupt = true;
-      ownerAlive = false;
-    }
-    const ageMs = Date.now() - stat.mtimeMs;
-    const isStale = !ownerAlive && (ageMs > staleMs || (corrupt && ageMs >= Math.min(staleMs, 1000)));
-    if (!isStale) return null;
-
-    // Atomic stale-lock quarantine via renameSync prevents unlink->open TOCTOU races.
-    const quarantinePath = `${lockPath}.stale.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
-    try {
-      fs.renameSync(lockPath, quarantinePath);
-    } catch (_renameErr) {
-      return null;
-    }
-    try {
-      fs.unlinkSync(quarantinePath);
-    } catch (_unlinkErr) {}
-
-    const fd = fs.openSync(lockPath, 'wx', 0o600);
-    try {
-      fs.writeFileSync(fd, payload, 'utf8');
-    } finally {
-      fs.closeSync(fd);
-    }
+    const release = lockfile.lockSync(sentinelPath, {
+      lockfilePath: lockPath,
+      stale: Math.max(Number(staleMs) || 15000, 2000),
+      realpath: false,
+    });
+    const token = crypto.randomBytes(12).toString('hex');
+    activeLockReleases.set(token, { lockPath, release });
     return token;
   } catch (_err) {
     return null;
@@ -105,13 +61,13 @@ function acquireExclusiveLock(lockPath, staleMs = 15000) {
 }
 
 function releaseExclusiveLock(lockPath, token) {
-  if (!lockPath || !token) return;
+  if (!token) return;
+  const entry = activeLockReleases.get(token);
+  if (!entry) return;
+  if (lockPath && entry.lockPath !== lockPath) return;
+  activeLockReleases.delete(token);
   try {
-    const raw = fs.readFileSync(lockPath, 'utf8');
-    const info = JSON.parse(raw);
-    if (info && info.token === token) {
-      fs.unlinkSync(lockPath);
-    }
+    entry.release();
   } catch (_err) {}
 }
 
@@ -135,7 +91,7 @@ function normalizeProviderId(raw) {
   if (!s) return 'google-translate';
   if (s === 'google' || s === 'gtx' || s === 'google-translate') return 'google-translate';
   if (s === 'local' || s === 'llm' || s === 'ollama' || s === 'local-llm') return 'local-llm';
-  if (/^[a-z0-9][a-z0-9._-]{0,63}$/.test(s)) return s;
+  if (/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(s)) return s;
   throw new Error(`Invalid provider id: ${raw}`);
 }
 

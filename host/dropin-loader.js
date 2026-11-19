@@ -20,8 +20,15 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const vm = require('vm');
+const asar = require('@electron/asar');
 
 const { resolveHostPaths, PLUGIN_ID } = require('./paths');
+const {
+  PATCH_MARKER,
+  MAIN_ANCHOR_TARGET,
+  MAIN_ANCHOR_REPLACEMENT,
+  ANTIGRAVITY_HOST_PROFILE,
+} = require('./profiles/antigravity');
 const {
   acquireExclusiveLock,
   releaseExclusiveLock,
@@ -29,16 +36,9 @@ const {
   readTranslatorSettings,
 } = require('./config-store');
 
-const PATCH_MARKER = 'AGY_UI_EXTENSIONS_LOADER_V1';
-const MAIN_ANCHOR_TARGET = "electron_1.app.on('web-contents-created', (_event, contents) => {";
-const MAIN_ANCHOR_REPLACEMENT =
-  "electron_1.app.on('web-contents-created', (_event, contents) => {\n" +
-  `    // ${PATCH_MARKER}\n` +
-  "    try { const _h = process.env.USERPROFILE || process.env.HOME || require('os').homedir(); const _p = require('path').join(_h, '.gemini', 'antigravity', 'ui-extensions-loader.js'); if (require('fs').existsSync(_p)) require(_p).attach(contents); } catch (_e) { try { console.error('[ko-thought-translator] loader bootstrap error:', _e && _e.message ? _e.message : _e); } catch (_i) {} }";
-
 const BLOCK_SIZE = 4 * 1024 * 1024;
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-const ALLOWED_HUB_URL_RE = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/i;
+const ALLOWED_HUB_URL_RE = ANTIGRAVITY_HOST_PROFILE.allowedHubUrlRe;
 
 function sha256Hex(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
@@ -154,9 +154,13 @@ function collectExecutableExtensions({ uiExtensionsDir, pluginsRootDir, configJs
     let initialSettingsPrelude = '';
     if (check.pluginId === PLUGIN_ID && settingsPath) {
       try {
-        const settings = readTranslatorSettings({ SETTINGS_PATH: settingsPath });
+        const settings = readTranslatorSettings({ SETTINGS_PATH: settingsPath }, { strict: true });
         initialSettingsPrelude = `window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ = ${JSON.stringify(settings)};\n`;
-      } catch (_err) {}
+      } catch (_err) {
+        // Fail-closed: NEVER fall back to external google-translate when settings file is corrupted.
+        initialSettingsPrelude =
+          'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ = {"enabled":false,"settingsCorrupted":true};\n';
+      }
     }
 
     const wrapped = `(function(){try{\n${initialSettingsPrelude}${code}\n}catch(_e){}})();`;
@@ -240,9 +244,13 @@ function attach(contents) {
                     .replace(/\\u2028/g, '\\\\u2028')
                     .replace(/\\u2029/g, '\\\\u2029');
                   prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__=' + safeJson + ';\\n';
+                } else {
+                  prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__={"enabled":false,"settingsCorrupted":true};\\n';
                 }
               }
-            } catch (_e) {}
+            } catch (_e) {
+              prelude = 'window.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__={"enabled":false,"settingsCorrupted":true};\\n';
+            }
           }
           const wrapped = '(function(){try{\\n' + prelude + rawCode + '\\n}catch(err){try{console.error("[ko-thought-translator] renderer error:",err&&err.message?err.message:err);}catch(_e){}}})();';
           scriptsToRun.push(wrapped);
@@ -288,11 +296,12 @@ module.exports = { attach };
 
 function readAsarArchive(filePath) {
   const buf = fs.readFileSync(filePath);
+  const raw = asar.getRawHeader(filePath);
   const u0 = buf.readUInt32LE(0);
-  const u4 = buf.readUInt32LE(4);
-  const strSize = buf.readUInt32LE(12);
-  const dataOffset = 8 + u4;
-  const header = JSON.parse(buf.toString('utf8', 16, 16 + strSize).replace(/\0+$/, ''));
+  const u4 = raw.headerSize;
+  const strSize = Buffer.byteLength(raw.headerString, 'utf8');
+  const dataOffset = 8 + raw.headerSize;
+  const header = raw.header;
 
   const fileMap = new Map();
   function walk(node, relPath) {
@@ -640,6 +649,7 @@ function installAsarDropinLoader(pathOverrides = null) {
     }
 
     writeBinaryAtomicStrictSync(p.ASAR_PATH, outBuf);
+    asar.uncacheAll();
     return {
       status: 'INSTALLED',
       patchMarker: PATCH_MARKER,
@@ -691,6 +701,7 @@ function rollbackAsarDropinLoader(pathOverrides = null) {
       return { status: check.status, appVersion: cur.appVersion, manifestRemoved: false };
     }
     writeBinaryAtomicStrictSync(p.ASAR_PATH, check.archive.buf);
+    asar.uncacheAll();
     const manifestRemoved = unregisterPluginManifest(p);
     return {
       status: 'ROLLED_BACK',

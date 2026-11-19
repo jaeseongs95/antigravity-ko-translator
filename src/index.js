@@ -1,13 +1,28 @@
 'use strict';
 
 /**
- * Clean-Slate Entrypoint for Antigravity Desktop Korean Thought & UI Translator.
+ * Clean-Slate Composition Root for Antigravity Desktop Korean Thought & UI Translator.
  *
- * Exposes `createKoTranslator` both as CommonJS export and as a single clean handle
- * `window.__agyKoTranslator` when mounted in a top-frame Electron Hub window.
+ * Wires the Antigravity HostUiAdapter and Default Provider Bundle into the
+ * vendor-neutral `createTranslatorRuntime`, exposing `createKoTranslator` both
+ * as CommonJS export and as `window.__agyKoTranslator` in top-frame Electron Hub windows.
  */
 
-const { createKoTranslator } = require('./runtime/bootstrap');
+const { createTranslatorRuntime } = require('./runtime/bootstrap');
+const {
+  STYLE_ID,
+  buildMinimalOverlayCss,
+  createAntigravityHostAdapter,
+} = require('./adapters/antigravity/host-adapter');
+const { createDefaultProviderBundle } = require('./adapters/translators/default-providers');
+
+function createKoTranslator(options = {}) {
+  return createTranslatorRuntime({
+    ...options,
+    hostAdapter: options.hostAdapter || createAntigravityHostAdapter(),
+    providerBundle: options.providerBundle || createDefaultProviderBundle(),
+  });
+}
 
 function mountIfBrowser(globalScope) {
   const win = globalScope || (typeof window !== 'undefined' ? window : null);
@@ -58,6 +73,9 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 }
 
 module.exports = {
+  STYLE_ID,
+  buildMinimalOverlayCss,
+  createTranslatorRuntime,
   createKoTranslator,
   mountIfBrowser,
 };

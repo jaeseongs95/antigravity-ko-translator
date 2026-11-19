@@ -8,6 +8,7 @@ const { createAntigravityDictionaryCatalog } = require('../../src/adapters/antig
 const { createAntigravityTriggerController } = require('../../src/adapters/antigravity/trigger-controller');
 const { createAntigravityThinkingTranslator } = require('../../src/adapters/antigravity/thinking-translator');
 const { createObserverScheduler } = require('../../src/runtime/observer-scheduler');
+const { ANTIGRAVITY_SELECTORS } = require('../../src/adapters/antigravity/host-adapter');
 
 test('F1: GoogleTranslateAdapter encodes query, concatenates multi-segment output, enforces credentials:omit/redirect:error, and handles aborts', async () => {
   const calls = [];
@@ -264,7 +265,12 @@ test('F1+F5: guardSessionSwitchTransitions adds no-animations on cascade swap an
     querySelectorAll: () => [convView],
   };
 
-  const scheduler = createObserverScheduler({ targetWin: {}, targetDoc: doc, periodicIntervalMs: 0 });
+  const scheduler = createObserverScheduler({
+    targetWin: {},
+    targetDoc: doc,
+    selectors: ANTIGRAVITY_SELECTORS,
+    periodicIntervalMs: 0,
+  });
   scheduler.guardSessionSwitchTransitions();
   assert.equal(clsSet.has('no-animations'), false);
 
