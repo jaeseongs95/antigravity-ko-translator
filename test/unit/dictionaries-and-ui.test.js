@@ -169,3 +169,44 @@ test('F3 (D-0023): within [data-turn-content="latest"], ONLY the last Thinking s
   ctrl.scanTriggerButtonsSync(false);
   assert.deepEqual(clicked, ['seg-2-active'], 'D-0023: only the active last Thinking segment may expand');
 });
+
+test('F1 (D-0042): ALL Antigravity 2.0 code/diff/syntax/monospace selectors are excluded from static UI localization', () => {
+  const localizer = createAntigravityUiLocalizer({
+    targetDoc: null,
+    catalog: createAntigravityDictionaryCatalog(),
+  });
+
+  // 1) Attribute-based code/diff exclusions (hasExcludedCodeDataAttrPrefix)
+  for (const attrName of ['data-diff-type', 'data-file-uri', 'data-line-number', 'data-line-tokens', 'data-line-start']) {
+    const el = {
+      nodeType: 1,
+      attributes: [{ name: attrName }],
+      closest: () => null,
+      parentElement: null,
+    };
+    assert.equal(
+      localizer.isExcludedFromStaticUiLocalization(el),
+      true,
+      `Attribute [${attrName}] must be excluded from static UI localization`
+    );
+  }
+
+  // 2) Selector-based code/syntax/editor/monospace exclusions
+  for (const matchedSelector of ['.code-block', '.code-line', '.line-content', '.token', '.cm-editor', '.shiki', '.font-mono']) {
+    const el = {
+      nodeType: 1,
+      attributes: [],
+      closest(sel) {
+        if (sel === '.font-mono') return matchedSelector === '.font-mono' ? el : null;
+        if (sel === '.font-sans') return null;
+        return sel.includes(matchedSelector) ? el : null;
+      },
+      parentElement: null,
+    };
+    assert.equal(
+      localizer.isExcludedFromStaticUiLocalization(el),
+      true,
+      `Selector ${matchedSelector} must be excluded from static UI localization`
+    );
+  }
+});

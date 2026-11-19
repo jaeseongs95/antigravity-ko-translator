@@ -83,11 +83,15 @@ function createTranslationService({
     const desired = registry.getProvider(desiredProviderId);
     if (desired) {
       if (isRemoteEnv && !desired.supportsRemote) {
-        return registry.getProvider(normalizedDefaultId) || desired;
+        return registry.getProvider(normalizedDefaultId) || null;
       }
       return desired;
     }
-    return registry.getProvider(normalizedDefaultId) || registry.listProviders()[0] || null;
+    if (desiredProviderId === normalizedDefaultId) {
+      return registry.getProvider(normalizedDefaultId) || null;
+    }
+    // Fail-closed: NEVER silently fall back to google-translate when a non-default provider is missing/unregistered.
+    return null;
   }
 
   function getDesiredProviderId() {
@@ -96,7 +100,11 @@ function createTranslationService({
 
   function getEffectiveProviderId() {
     const prov = resolveEffectiveProvider();
-    return prov ? prov.id : normalizedDefaultId;
+    return prov ? prov.id : null;
+  }
+
+  function makeCacheKey(providerId, cleanText) {
+    return `${providerId}\u0000${cleanText}`;
   }
 
   function getEffectiveProvider() {
@@ -335,10 +343,13 @@ function createTranslationService({
     if (typeof rawText !== 'string') return null;
     const clean = rawText.trim();
     if (!clean) return null;
-    if (!memCache.has(clean)) return null;
-    const cached = memCache.get(clean);
+    const effId = getEffectiveProviderId();
+    if (!effId) return null;
+    const key = makeCacheKey(effId, clean);
+    if (!memCache.has(key)) return null;
+    const cached = memCache.get(key);
     if (isInvalidCachedOrTranslatedText(cached, clean)) {
-      memCache.delete(clean);
+      memCache.delete(key);
       return null;
     }
     return cached;
@@ -366,13 +377,15 @@ function createTranslationService({
     const cachedHit = getCachedSync(clean);
     if (cachedHit !== null) return cachedHit;
 
-    const signal = options && options.signal ? options.signal : null;
-    if (!signal && inflightMap.has(clean)) {
-      return inflightMap.get(clean);
-    }
-
     const reqEpoch = epoch;
     const reqEffectiveId = getEffectiveProviderId();
+    if (!reqEffectiveId) return text;
+    const cacheKey = makeCacheKey(reqEffectiveId, clean);
+
+    const signal = options && options.signal ? options.signal : null;
+    if (!signal && inflightMap.has(cacheKey)) {
+      return inflightMap.get(cacheKey);
+    }
 
     const runTask = () =>
       enqueue(async () => {
@@ -397,7 +410,7 @@ function createTranslationService({
         if (signal && signal.aborted) return text;
         if (candidate && candidate !== clean && !isInvalidCachedOrTranslatedText(candidate, clean)) {
           if (!disposed && epoch === reqEpoch && getEffectiveProviderId() === reqEffectiveId) {
-            memCache.set(clean, candidate);
+            memCache.set(cacheKey, candidate);
             scheduleSaveCache(reqEpoch);
           }
           return candidate;
@@ -410,12 +423,12 @@ function createTranslationService({
     }
 
     const p = runTask();
-    inflightMap.set(clean, p);
+    inflightMap.set(cacheKey, p);
     try {
       return await p;
     } finally {
-      if (inflightMap.get(clean) === p) {
-        inflightMap.delete(clean);
+      if (inflightMap.get(cacheKey) === p) {
+        inflightMap.delete(cacheKey);
       }
     }
   }

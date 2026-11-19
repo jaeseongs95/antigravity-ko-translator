@@ -232,11 +232,17 @@ function attach(contents) {
               }
             } catch (_e) {}
           }
-          const wrapped = '(function(){try{\\n' + prelude + rawCode + '\\n}catch(_e){}})();';
-          void contents.executeJavaScript(wrapped).catch(() => {});
-        } catch (_e) {}
+          const wrapped = '(function(){try{\\n' + prelude + rawCode + '\\n}catch(err){try{console.error("[ko-thought-translator] renderer error:",err&&err.message?err.message:err);}catch(_e){}}})();';
+          void contents.executeJavaScript(wrapped).catch((err) => {
+            try { console.error('[ko-thought-translator] executeJavaScript failed:', err && err.message ? err.message : err); } catch (_e) {}
+          });
+        } catch (err) {
+          try { console.error('[ko-thought-translator] extension load failed:', f, err && err.message ? err.message : err); } catch (_e) {}
+        }
       }
-    } catch (_e) {}
+    } catch (err) {
+      try { console.error('[ko-thought-translator] loader run failed:', err && err.message ? err.message : err); } catch (_e) {}
+    }
   };
   contents.on('did-start-navigation', (_ev, _url, _isInPlace, isMainFrame) => {
     if (isMainFrame !== false) lastInjectedUrl = null;
@@ -410,6 +416,50 @@ function unregisterPluginManifest(pathOverrides = null) {
   return removed;
 }
 
+function verifyOrigBackupStrict(backupPath, metaPath, expectedVersion, { backfillMeta = false } = {}) {
+  if (!fs.existsSync(backupPath)) {
+    return { ok: false, status: 'ERR_ORIG_MISSING' };
+  }
+  const origArchive = readAsarArchive(backupPath);
+  if (!isPureUnpatchedArchive(origArchive) || (expectedVersion && origArchive.appVersion !== expectedVersion)) {
+    return { ok: false, status: 'ERR_ORIG_INVALID', appVersion: origArchive.appVersion };
+  }
+  const origHash = sha256Hex(origArchive.buf);
+  if (fs.existsSync(metaPath)) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+      if (!meta || meta.sha256 !== origHash || meta.bytes !== origArchive.buf.length) {
+        return { ok: false, status: 'ERR_ORIG_META_MISMATCH', appVersion: origArchive.appVersion };
+      }
+    } catch (_err) {
+      return { ok: false, status: 'ERR_ORIG_META_MISMATCH', appVersion: origArchive.appVersion };
+    }
+  } else {
+    // Verify packed ASAR header integrity hash for dist/main.js when .orig.json is absent.
+    const mainNode = origArchive.header?.files?.dist?.files?.['main.js'];
+    const mainBuf = origArchive.fileMap.get('dist/main.js');
+    if (mainNode?.integrity?.hash && mainBuf && sha256Hex(mainBuf) !== mainNode.integrity.hash) {
+      return { ok: false, status: 'ERR_ORIG_INTEGRITY_MISMATCH', appVersion: origArchive.appVersion };
+    }
+    if (backfillMeta) {
+      writeFileAtomicSync(
+        metaPath,
+        JSON.stringify(
+          {
+            appVersion: origArchive.appVersion,
+            bytes: origArchive.buf.length,
+            sha256: origHash,
+            createdAt: new Date().toISOString(),
+          },
+          null,
+          2
+        ) + '\n'
+      );
+    }
+  }
+  return { ok: true, archive: origArchive, sha256: origHash };
+}
+
 function installAsarDropinLoader(pathOverrides = null) {
   const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
   if (!fs.existsSync(p.ASAR_PATH)) {
@@ -427,38 +477,27 @@ function installAsarDropinLoader(pathOverrides = null) {
     const backupPath = `${p.ASAR_PATH}.v${archive.appVersion}.orig`;
     const metaPath = `${backupPath}.json`;
 
-    if (isPureUnpatchedArchive(archive)) {
-      if (!fs.existsSync(backupPath)) {
-        writeBinaryAtomicStrictSync(backupPath, archive.buf);
-        writeFileAtomicSync(
-          metaPath,
-          JSON.stringify(
-            {
-              appVersion: archive.appVersion,
-              bytes: archive.buf.length,
-              sha256: sha256Hex(archive.buf),
-              createdAt: new Date().toISOString(),
-            },
-            null,
-            2
-          ) + '\n'
-        );
+    if (fs.existsSync(backupPath)) {
+      const check = verifyOrigBackupStrict(backupPath, metaPath, archive.appVersion, { backfillMeta: true });
+      if (!check.ok) {
+        return { status: check.status, appVersion: archive.appVersion };
       }
-    } else if (fs.existsSync(backupPath)) {
-      archive = readAsarArchive(backupPath);
-      if (!isPureUnpatchedArchive(archive)) {
-        return { status: 'ERR_ORIG_NOT_PURE', appVersion: archive.appVersion };
-      }
-      if (fs.existsSync(metaPath)) {
-        try {
-          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-          if (!meta || meta.sha256 !== sha256Hex(archive.buf) || meta.bytes !== archive.buf.length) {
-            return { status: 'ERR_ORIG_META_MISMATCH', appVersion: archive.appVersion };
-          }
-        } catch (_err) {
-          return { status: 'ERR_ORIG_META_MISMATCH', appVersion: archive.appVersion };
-        }
-      }
+      archive = check.archive;
+    } else if (isPureUnpatchedArchive(archive)) {
+      writeBinaryAtomicStrictSync(backupPath, archive.buf);
+      writeFileAtomicSync(
+        metaPath,
+        JSON.stringify(
+          {
+            appVersion: archive.appVersion,
+            bytes: archive.buf.length,
+            sha256: sha256Hex(archive.buf),
+            createdAt: new Date().toISOString(),
+          },
+          null,
+          2
+        ) + '\n'
+      );
     } else {
       return { status: 'ERR_ORIG_MISSING_FOR_PATCHED_ASAR', appVersion: archive.appVersion };
     }
@@ -552,31 +591,17 @@ function rollbackAsarDropinLoader(pathOverrides = null) {
     }
     const backupPath = `${p.ASAR_PATH}.v${cur.appVersion}.orig`;
     const metaPath = `${backupPath}.json`;
-    if (!fs.existsSync(backupPath)) {
-      return { status: 'ERR_ORIG_MISSING', appVersion: cur.appVersion, manifestRemoved: false };
+    const check = verifyOrigBackupStrict(backupPath, metaPath, cur.appVersion, { backfillMeta: false });
+    if (!check.ok) {
+      return { status: check.status, appVersion: cur.appVersion, manifestRemoved: false };
     }
-    const origArchive = readAsarArchive(backupPath);
-    if (!isPureUnpatchedArchive(origArchive) || origArchive.appVersion !== cur.appVersion) {
-      return { status: 'ERR_ORIG_INVALID', appVersion: cur.appVersion, manifestRemoved: false };
-    }
-    const origHash = sha256Hex(origArchive.buf);
-    if (fs.existsSync(metaPath)) {
-      try {
-        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-        if (!meta || meta.sha256 !== origHash || meta.bytes !== origArchive.buf.length) {
-          return { status: 'ERR_ORIG_META_MISMATCH', appVersion: cur.appVersion, manifestRemoved: false };
-        }
-      } catch (_err) {
-        return { status: 'ERR_ORIG_META_MISMATCH', appVersion: cur.appVersion, manifestRemoved: false };
-      }
-    }
-    writeBinaryAtomicStrictSync(p.ASAR_PATH, origArchive.buf);
+    writeBinaryAtomicStrictSync(p.ASAR_PATH, check.archive.buf);
     const manifestRemoved = unregisterPluginManifest(p);
     return {
       status: 'ROLLED_BACK',
       appVersion: cur.appVersion,
       manifestRemoved,
-      sha256: origHash,
+      sha256: check.sha256,
     };
   } finally {
     releaseExclusiveLock(p.ASAR_LOCK_PATH, lockTok);

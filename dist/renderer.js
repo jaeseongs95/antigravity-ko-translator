@@ -5114,11 +5114,15 @@
         const desired = registry.getProvider(desiredProviderId);
         if (desired) {
           if (isRemoteEnv && !desired.supportsRemote) {
-            return registry.getProvider(normalizedDefaultId) || desired;
+            return registry.getProvider(normalizedDefaultId) || null;
           }
           return desired;
         }
-        return registry.getProvider(normalizedDefaultId) || registry.listProviders()[0] || null;
+        if (desiredProviderId === normalizedDefaultId) {
+          return registry.getProvider(normalizedDefaultId) || null;
+        }
+        // Fail-closed: NEVER silently fall back to google-translate when a non-default provider is missing/unregistered.
+        return null;
       }
 
       function getDesiredProviderId() {
@@ -5127,7 +5131,11 @@
 
       function getEffectiveProviderId() {
         const prov = resolveEffectiveProvider();
-        return prov ? prov.id : normalizedDefaultId;
+        return prov ? prov.id : null;
+      }
+
+      function makeCacheKey(providerId, cleanText) {
+        return `${providerId}\u0000${cleanText}`;
       }
 
       function getEffectiveProvider() {
@@ -5366,10 +5374,13 @@
         if (typeof rawText !== 'string') return null;
         const clean = rawText.trim();
         if (!clean) return null;
-        if (!memCache.has(clean)) return null;
-        const cached = memCache.get(clean);
+        const effId = getEffectiveProviderId();
+        if (!effId) return null;
+        const key = makeCacheKey(effId, clean);
+        if (!memCache.has(key)) return null;
+        const cached = memCache.get(key);
         if (isInvalidCachedOrTranslatedText(cached, clean)) {
-          memCache.delete(clean);
+          memCache.delete(key);
           return null;
         }
         return cached;
@@ -5397,13 +5408,15 @@
         const cachedHit = getCachedSync(clean);
         if (cachedHit !== null) return cachedHit;
 
-        const signal = options && options.signal ? options.signal : null;
-        if (!signal && inflightMap.has(clean)) {
-          return inflightMap.get(clean);
-        }
-
         const reqEpoch = epoch;
         const reqEffectiveId = getEffectiveProviderId();
+        if (!reqEffectiveId) return text;
+        const cacheKey = makeCacheKey(reqEffectiveId, clean);
+
+        const signal = options && options.signal ? options.signal : null;
+        if (!signal && inflightMap.has(cacheKey)) {
+          return inflightMap.get(cacheKey);
+        }
 
         const runTask = () =>
           enqueue(async () => {
@@ -5428,7 +5441,7 @@
             if (signal && signal.aborted) return text;
             if (candidate && candidate !== clean && !isInvalidCachedOrTranslatedText(candidate, clean)) {
               if (!disposed && epoch === reqEpoch && getEffectiveProviderId() === reqEffectiveId) {
-                memCache.set(clean, candidate);
+                memCache.set(cacheKey, candidate);
                 scheduleSaveCache(reqEpoch);
               }
               return candidate;
@@ -5441,12 +5454,12 @@
         }
 
         const p = runTask();
-        inflightMap.set(clean, p);
+        inflightMap.set(cacheKey, p);
         try {
           return await p;
         } finally {
-          if (inflightMap.get(clean) === p) {
-            inflightMap.delete(clean);
+          if (inflightMap.get(cacheKey) === p) {
+            inflightMap.delete(cacheKey);
           }
         }
       }
@@ -5702,24 +5715,38 @@
       providerRegistry.registerProvider(googleProvider);
       providerRegistry.registerProvider(localLlmProvider);
 
+      const registeredDeclarativeIds = new Set();
+
       function syncDeclarativeCustomProviders(list) {
         customProviderError = null;
-        if (!Array.isArray(list)) return;
-        for (const spec of list) {
+        const nextIds = new Set();
+        const combined = [
+          ...(Array.isArray(list) ? list : []),
+          ...(Array.isArray(storage.getJson(STORAGE_KEYS.customProviders, []))
+            ? storage.getJson(STORAGE_KEYS.customProviders, [])
+            : []),
+        ];
+        for (const spec of combined) {
           if (!spec || typeof spec !== 'object' || !spec.id) continue;
           try {
             const provider = createCustomProviderAdapter(spec, { fetchFn: effectiveFetch });
             providerRegistry.registerProvider(provider);
+            nextIds.add(provider.id);
           } catch (err) {
             customProviderError = `custom-provider(${spec.id}): ${err && err.message ? err.message : String(err)}`;
           }
         }
+        for (const oldId of Array.from(registeredDeclarativeIds)) {
+          if (!nextIds.has(oldId)) {
+            providerRegistry.unregisterProvider(oldId);
+            registeredDeclarativeIds.delete(oldId);
+          }
+        }
+        for (const id of nextIds) {
+          registeredDeclarativeIds.add(id);
+        }
       }
       syncDeclarativeCustomProviders(state.customProviders);
-
-      if (!providerRegistry.hasProvider(state.provider)) {
-        state.provider = 'google-translate';
-      }
 
       const translationService = createTranslationService({
         registry: providerRegistry,
@@ -5730,8 +5757,9 @@
         setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
         clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
       });
-      if (state.provider !== translationService.getEffectiveProviderId() && providerRegistry.hasProvider(state.provider)) {
-        translationService.setProvider(state.provider, { persist: false });
+      // Sync configured provider without ever silently overwriting a missing/unregistered non-default provider to google-translate.
+      if (state.provider) {
+        translationService.syncDesiredProviderFromExternal(state.provider);
       }
       disposables.register(() => translationService.dispose());
 
@@ -5963,9 +5991,40 @@
         };
       }
 
+      function registerCustomProvider(spec) {
+        if (disposed) throw new Error('Cannot register custom provider on disposed instance');
+        const provider = createCustomProviderAdapter(spec, { fetchFn: effectiveFetch });
+        providerRegistry.registerProvider(provider);
+        registeredDeclarativeIds.add(provider.id);
+        const localList = storage.getJson(STORAGE_KEYS.customProviders, []) || [];
+        const filtered = Array.isArray(localList) ? localList.filter((p) => p && p.id !== provider.id) : [];
+        filtered.push(spec);
+        storage.setJson(STORAGE_KEYS.customProviders, filtered);
+        emitStatus();
+        return provider.id;
+      }
+
+      function unregisterCustomProvider(rawId) {
+        const normId = providerRegistry.normalizeId(rawId);
+        if (!normId || normId === 'google-translate' || normId === 'local-llm') return false;
+        const removed = providerRegistry.unregisterProvider(normId);
+        registeredDeclarativeIds.delete(normId);
+        const localList = storage.getJson(STORAGE_KEYS.customProviders, []) || [];
+        if (Array.isArray(localList)) {
+          storage.setJson(
+            STORAGE_KEYS.customProviders,
+            localList.filter((p) => p && providerRegistry.normalizeId(p.id) !== normId)
+          );
+        }
+        emitStatus();
+        return removed;
+      }
+
       return {
         start,
         updateSettings,
+        registerCustomProvider,
+        unregisterCustomProvider,
         dispose,
         getStatus,
         scanAll,
@@ -6367,6 +6426,32 @@
         }
       }
 
+      function clearSessionSwitchGuards() {
+        if (!doc || typeof doc.querySelectorAll !== 'function') return;
+        try {
+          const views = doc.querySelectorAll(
+            '[data-agy-session-switching], [data-agy-added-no-animations]'
+          );
+          for (const v of views) {
+            if (!v) continue;
+            if (typeof v.removeAttribute === 'function') {
+              v.removeAttribute('data-agy-session-switching');
+            }
+            if (
+              typeof v.getAttribute === 'function' &&
+              v.getAttribute('data-agy-added-no-animations') === '1'
+            ) {
+              if (v.classList && typeof v.classList.remove === 'function') {
+                v.classList.remove('no-animations');
+              }
+              if (typeof v.removeAttribute === 'function') {
+                v.removeAttribute('data-agy-added-no-animations');
+              }
+            }
+          }
+        } catch (_err) {}
+      }
+
       function stop() {
         running = false;
         if (fullScanTimer) {
@@ -6376,7 +6461,9 @@
         if (sessionSwitchFreezeTimer) {
           clearTimer(sessionSwitchFreezeTimer);
           sessionSwitchFreezeTimer = null;
+          sessionSwitchFreezeUntil = 0;
         }
+        clearSessionSwitchGuards();
         if (periodicTimer) {
           clearPeriodic(periodicTimer);
           periodicTimer = null;

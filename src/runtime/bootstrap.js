@@ -136,24 +136,38 @@ function createKoTranslator({
   providerRegistry.registerProvider(googleProvider);
   providerRegistry.registerProvider(localLlmProvider);
 
+  const registeredDeclarativeIds = new Set();
+
   function syncDeclarativeCustomProviders(list) {
     customProviderError = null;
-    if (!Array.isArray(list)) return;
-    for (const spec of list) {
+    const nextIds = new Set();
+    const combined = [
+      ...(Array.isArray(list) ? list : []),
+      ...(Array.isArray(storage.getJson(STORAGE_KEYS.customProviders, []))
+        ? storage.getJson(STORAGE_KEYS.customProviders, [])
+        : []),
+    ];
+    for (const spec of combined) {
       if (!spec || typeof spec !== 'object' || !spec.id) continue;
       try {
         const provider = createCustomProviderAdapter(spec, { fetchFn: effectiveFetch });
         providerRegistry.registerProvider(provider);
+        nextIds.add(provider.id);
       } catch (err) {
         customProviderError = `custom-provider(${spec.id}): ${err && err.message ? err.message : String(err)}`;
       }
     }
+    for (const oldId of Array.from(registeredDeclarativeIds)) {
+      if (!nextIds.has(oldId)) {
+        providerRegistry.unregisterProvider(oldId);
+        registeredDeclarativeIds.delete(oldId);
+      }
+    }
+    for (const id of nextIds) {
+      registeredDeclarativeIds.add(id);
+    }
   }
   syncDeclarativeCustomProviders(state.customProviders);
-
-  if (!providerRegistry.hasProvider(state.provider)) {
-    state.provider = 'google-translate';
-  }
 
   const translationService = createTranslationService({
     registry: providerRegistry,
@@ -164,8 +178,9 @@ function createKoTranslator({
     setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
     clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
   });
-  if (state.provider !== translationService.getEffectiveProviderId() && providerRegistry.hasProvider(state.provider)) {
-    translationService.setProvider(state.provider, { persist: false });
+  // Sync configured provider without ever silently overwriting a missing/unregistered non-default provider to google-translate.
+  if (state.provider) {
+    translationService.syncDesiredProviderFromExternal(state.provider);
   }
   disposables.register(() => translationService.dispose());
 
@@ -397,9 +412,40 @@ function createKoTranslator({
     };
   }
 
+  function registerCustomProvider(spec) {
+    if (disposed) throw new Error('Cannot register custom provider on disposed instance');
+    const provider = createCustomProviderAdapter(spec, { fetchFn: effectiveFetch });
+    providerRegistry.registerProvider(provider);
+    registeredDeclarativeIds.add(provider.id);
+    const localList = storage.getJson(STORAGE_KEYS.customProviders, []) || [];
+    const filtered = Array.isArray(localList) ? localList.filter((p) => p && p.id !== provider.id) : [];
+    filtered.push(spec);
+    storage.setJson(STORAGE_KEYS.customProviders, filtered);
+    emitStatus();
+    return provider.id;
+  }
+
+  function unregisterCustomProvider(rawId) {
+    const normId = providerRegistry.normalizeId(rawId);
+    if (!normId || normId === 'google-translate' || normId === 'local-llm') return false;
+    const removed = providerRegistry.unregisterProvider(normId);
+    registeredDeclarativeIds.delete(normId);
+    const localList = storage.getJson(STORAGE_KEYS.customProviders, []) || [];
+    if (Array.isArray(localList)) {
+      storage.setJson(
+        STORAGE_KEYS.customProviders,
+        localList.filter((p) => p && providerRegistry.normalizeId(p.id) !== normId)
+      );
+    }
+    emitStatus();
+    return removed;
+  }
+
   return {
     start,
     updateSettings,
+    registerCustomProvider,
+    unregisterCustomProvider,
     dispose,
     getStatus,
     scanAll,

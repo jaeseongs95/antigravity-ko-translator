@@ -387,6 +387,32 @@ function createObserverScheduler({
     }
   }
 
+  function clearSessionSwitchGuards() {
+    if (!doc || typeof doc.querySelectorAll !== 'function') return;
+    try {
+      const views = doc.querySelectorAll(
+        '[data-agy-session-switching], [data-agy-added-no-animations]'
+      );
+      for (const v of views) {
+        if (!v) continue;
+        if (typeof v.removeAttribute === 'function') {
+          v.removeAttribute('data-agy-session-switching');
+        }
+        if (
+          typeof v.getAttribute === 'function' &&
+          v.getAttribute('data-agy-added-no-animations') === '1'
+        ) {
+          if (v.classList && typeof v.classList.remove === 'function') {
+            v.classList.remove('no-animations');
+          }
+          if (typeof v.removeAttribute === 'function') {
+            v.removeAttribute('data-agy-added-no-animations');
+          }
+        }
+      }
+    } catch (_err) {}
+  }
+
   function stop() {
     running = false;
     if (fullScanTimer) {
@@ -396,7 +422,9 @@ function createObserverScheduler({
     if (sessionSwitchFreezeTimer) {
       clearTimer(sessionSwitchFreezeTimer);
       sessionSwitchFreezeTimer = null;
+      sessionSwitchFreezeUntil = 0;
     }
+    clearSessionSwitchGuards();
     if (periodicTimer) {
       clearPeriodic(periodicTimer);
       periodicTimer = null;

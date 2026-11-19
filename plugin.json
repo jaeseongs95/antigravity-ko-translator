@@ -4,6 +4,9 @@
   "description": "Antigravity 2.0 데스크톱 네이티브 앱의 Thinking(추론 과정)과 영문 고정 UI를 순수 읽기 전용 DOM 오버레이로 한국어 표시하며, 공식 Sidecar 설정 패널과 단독 드롭인 로더를 제공합니다.",
   "version": "2.0.0",
   "repository": "https://github.com/jaeseongs95/antigravity-ko-translator",
+  "sidecars": [
+    "sidecars/ko-translator-settings/sidecar.json"
+  ],
   "suggestedPrompts": [
     "한글 번역 설정 패널을 열어줘",
     "한글 번역기 로더 상태를 확인해줘",

@@ -19,6 +19,7 @@ const {
 const {
   PATCH_MARKER,
   readDropinManifest,
+  validateDropinManifest,
   isAsarLoaderInstalled,
   registerPluginManifest,
   unregisterPluginManifest,
@@ -28,11 +29,16 @@ const {
 
 function buildStatusReport(pathOverrides = null) {
   const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+  const manifest = readDropinManifest(p.MANIFEST_PATH);
+  const manifestValidation = manifest
+    ? validateDropinManifest(manifest, p.PLUGINS_ROOT_DIR)
+    : { ok: false, reason: 'MANIFEST_NOT_FOUND' };
   return {
     version: '2.0.0',
     patchMarker: PATCH_MARKER,
     pluginEnabled: isPluginEnabled(p.CONFIG_JSON_PATH),
-    manifestRegistered: Boolean(readDropinManifest(p.MANIFEST_PATH)),
+    manifestRegistered: Boolean(manifestValidation.ok),
+    manifestValidation,
     asarLoaderInstalled: isAsarLoaderInstalled(p.ASAR_PATH),
     settings: readTranslatorSettings(p),
   };
@@ -49,12 +55,25 @@ async function runCli(argv = process.argv.slice(2), pathOverrides = null) {
 
   if (argv.includes('--install')) {
     const manifest = registerPluginManifest(p);
+    const manifestValidation = validateDropinManifest(manifest, p.PLUGINS_ROOT_DIR);
+    if (!manifestValidation.ok) {
+      unregisterPluginManifest(p);
+      const out = {
+        status: 'FAILED',
+        error: manifestValidation.reason || 'INVALID_MANIFEST',
+        manifest,
+        manifestValidation,
+      };
+      process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+      process.exitCode = 1;
+      return out;
+    }
     const asar = installAsarDropinLoader(p);
     const succeeded =
       asar.status === 'INSTALLED' ||
       asar.status === 'ALREADY_INSTALLED' ||
       asar.status === 'SKIPPED_NO_ASAR';
-    const out = { status: succeeded ? 'INSTALLED' : 'FAILED', manifest, asar };
+    const out = { status: succeeded ? 'INSTALLED' : 'FAILED', manifest, manifestValidation, asar };
     process.stdout.write(JSON.stringify(out, null, 2) + '\n');
     if (!succeeded) {
       process.exitCode = 1;

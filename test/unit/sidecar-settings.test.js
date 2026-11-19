@@ -44,13 +44,32 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
       ASAR_PATH: path.join(dir, 'missing.asar'),
     });
 
-    const htmlRes = handle({ method: 'GET', urlPath: '/' });
+    const htmlRes = handle({ method: 'GET', urlPath: '/', headers: { host: '127.0.0.1:43210' }, requireHost: true });
     assert.equal(htmlRes.status, 200);
     assert.match(htmlRes.body, /한글 번역 설정/);
     const metaMatch = htmlRes.body.match(/<meta name="ko-csrf-token" content="([^"]+)" \/>/);
     assert.ok(metaMatch && metaMatch[1] === handle.csrfToken, 'HTML must embed per-instance CSRF token in meta tag');
 
-    const getRes = handle({ method: 'GET', urlPath: '/api/settings' });
+    // F3: GET / and GET /api/settings MUST reject DNS rebinding Host and missing Host (HTTP/1.0)
+    assert.equal(
+      handle({ method: 'GET', urlPath: '/', headers: { host: 'rebind.evil.com' }, requireHost: true }).status,
+      403
+    );
+    assert.equal(
+      handle({ method: 'GET', urlPath: '/api/settings', headers: { host: 'rebind.evil.com' }, requireHost: true }).status,
+      403
+    );
+    assert.equal(
+      handle({ method: 'GET', urlPath: '/api/settings', headers: {}, requireHost: true }).status,
+      403
+    );
+
+    const getRes = handle({
+      method: 'GET',
+      urlPath: '/api/settings',
+      headers: { host: '127.0.0.1:43210' },
+      requireHost: true,
+    });
     assert.equal(getRes.status, 200);
     const initial = JSON.parse(getRes.body);
     assert.equal(initial.ok, true);
@@ -161,12 +180,12 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
     assert.equal(saved.settings.customProviders[0].endpointUrl, 'https://api.example.com/translate');
     assert.equal(saved.settings.customProviders[0].allowRemoteHttps, true);
 
-    // 8. Standalone HTTP server returns 413 Payload Too Large (zero silent truncation)
+    // 8. F3: Standalone HTTP server returns exact HTTP 413 + JSON body (zero ECONNRESET tolerance)
     const server = createStandaloneHttpServer(handle);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     try {
       const addr = server.address();
-      const oversizedStatus = await new Promise((resolve, reject) => {
+      const oversizedRes = await new Promise((resolve, reject) => {
         const req = http.request(
           {
             host: '127.0.0.1',
@@ -180,17 +199,17 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
             },
           },
           (res) => {
-            res.resume();
-            res.on('end', () => resolve(res.statusCode));
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => { body += c; });
+            res.on('end', () => resolve({ statusCode: res.statusCode, body }));
           }
         );
-        req.on('error', (err) => {
-          if (err.code === 'ECONNRESET') resolve(413);
-          else reject(err);
-        });
+        req.on('error', reject);
         req.end('x'.repeat(MAX_BODY_BYTES + 1024));
       });
-      assert.equal(oversizedStatus, 413);
+      assert.equal(oversizedRes.statusCode, 413);
+      assert.equal(JSON.parse(oversizedRes.body).error, 'PAYLOAD_TOO_LARGE');
     } finally {
       if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
       server.close();

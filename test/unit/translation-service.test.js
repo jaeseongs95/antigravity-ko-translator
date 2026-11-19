@@ -79,7 +79,8 @@ test('TranslationService (D-0026, D-0032, D-0033): lowercase normalization, remo
   assert.equal(localCalls, 0);
   remoteSvc.dispose();
 
-  // 2) Pending custom provider id saved before custom store hydrates is NOT overwritten by default
+  // 2) F2: Pending custom provider id saved before custom store hydrates is NOT overwritten by default
+  //    AND effectiveProviderId MUST be null (fail-closed: zero silent leak to google-translate!)
   const customStorage = createMemStorage({ 'ko-thought-provider': 'DEEPL-PRO' });
   const pendingSvc = createTranslationService({
     registry,
@@ -89,7 +90,13 @@ test('TranslationService (D-0026, D-0032, D-0033): lowercase normalization, remo
   });
   assert.equal(pendingSvc.getDesiredProviderId(), 'deepl-pro');
   assert.equal(pendingSvc.getPendingCustomProviderId(), 'deepl-pro');
-  assert.equal(pendingSvc.getEffectiveProviderId(), 'google-translate');
+  assert.equal(pendingSvc.getEffectiveProviderId(), null);
+
+  // While pending/unregistered, translateText returns original text without leaking to google-translate
+  const prevGoogleCalls = googleCalls;
+  const untouched = await pendingSvc.translateText('Sensitive pending custom provider text.');
+  assert.equal(untouched, 'Sensitive pending custom provider text.');
+  assert.equal(googleCalls, prevGoogleCalls);
 
   registry.registerProvider({
     id: 'deepl-pro',
@@ -104,6 +111,15 @@ test('TranslationService (D-0026, D-0032, D-0033): lowercase normalization, remo
   assert.equal(pendingSvc.getPendingCustomProviderId(), null);
   assert.equal(pendingSvc.getDesiredProviderId(), 'deepl-pro');
   assert.equal(pendingSvc.getEffectiveProviderId(), 'deepl-pro');
+
+  // 2b) F2: Per-provider cache scoping prevents Google cache from polluting Local LLM / Custom Provider
+  pendingSvc.setProvider('google-translate');
+  const googleTranslated = await pendingSvc.translateText('Shared thought line for cache scope check.');
+  assert.equal(googleTranslated, '[구글] Shared thought line for cache scope check.');
+  pendingSvc.setProvider('local-llm');
+  assert.equal(pendingSvc.getCachedSync('Shared thought line for cache scope check.'), null);
+  const localTranslated = await pendingSvc.translateText('Shared thought line for cache scope check.');
+  assert.equal(localTranslated, '[로컬] Shared thought line for cache scope check.');
 
   // 3) Epoch bump (D-0033) discards in-flight translation from older epoch so stale result never pollutes cache
   let releaseSlow;

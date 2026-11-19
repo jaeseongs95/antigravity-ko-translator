@@ -107,6 +107,16 @@ test('host CLI --status is 100% read-only and --install/--uninstall manage manif
 
     await runCli(['--uninstall'], paths);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), false);
+
+    // F4: Non-standard entryScript outside PLUGINS_ROOT_DIR/<pluginId> MUST fail closed (never fake INSTALLED)
+    const outsideEntry = path.join(dir, 'outside-renderer.js');
+    fs.writeFileSync(outsideEntry, '// outside\n', 'utf8');
+    const prevExitCode = process.exitCode;
+    const failedInst = await runCli(['--install'], { ...paths, RENDERER_BUNDLE_PATH: outsideEntry });
+    assert.equal(failedInst.status, 'FAILED');
+    assert.equal(process.exitCode, 1);
+    assert.equal(buildStatusReport(paths).manifestRegistered, false);
+    process.exitCode = prevExitCode || 0;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -103,15 +103,24 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
     };
   }
 
-  function validateMutationSecurity(headers) {
-    const host = headers.host || '';
-    if (host && !LOOPBACK_HOST_RE.test(host.trim())) {
+  function validateLoopbackRequest(headers, { requireHost = false } = {}) {
+    const host = String(headers.host || '').trim();
+    if (requireHost && !host) {
+      return jsonResponse(403, { ok: false, error: 'MISSING_HOST' });
+    }
+    if (host && !LOOPBACK_HOST_RE.test(host)) {
       return jsonResponse(403, { ok: false, error: 'FORBIDDEN_HOST' });
     }
-    const origin = headers.origin || '';
-    if (origin && !LOOPBACK_ORIGIN_RE.test(origin.trim())) {
+    const origin = String(headers.origin || '').trim();
+    if (origin && !LOOPBACK_ORIGIN_RE.test(origin)) {
       return jsonResponse(403, { ok: false, error: 'FORBIDDEN_ORIGIN' });
     }
+    return null;
+  }
+
+  function validateMutationSecurity(headers, { requireHost = false } = {}) {
+    const baseErr = validateLoopbackRequest(headers, { requireHost });
+    if (baseErr) return baseErr;
     const contentType = String(headers['content-type'] || '').toLowerCase().trim();
     if (!contentType.startsWith('application/json')) {
       return jsonResponse(415, { ok: false, error: 'UNSUPPORTED_MEDIA_TYPE' });
@@ -123,11 +132,19 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
     return null;
   }
 
-  const handler = function handleRequest({ method = 'GET', urlPath = '/', rawBody = '', headers = {} } = {}) {
+  const handler = function handleRequest({
+    method = 'GET',
+    urlPath = '/',
+    rawBody = '',
+    headers = {},
+    requireHost = false,
+  } = {}) {
     const cleanPath = String(urlPath || '/').split('?')[0];
     const normHeaders = normalizeHeaders(headers);
 
     if (method === 'GET' && (cleanPath === '/' || cleanPath === '/index.html')) {
+      const hostErr = validateLoopbackRequest(normHeaders, { requireHost });
+      if (hostErr) return hostErr;
       const html = fs
         .readFileSync(INDEX_HTML_PATH, 'utf8')
         .replace('__KO_CSRF_TOKEN__', csrfToken);
@@ -143,11 +160,13 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
     }
 
     if (method === 'GET' && cleanPath === '/api/settings') {
+      const hostErr = validateLoopbackRequest(normHeaders, { requireHost });
+      if (hostErr) return hostErr;
       return jsonResponse(200, buildStatusPayload());
     }
 
     if (method === 'POST' && cleanPath === '/api/settings') {
-      const secErr = validateMutationSecurity(normHeaders);
+      const secErr = validateMutationSecurity(normHeaders, { requireHost });
       if (secErr) return secErr;
 
       if (Buffer.byteLength(String(rawBody || ''), 'utf8') > MAX_BODY_BYTES) {
@@ -197,15 +216,15 @@ export function createStandaloneHttpServer(handleRequest) {
       totalBytes += chunk.length;
       if (totalBytes > MAX_BODY_BYTES) {
         tooLarge = true;
+        chunks.length = 0;
         const body = JSON.stringify({ ok: false, error: 'PAYLOAD_TOO_LARGE' });
         res.writeHead(413, {
           'content-type': 'application/json; charset=utf-8',
           'cache-control': 'no-store',
           'connection': 'close',
         });
-        res.end(body, () => {
-          try { req.destroy(); } catch (_err) {}
-        });
+        res.end(body);
+        req.resume();
         return;
       }
       chunks.push(chunk);
@@ -219,6 +238,7 @@ export function createStandaloneHttpServer(handleRequest) {
         urlPath: req.url,
         rawBody,
         headers: req.headers,
+        requireHost: true,
       });
       res.writeHead(out.status, out.headers);
       res.end(out.body);
@@ -229,33 +249,39 @@ export function createStandaloneHttpServer(handleRequest) {
 async function startSidecar() {
   const handleRequest = createSettingsRequestHandler();
 
+  let sdk = null;
   try {
-    const sdk = await import('sidecar_sdk');
-    if (sdk && typeof sdk.SidecarApp === 'function' && typeof sdk.Response === 'function') {
-      const app = new sdk.SidecarApp();
-      app.route('GET', '/', (req) => {
-        const res = handleRequest({ method: 'GET', urlPath: '/', headers: req?.headers });
-        return new sdk.Response(res.body, { status: res.status, headers: res.headers });
-      });
-      app.route('GET', '/api/settings', (req) => {
-        const res = handleRequest({ method: 'GET', urlPath: '/api/settings', headers: req?.headers });
-        return new sdk.Response(res.body, { status: res.status, headers: res.headers });
-      });
-      app.route('POST', '/api/settings', async (req) => {
-        const rawBody = typeof req?.text === 'function' ? await req.text() : String(req?.body || '');
-        const res = handleRequest({
-          method: 'POST',
-          urlPath: '/api/settings',
-          rawBody,
-          headers: req?.headers,
-        });
-        return new sdk.Response(res.body, { status: res.status, headers: res.headers });
-      });
-      await app.start();
-      return;
+    sdk = await import('sidecar_sdk');
+  } catch (err) {
+    const isMissingSdk = err && (err.code === 'ERR_MODULE_NOT_FOUND' || err.code === 'MODULE_NOT_FOUND');
+    if (!isMissingSdk) {
+      process.stderr.write(`[ko-translator-settings] sidecar_sdk import failed: ${err?.message || String(err)}\n`);
+      throw err;
     }
-  } catch (_err) {
-    // Standalone HTTP fallback when launched directly outside Antigravity sidecar_sdk runtime
+  }
+
+  if (sdk && typeof sdk.SidecarApp === 'function' && typeof sdk.Response === 'function') {
+    const app = new sdk.SidecarApp();
+    app.route('GET', '/', (req) => {
+      const res = handleRequest({ method: 'GET', urlPath: '/', headers: req?.headers });
+      return new sdk.Response(res.body, { status: res.status, headers: res.headers });
+    });
+    app.route('GET', '/api/settings', (req) => {
+      const res = handleRequest({ method: 'GET', urlPath: '/api/settings', headers: req?.headers });
+      return new sdk.Response(res.body, { status: res.status, headers: res.headers });
+    });
+    app.route('POST', '/api/settings', async (req) => {
+      const rawBody = typeof req?.text === 'function' ? await req.text() : String(req?.body || '');
+      const res = handleRequest({
+        method: 'POST',
+        urlPath: '/api/settings',
+        rawBody,
+        headers: req?.headers,
+      });
+      return new sdk.Response(res.body, { status: res.status, headers: res.headers });
+    });
+    await app.start();
+    return;
   }
 
   const port = Number(process.env.KO_TRANSLATOR_SIDECAR_PORT || 0);
