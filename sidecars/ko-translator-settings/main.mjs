@@ -15,6 +15,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
@@ -39,6 +40,51 @@ const INDEX_HTML_PATH = path.join(__dirname, 'index.html');
 export const MAX_BODY_BYTES = 64 * 1024;
 const LOOPBACK_HOST_RE = /^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i;
 const LOOPBACK_ORIGIN_RE = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i;
+const DANGEROUS_PROTO_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const SECURITY_HEADERS = Object.freeze({
+  'cache-control': 'no-store',
+  'x-content-type-options': 'nosniff',
+});
+
+function hasDangerousProtoKey(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => hasDangerousProtoKey(item));
+  }
+  for (const key of Object.keys(value)) {
+    if (DANGEROUS_PROTO_KEYS.has(key)) return true;
+    if (hasDangerousProtoKey(value[key])) return true;
+  }
+  return false;
+}
+
+function parseJsonSafe(rawText) {
+  let dangerous = false;
+  const parsed = JSON.parse(rawText, (key, value) => {
+    if (DANGEROUS_PROTO_KEYS.has(key)) {
+      dangerous = true;
+    }
+    return value;
+  });
+  if (dangerous || hasDangerousProtoKey(parsed)) {
+    const err = new Error('DANGEROUS_JSON_KEY');
+    err.code = 'DANGEROUS_JSON_KEY';
+    throw err;
+  }
+  return parsed;
+}
+
+function isOriginMatchingHost(originHeader, hostHeader) {
+  if (!originHeader || !hostHeader) return false;
+  if (!LOOPBACK_ORIGIN_RE.test(originHeader) || !LOOPBACK_HOST_RE.test(hostHeader)) return false;
+  try {
+    const parsedOrigin = new URL(originHeader);
+    const parsedHost = new URL(`http://${hostHeader}`);
+    return parsedOrigin.host.toLowerCase() === parsedHost.host.toLowerCase();
+  } catch (_err) {
+    return false;
+  }
+}
 
 function normalizeHeaders(rawHeaders) {
   const out = {};
@@ -198,8 +244,11 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
 
       let parsed;
       try {
-        parsed = rawBody ? JSON.parse(rawBody) : {};
-      } catch (_err) {
+        parsed = rawBody ? parseJsonSafe(rawBody) : {};
+      } catch (err) {
+        if (err && err.code === 'DANGEROUS_JSON_KEY') {
+          return jsonResponse(400, { ok: false, error: 'INVALID_PAYLOAD' });
+        }
         return jsonResponse(400, { ok: false, error: 'INVALID_JSON' });
       }
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -273,111 +322,245 @@ export function createStandaloneHttpServer(handleRequest) {
   });
 }
 
+function writeJsonError(res, status, error, { closeConnection = false, onFlushed = null } = {}) {
+  if (res.writableEnded || res.headersSent) return;
+  const headers = {
+    'content-type': 'application/json; charset=utf-8',
+    ...SECURITY_HEADERS,
+    ...(closeConnection ? { connection: 'close' } : {}),
+  };
+  res.writeHead(status, headers);
+  if (typeof onFlushed === 'function') {
+    res.end(JSON.stringify({ ok: false, error }), onFlushed);
+  } else {
+    res.end(JSON.stringify({ ok: false, error }));
+  }
+}
+
+function readBoundedHttpBody(req, res, onComplete) {
+  const rawCl = normalizeHeaders(req.headers)['content-length'];
+  if (rawCl !== undefined) {
+    const declared = Number(rawCl);
+    if (!Number.isFinite(declared) || declared < 0 || declared > MAX_BODY_BYTES) {
+      writeJsonError(res, 413, 'PAYLOAD_TOO_LARGE', { closeConnection: true });
+      // Drain incoming bytes without buffering so Windows Winsock closes with FIN instead of RST.
+      req.resume();
+      return;
+    }
+  }
+
+  const chunks = [];
+  let totalBytes = 0;
+  let tooLarge = false;
+
+  req.on('data', (chunk) => {
+    if (tooLarge) return;
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    totalBytes += buf.length;
+    if (totalBytes > MAX_BODY_BYTES) {
+      tooLarge = true;
+      chunks.length = 0;
+      writeJsonError(res, 413, 'PAYLOAD_TOO_LARGE', { closeConnection: true });
+      req.resume();
+      return;
+    }
+    chunks.push(buf);
+  });
+
+  req.on('end', () => {
+    if (tooLarge || res.writableEnded) return;
+    onComplete(Buffer.concat(chunks));
+  });
+}
+
+function createReplayRequest(req, bodyBuf) {
+  const replay = Readable.from(bodyBuf.length > 0 ? [bodyBuf] : []);
+  replay.method = req.method;
+  replay.url = req.url;
+  replay.headers = req.headers;
+  replay.rawHeaders = req.rawHeaders;
+  replay.httpVersion = req.httpVersion;
+  replay.socket = req.socket;
+  return replay;
+}
+
+function isManagedSettingsRoute(method, cleanPath) {
+  if (method === 'GET' && (cleanPath === '/' || cleanPath === '/index.html' || cleanPath === '/api/settings')) {
+    return true;
+  }
+  if (method === 'POST' && cleanPath === '/api/settings') {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Wraps the `http.Server` returned by `SidecarApp.run()` by extracting `rawListeners('request')`,
+ * removing all unhardened listeners, and installing a single gate dispatcher that enforces:
+ * - Loopback Host (mandatory) and Origin / Sec-Fetch-Site checks before any downstream code runs
+ * - Header-only constant-time `x-sidecar-token` verification (blocks `?token=` query bypass)
+ * - Strict 64 KiB body cap (413) and prototype-safe JSON validation on all mutation routes
+ * - Direct dispatch of `/`, `/index.html`, `/api/settings` to `handleRequest` with full `req.headers`
+ */
+export function attachSidecarSecurityGate(
+  server,
+  handleRequest,
+  { sidecarToken = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '' } = {}
+) {
+  const expectedSidecarToken = typeof sidecarToken === 'string' ? sidecarToken.trim() : '';
+  const downstreamListeners = server.rawListeners('request');
+  server.removeAllListeners('request');
+
+  server.on('request', (req, res) => {
+    const normHeaders = normalizeHeaders(req.headers);
+    const host = String(normHeaders.host || '').trim();
+    if (!host) {
+      writeJsonError(res, 403, 'MISSING_HOST');
+      return;
+    }
+    if (!LOOPBACK_HOST_RE.test(host)) {
+      writeJsonError(res, 403, 'FORBIDDEN_HOST');
+      return;
+    }
+
+    const origin = String(normHeaders.origin || '').trim();
+    if (origin && !isOriginMatchingHost(origin, host)) {
+      writeJsonError(res, 403, 'FORBIDDEN_ORIGIN');
+      return;
+    }
+
+    const method = String(req.method || 'GET').toUpperCase();
+    const isReadMethod = method === 'GET' || method === 'HEAD';
+    if (!isReadMethod) {
+      const fetchSite = String(normHeaders['sec-fetch-site'] || '').toLowerCase().trim();
+      if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
+        writeJsonError(res, 403, 'FORBIDDEN_CROSS_SITE');
+        return;
+      }
+      if (expectedSidecarToken) {
+        const providedHeaderToken = String(normHeaders['x-sidecar-token'] || '').trim();
+        if (!timingSafeMatch(expectedSidecarToken, providedHeaderToken)) {
+          writeJsonError(res, 401, 'UNAUTHORIZED');
+          return;
+        }
+      }
+    }
+
+    const cleanPath = String(req.url || '/').split('?')[0];
+
+    if (isManagedSettingsRoute(method, cleanPath)) {
+      readBoundedHttpBody(req, res, (bodyBuf) => {
+        const out = handleRequest({
+          method,
+          urlPath: req.url,
+          rawBody: bodyBuf.toString('utf8'),
+          headers: req.headers,
+          requireHost: true,
+        });
+        if (!res.writableEnded && !res.headersSent) {
+          res.writeHead(out.status, out.headers);
+          res.end(out.body);
+        }
+      });
+      return;
+    }
+
+    if (isReadMethod) {
+      for (const listener of downstreamListeners) {
+        listener.call(server, req, res);
+      }
+      return;
+    }
+
+    readBoundedHttpBody(req, res, (bodyBuf) => {
+      if (bodyBuf.length > 0) {
+        try {
+          parseJsonSafe(bodyBuf.toString('utf8'));
+        } catch (err) {
+          if (err && err.code === 'DANGEROUS_JSON_KEY') {
+            writeJsonError(res, 400, 'INVALID_PAYLOAD');
+            return;
+          }
+          writeJsonError(res, 400, 'INVALID_JSON');
+          return;
+        }
+      }
+      const replayReq = createReplayRequest(req, bodyBuf);
+      for (const listener of downstreamListeners) {
+        listener.call(server, replayReq, res);
+      }
+    });
+  });
+
+  return server;
+}
+
+function toSdkResponse(sdk, out) {
+  const contentType =
+    (out.headers && (out.headers['content-type'] || out.headers['Content-Type'])) || 'text/plain; charset=utf-8';
+  return new sdk.Response(out.body, {
+    contentType,
+    status: out.status,
+    headers: out.headers,
+  });
+}
+
 export function createSidecarAppRoutes(sdk, handleRequest) {
   const app = new sdk.SidecarApp();
-  const readBoundedRawBody = async (req) => {
-    const contentLen = Number(normalizeHeaders(req?.headers)['content-length'] || 0);
-    if (Number.isFinite(contentLen) && contentLen > MAX_BODY_BYTES) {
-      return { tooLarge: true, rawBody: '' };
-    }
-    // Stream incremental byte counting when req.body is a ReadableStream / AsyncIterable (blocks chunked DoS).
-    if (req?.body && typeof req.body.getReader === 'function') {
-      const reader = req.body.getReader();
-      const chunks = [];
-      let total = 0;
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          const buf = Buffer.isBuffer(value) ? value : Buffer.from(value);
-          total += buf.length;
-          if (total > MAX_BODY_BYTES) {
-            try { await reader.cancel(); } catch (_err) {}
-            return { tooLarge: true, rawBody: '' };
-          }
-          chunks.push(buf);
-        }
-      } finally {
-        try { reader.releaseLock(); } catch (_err) {}
-      }
-      return { tooLarge: false, rawBody: Buffer.concat(chunks).toString('utf8') };
-    }
-    if (req?.body && typeof req.body[Symbol.asyncIterator] === 'function') {
-      const chunks = [];
-      let total = 0;
-      for await (const chunk of req.body) {
-        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        total += buf.length;
-        if (total > MAX_BODY_BYTES) {
-          return { tooLarge: true, rawBody: '' };
-        }
-        chunks.push(buf);
-      }
-      return { tooLarge: false, rawBody: Buffer.concat(chunks).toString('utf8') };
-    }
-    let rawBody = '';
-    if (req?.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
-      rawBody = JSON.stringify(req.body);
-    } else if (typeof req?.body === 'string' || Buffer.isBuffer(req?.body)) {
-      rawBody = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : req.body;
-    } else if (typeof req?.text === 'function') {
-      // Only use req.text() when content-length was explicitly declared within MAX_BODY_BYTES (prevents unbounded buffering).
-      const rawCl = normalizeHeaders(req?.headers)['content-length'];
-      if (rawCl !== undefined && (!Number.isFinite(Number(rawCl)) || Number(rawCl) > MAX_BODY_BYTES)) {
-        return { tooLarge: true, rawBody: '' };
-      }
-      rawBody = await req.text();
-    } else {
-      rawBody = '';
-    }
-    if (Buffer.byteLength(rawBody, 'utf8') > MAX_BODY_BYTES) {
-      return { tooLarge: true, rawBody: '' };
-    }
-    return { tooLarge: false, rawBody };
-  };
+  if (typeof app.page !== 'function' || typeof app.api !== 'function' || typeof app.run !== 'function') {
+    throw new Error('UNSUPPORTED_SIDECAR_SDK_CONTRACT');
+  }
 
-  const serveHtml = (req) => {
-    const res = handleRequest({
-      method: 'GET',
-      urlPath: '/',
-      headers: req?.headers,
-      requireHost: true,
-    });
-    return new sdk.Response(res.body, { status: res.status, headers: res.headers });
-  };
-  app.route('GET', '/', serveHtml);
-  app.route('GET', '/index.html', serveHtml);
-  app.route('GET', '/api/settings', (req) => {
-    const res = handleRequest({
-      method: 'GET',
-      urlPath: '/api/settings',
-      headers: req?.headers,
-      requireHost: true,
-    });
-    return new sdk.Response(res.body, { status: res.status, headers: res.headers });
-  });
-  app.route('POST', '/api/settings', async (req) => {
-    const { tooLarge, rawBody } = await readBoundedRawBody(req);
-    if (tooLarge) {
-      return new sdk.Response(JSON.stringify({ ok: false, error: 'PAYLOAD_TOO_LARGE' }), {
-        status: 413,
+  // Register official routes on SidecarApp so SDK introspection and `/preload.js` + `/_sidecar/*` remain intact.
+  // Live HTTP traffic to `/`, `/index.html`, and `/api/settings` is handled by `attachSidecarSecurityGate`
+  // with full `req.headers`, strict 64 KiB caps, and prototype-safe JSON enforcement.
+  const servePage = () =>
+    toSdkResponse(
+      sdk,
+      handleRequest({
+        method: 'GET',
+        urlPath: '/',
+        headers: {},
+        requireHost: false,
+      })
+    );
+  app.page('/', servePage);
+  app.page('/index.html', servePage);
+  app.api(
+    '/api/settings',
+    () =>
+      toSdkResponse(
+        sdk,
+        handleRequest({
+          method: 'GET',
+          urlPath: '/api/settings',
+          headers: {},
+          requireHost: false,
+        })
+      ),
+    'GET'
+  );
+  app.api(
+    '/api/settings',
+    () =>
+      toSdkResponse(sdk, {
+        status: 403,
         headers: {
           'content-type': 'application/json; charset=utf-8',
-          'cache-control': 'no-store',
-          'x-content-type-options': 'nosniff',
+          ...SECURITY_HEADERS,
         },
-      });
-    }
-    const res = handleRequest({
-      method: 'POST',
-      urlPath: '/api/settings',
-      rawBody,
-      headers: req?.headers,
-      requireHost: true,
-    });
-    return new sdk.Response(res.body, { status: res.status, headers: res.headers });
-  });
+        body: JSON.stringify({ ok: false, error: 'MISSING_SECURITY_GATE' }),
+      }),
+    'POST'
+  );
   return app;
+}
+
+export async function startSidecarWithSdk(sdk, handleRequest, options = {}) {
+  const app = createSidecarAppRoutes(sdk, handleRequest);
+  const server = await app.run();
+  attachSidecarSecurityGate(server, handleRequest, options);
+  return { app, server };
 }
 
 async function startSidecar() {
@@ -394,9 +577,13 @@ async function startSidecar() {
     }
   }
 
-  if (sdk && typeof sdk.SidecarApp === 'function' && typeof sdk.Response === 'function') {
-    const app = createSidecarAppRoutes(sdk, handleRequest);
-    await app.start();
+  if (
+    sdk &&
+    typeof sdk.SidecarApp === 'function' &&
+    typeof sdk.Response === 'function' &&
+    typeof sdk.SidecarApp.prototype.run === 'function'
+  ) {
+    await startSidecarWithSdk(sdk, handleRequest);
     return;
   }
 

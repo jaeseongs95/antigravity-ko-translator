@@ -28,6 +28,7 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
       createSettingsRequestHandler,
       createStandaloneHttpServer,
       createSidecarAppRoutes,
+      startSidecarWithSdk,
       MAX_BODY_BYTES,
     } = await import(mainUrl);
 
@@ -220,54 +221,228 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
       server.close();
     }
 
-    // 9. Defect-1 & Defect-4: Direct sidecar_sdk route wiring (GET /, GET /index.html, object req.body, 413 cap)
-    const routes = new Map();
-    const mockSdk = {
-      SidecarApp: class MockSidecarApp {
-        route(method, routePath, fn) {
-          routes.set(`${method} ${routePath}`, fn);
-        }
-        async start() {}
-      },
-      Response: class MockResponse {
-        constructor(body, init) {
+    // 9. Track A-2 (TC-026): Real sidecar_sdk contract (`page`/`api`/`run` returning http.Server)
+    //    wrapped by `attachSidecarSecurityGate` (`rawListeners('request')` + `removeAllListeners('request')`).
+    const httpReq = (port, { method = 'GET', reqPath = '/', headers = {}, body = null } = {}) =>
+      new Promise((resolve, reject) => {
+        const req = http.request(
+          { host: '127.0.0.1', port, path: reqPath, method, headers },
+          (res) => {
+            let out = '';
+            res.setEncoding('utf8');
+            res.on('data', (c) => { out += c; });
+            res.on('end', () => resolve({ statusCode: res.statusCode, headers: res.headers, body: out }));
+          }
+        );
+        req.on('error', reject);
+        if (body !== null) req.end(body);
+        else req.end();
+      });
+
+    // Contract-accurate SidecarApp mirror (matches installed sidecar_sdk/index.mjs: page/api/run/close)
+    const createContractSdk = () => {
+      class ContractResponse {
+        constructor(body, { contentType = 'text/plain', status = 200, headers } = {}) {
           this.body = body;
-          this.status = init.status;
-          this.headers = init.headers;
+          this.contentType = contentType;
+          this.status = status;
+          this.headers = headers;
         }
-      },
+      }
+      class ContractSidecarApp {
+        constructor() {
+          this._pages = new Map();
+          this._apis = new Map();
+          this._server = null;
+        }
+        page(p, fn) { this._pages.set(p, fn); }
+        api(p, fn, method = 'POST') {
+          if (!this._apis.has(p)) this._apis.set(p, new Map());
+          this._apis.get(p).set(method.toUpperCase(), fn);
+        }
+        run() {
+          this._pages.set('/preload.js', () => '/* sidecar preload */');
+          this.api('/_sidecar/echo', (data) => ({ echoed: data }), 'POST');
+          const srv = http.createServer(async (req, res) => {
+            const url = new URL(req.url, 'http://127.0.0.1');
+            if (req.method === 'GET' && this._pages.has(url.pathname)) {
+              const c = await this._pages.get(url.pathname)();
+              const body = c instanceof ContractResponse ? c.body : c;
+              res.writeHead(200, { 'Content-Type': url.pathname.endsWith('.js') ? 'application/javascript' : 'text/html' });
+              res.end(body);
+              return;
+            }
+            if (this._apis.has(url.pathname) && this._apis.get(url.pathname).has(req.method)) {
+              let raw = '';
+              req.on('data', (ch) => { raw += ch; });
+              req.on('end', async () => {
+                const payload = raw ? JSON.parse(raw) : {};
+                const result = await this._apis.get(url.pathname).get(req.method)(payload);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(result));
+              });
+              return;
+            }
+            res.writeHead(404);
+            res.end('Not found');
+          });
+          this._server = srv;
+          return new Promise((resolve) => srv.listen(0, '127.0.0.1', () => resolve(srv)));
+        }
+        close() {
+          return new Promise((resolve) => (this._server ? this._server.close(() => resolve()) : resolve()));
+        }
+      }
+      return { SidecarApp: ContractSidecarApp, Response: ContractResponse };
     };
-    createSidecarAppRoutes(mockSdk, handle);
-    assert.equal(routes.has('GET /'), true);
-    assert.equal(routes.has('GET /index.html'), true);
-    assert.equal(routes.has('GET /api/settings'), true);
-    assert.equal(routes.has('POST /api/settings'), true);
 
-    const sdkIdx = routes.get('GET /index.html')({ headers: { host: '127.0.0.1:43210' } });
-    assert.equal(sdkIdx.status, 200);
-    assert.match(sdkIdx.body, /ko-csrf-token/);
+    const verifySdkServer = async (sdkObj, label) => {
+      const uiToken = 'sidecar-ui-secret-token-0123456789abcdef';
+      const { app, server: sdkSrv } = await startSidecarWithSdk(sdkObj, handle, { sidecarToken: uiToken });
+      try {
+        // Single gate dispatcher invariant: exactly 1 request listener on the http.Server
+        assert.equal(sdkSrv.rawListeners('request').length, 1, `${label}: single gate dispatcher must own request event`);
+        const { port } = sdkSrv.address();
+        const loopbackHost = `127.0.0.1:${port}`;
+        const loopbackOrigin = `http://127.0.0.1:${port}`;
 
-    // F1: Missing Host header in sidecar_sdk route MUST be rejected (403 MISSING_HOST)
-    const sdkMissingHost = routes.get('GET /api/settings')({ headers: {} });
-    assert.equal(sdkMissingHost.status, 403);
+        // GET / and GET /preload.js succeed with loopback Host
+        const idxRes = await httpReq(port, { reqPath: '/index.html', headers: { host: loopbackHost } });
+        assert.equal(idxRes.statusCode, 200, `${label}: GET /index.html`);
+        assert.match(idxRes.body, /ko-csrf-token/);
 
-    const sdkObjPost = await routes.get('POST /api/settings')({
-      headers: validHeaders,
-      body: { provider: 'google-translate', translateThinking: true },
-    });
-    assert.equal(sdkObjPost.status, 200);
-    assert.equal(JSON.parse(sdkObjPost.body).settings.provider, 'google-translate');
+        const preloadRes = await httpReq(port, { reqPath: '/preload.js', headers: { host: loopbackHost } });
+        assert.equal(preloadRes.statusCode, 200, `${label}: GET /preload.js must pass through`);
 
-    // F1: Chunked/streaming oversized body aborts early with 413 + x-content-type-options: nosniff
-    async function* hugeStream() {
-      for (let i = 0; i < 10; i++) yield Buffer.alloc(16 * 1024, 0x78);
+        // DNS rebinding Host rejected before SidecarApp runs
+        const rebindRes = await httpReq(port, { reqPath: '/api/settings', headers: { host: 'rebind.evil.com' } });
+        assert.equal(rebindRes.statusCode, 403, `${label}: rebinding host rejected`);
+
+        // Query ?token= bypass without x-sidecar-token header MUST be rejected (401)
+        const queryBypass = await httpReq(port, {
+          method: 'POST',
+          reqPath: `/api/settings?token=${encodeURIComponent(uiToken)}`,
+          headers: {
+            host: loopbackHost,
+            origin: loopbackOrigin,
+            'content-type': 'application/json',
+            'x-ko-csrf-token': handle.csrfToken,
+          },
+          body: JSON.stringify({ provider: 'google-translate' }),
+        });
+        assert.equal(queryBypass.statusCode, 401, `${label}: query ?token= bypass must fail closed`);
+
+        // Cross-site Sec-Fetch-Site rejected (403)
+        const crossSite = await httpReq(port, {
+          method: 'POST',
+          reqPath: '/api/settings',
+          headers: {
+            host: loopbackHost,
+            origin: loopbackOrigin,
+            'sec-fetch-site': 'cross-site',
+            'content-type': 'application/json',
+            'x-sidecar-token': uiToken,
+            'x-ko-csrf-token': handle.csrfToken,
+          },
+          body: JSON.stringify({ provider: 'google-translate' }),
+        });
+        assert.equal(crossSite.statusCode, 403, `${label}: cross-site Sec-Fetch-Site rejected`);
+
+        // Prototype pollution payload blocked on /api/settings AND /_sidecar/* (400)
+        const protoPayload = '{"__proto__":{"polluted":true},"provider":"google-translate"}';
+        const protoSettings = await httpReq(port, {
+          method: 'POST',
+          reqPath: '/api/settings',
+          headers: {
+            host: loopbackHost,
+            origin: loopbackOrigin,
+            'content-type': 'application/json',
+            'x-sidecar-token': uiToken,
+            'x-ko-csrf-token': handle.csrfToken,
+          },
+          body: protoPayload,
+        });
+        assert.equal(protoSettings.statusCode, 400, `${label}: __proto__ payload blocked on /api/settings`);
+
+        const protoSidecar = await httpReq(port, {
+          method: 'POST',
+          reqPath: '/_sidecar/echo',
+          headers: {
+            host: loopbackHost,
+            origin: loopbackOrigin,
+            'content-type': 'application/json',
+            'x-sidecar-token': uiToken,
+          },
+          body: protoPayload,
+        });
+        assert.equal(protoSidecar.statusCode, 400, `${label}: __proto__ payload blocked on /_sidecar/*`);
+        assert.equal(({}).polluted, undefined);
+
+        // Oversized body > 64 KiB rejected cleanly with 413 PAYLOAD_TOO_LARGE (no ERR_HTTP_HEADERS_SENT)
+        const oversizedSdk = await httpReq(port, {
+          method: 'POST',
+          reqPath: '/api/settings',
+          headers: {
+            host: loopbackHost,
+            origin: loopbackOrigin,
+            'content-type': 'application/json',
+            'x-sidecar-token': uiToken,
+            'x-ko-csrf-token': handle.csrfToken,
+            connection: 'close',
+          },
+          body: 'x'.repeat(MAX_BODY_BYTES + 1024),
+        });
+        assert.equal(oversizedSdk.statusCode, 413, `${label}: >64KiB body returns 413`);
+        assert.equal(oversizedSdk.headers['x-content-type-options'], 'nosniff');
+
+        // Valid POST /api/settings with both x-sidecar-token and x-ko-csrf-token succeeds (200)
+        const okPost = await httpReq(port, {
+          method: 'POST',
+          reqPath: '/api/settings',
+          headers: {
+            host: loopbackHost,
+            origin: loopbackOrigin,
+            'content-type': 'application/json',
+            'x-sidecar-token': uiToken,
+            'x-ko-csrf-token': handle.csrfToken,
+          },
+          body: JSON.stringify({ provider: 'google-translate', translateThinking: true }),
+        });
+        assert.equal(okPost.statusCode, 200, `${label}: valid POST /api/settings succeeds`);
+        assert.equal(JSON.parse(okPost.body).settings.provider, 'google-translate');
+      } finally {
+        if (typeof sdkSrv.closeAllConnections === 'function') sdkSrv.closeAllConnections();
+        await app.close();
+      }
+    };
+
+    // Always verify contract-accurate SidecarApp mirror (runs on all CI environments)
+    await verifySdkServer(createContractSdk(), 'contract-sdk');
+
+    // Also verify against the real installed Antigravity sidecar_sdk when present on this machine
+    const homeDir = process.env.USERPROFILE || process.env.HOME || os.homedir();
+    const realSdkPath = path.join(homeDir, '.gemini', 'antigravity', 'lib', 'node_modules', 'sidecar_sdk', 'index.mjs');
+    if (fs.existsSync(realSdkPath)) {
+      const prevEnv = {
+        ANTIGRAVITY_LS_ADDRESS: process.env.ANTIGRAVITY_LS_ADDRESS,
+        ANTIGRAVITY_CSRF_TOKEN: process.env.ANTIGRAVITY_CSRF_TOKEN,
+        ANTIGRAVITY_SIDECAR_WEB_PORT: process.env.ANTIGRAVITY_SIDECAR_WEB_PORT,
+        ANTIGRAVITY_SIDECAR_UI_TOKEN: process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN,
+      };
+      process.env.ANTIGRAVITY_LS_ADDRESS = '127.0.0.1:49999';
+      process.env.ANTIGRAVITY_CSRF_TOKEN = 'test-ls-csrf';
+      process.env.ANTIGRAVITY_SIDECAR_WEB_PORT = '0';
+      process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN = 'sidecar-ui-secret-token-0123456789abcdef';
+      try {
+        const realSdk = await import(pathToFileURL(realSdkPath).href);
+        await verifySdkServer(realSdk, 'real-installed-sidecar_sdk');
+      } finally {
+        for (const [k, v] of Object.entries(prevEnv)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
     }
-    const sdkHugeStream = await routes.get('POST /api/settings')({
-      headers: validHeaders,
-      body: hugeStream(),
-    });
-    assert.equal(sdkHugeStream.status, 413);
-    assert.equal(sdkHugeStream.headers['x-content-type-options'], 'nosniff');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

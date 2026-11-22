@@ -265,6 +265,7 @@
       const elFeedback = document.getElementById('feedback');
       const csrfMeta = document.querySelector('meta[name="ko-csrf-token"]');
       let csrfToken = csrfMeta ? csrfMeta.getAttribute('content') || '' : '';
+      const sidecarToken = new URLSearchParams(window.location.search).get('token') || '';
 
       function setBadge(boxId, valId, ok, okText, warnText) {
         const box = document.getElementById(boxId);
@@ -371,12 +372,16 @@
               allowRemoteHttps: elLlmAllowRemote.checked,
             },
           };
+          const postHeaders = {
+            'content-type': 'application/json',
+            'x-ko-csrf-token': csrfToken,
+          };
+          if (sidecarToken) {
+            postHeaders['x-sidecar-token'] = sidecarToken;
+          }
           const res = await fetch('/api/settings', {
             method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              'x-ko-csrf-token': csrfToken,
-            },
+            headers: postHeaders,
             body: JSON.stringify(payload),
           });
           const data = await res.json();
