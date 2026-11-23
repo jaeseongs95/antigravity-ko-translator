@@ -1,18 +1,17 @@
-# Antigravity 2.0 Korean Thought & UI Translator (`v2.1.1`)
+# Antigravity 2.0 Korean Thought & UI Translator (`v2.2.0`)
 
-[한국어 README](./README.ko.md)
+[한국어 README](./README.ko.md) | [Release Notes (`v2.2.0` EN/KO)](./RELEASE_NOTES_v2.2.0.md)
 
-Clean-slate, **Desktop Native App Only** Korean localization plugin for Antigravity 2.0, hosted via **`antigravity-native-addon-host` (`>= v2.1.0`)** under **`AddonManifest.v2`** (renderer-only, zero `mainHook`, unidirectional read-only `settingsBridge`).
+Clean-slate, **Desktop Native App Only** Korean localization plugin for Antigravity 2.0, hosted via **`antigravity-native-addon-host` (`>= v2.2.0` recommended for live modal save, `>= v2.1.0` minimum)** under **`AddonManifest.v2`** (renderer-only, zero `mainHook`, zero Sidecar `AUX_PANE`).
 
-### Highlights in v2.1.1
-- **Corrupted Settings GUI Recovery & Atomic Storage Hardening (`I3`)**: Sidecar GUI can recover corrupted `ko_translator_settings.json` via explicit `resetCorrupted: true` overwrite while keeping programmatic partial writes fail-closed; adds `parseSafeJson`, bounded lock/Windows `renameSync` retries, and HTTP `409` on lock contention.
-- **Sidecar Read Auth, CSP Nonce & Unified Standalone Gate (`I5`)**: Enforces header-only `x-sidecar-token` on `GET /api/settings` & `POST /api/settings`, header or `?token=` on `GET /`, per-response CSPRNG `Content-Security-Policy` script `nonce`, unified security gate + error handlers on standalone HTTP fallback, and fail-closed SDK startup routes.
-- **Host Version & DOS Filename Parity (`I7`) + Strict Provider Fail-Closed (`Q3`)**: Enforces `compatibility.minHostVersion` SemVer comparison, Windows DOS device name blocking, installed `addon-host-loader.js` version checks, and strict non-empty string `provider` validation (`MISSING_PROVIDER_ID` / `INVALID_PROVIDER_ID`).
+### Highlights in v2.2.0
+- **Statusbar Engine Button & Centered In-App Shadow DOM Quick Settings Modal**: Adds a live statusbar engine toggle (`번역:구글` / `번역:LLM` / `번역:꺼짐`), `Shift+click` instant Google Translate ↔ Local LLM switching, and a centered Shadow DOM Quick Settings Modal (`addonHost.openModal`, `exclusive: false`, resilient under Tailwind Preflight resets) with Local LLM endpoint/model config, Ollama/OpenAI connection test, Retranslate Now, Clear Cache, and corrupted settings recovery — persisted atomically across all windows via trusted host `settingsBridge.saveSettings()`.
+- **Legacy Sidecar `AUX_PANE` Completely Removed**: Removes `sidecars/ko-translator-settings/` and `"sidecars"` from `plugin.json` so no redundant sidecar pane opens.
 
 ### Core Features
 - **Real-time Thinking translation** with code/identifier/path preservation and Korean particle normalization.
 - **Static English UI localization** with strict exclusions for code viewers, diff lines, terminals, inputs, assistant response bodies, and all sibling plugin UI slots (`[data-addon-host-owner]`, `[data-addon-host-slot]`, `[data-addon-host-no-translate]`, `addonHost.isElementInsideIgnored()`).
-- **Official Antigravity Sidecar (`AUX_PANE`) Settings & Diagnostics Panel** (`sidecars/ko-translator-settings/`) writing `~/.gemini/antigravity/ko_translator_settings.json`, pushed live to World `998` by the host's read-only `settingsBridge` (`addonHost.getSettings()` / `addonHost.onSettingsChange()`).
+- **In-App Statusbar Button + Shadow DOM Quick Settings Modal** backed by host `settingsBridge` (`addonHost.getSettings()` / `addonHost.onSettingsChange()` / `addonHost.saveSettings()`), persisting `~/.gemini/antigravity/ko_translator_settings.json` and broadcasting live to all open World `998` windows.
 - **Hardened Zero-Interference `AddonManifest.v2` Architecture**:
   - **Zero `app.asar` access & zero `mainHook`**: `app.asar` patching and rollback belong exclusively to [antigravity-native-addon-host](https://github.com/jaeseongs95/antigravity-native-addon-host).
   - **Cache-only `localStorage` & zero World `998` globals**: Security-sensitive settings (`enabled`, `provider`, `llmConfig`, `customProviders`) are never read from `localStorage` and never exposed on `window.__agyKoTranslator` under `addonHost`, preventing fail-open leaks across dynamic LS port rotations and World `0`/World `998` `localStorage` poisoning.
@@ -28,11 +27,9 @@ src/
 ├── core/                  # Pure vendor-independent domain (tokenizer, dictionary, cache, registry)
 ├── adapters/
 │   ├── translators/       # Google Translate, Local LLM (Ollama/OpenAI), Custom HTTP (secret-guarded)
-│   └── antigravity/       # Pure read-only DOM overlay, trigger controller, cache-only storage-port
-├── runtime/               # createTranslatorRuntime consuming addonHost.getSettings/onSettingsChange/isElementInsideIgnored
+│   └── antigravity/       # Pure read-only DOM overlay, quick-settings-ui (statusbar + Shadow modal), cache-only storage-port
+├── runtime/               # createTranslatorRuntime consuming addonHost.getSettings/onSettingsChange/saveSettings/isElementInsideIgnored
 └── index.js               # Single bundle entry -> dist/renderer.js (closure-scoped under addonHost)
-sidecars/
-└── ko-translator-settings/# Official Antigravity AUX_PANE Settings & Diagnostics UI (same-host Origin guard)
 host/
 ├── addon-registry.js      # AddonManifest.v2 validator & addons.d registration (0 app.asar access)
 ├── config-store.js        # Fail-closed isolated ko_translator_settings.json store

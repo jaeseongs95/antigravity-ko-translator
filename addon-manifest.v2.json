@@ -3,7 +3,7 @@
   "schemaVersion": 2,
   "pluginId": "ko-thought-translator",
   "displayName": "Antigravity Korean Thought & UI Translator",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "trustLevel": "trusted",
   "compatibility": {
     "hostProfile": "antigravity-desktop",
@@ -26,6 +26,13 @@
       "exclusive": false,
       "scope": "native-host-only",
       "shadow": false
+    },
+    {
+      "slot": "modal",
+      "slotId": "ko-translator.quick-settings-modal",
+      "exclusive": false,
+      "scope": "addon-owned-slot",
+      "shadow": true
     }
   ],
   "isolation": {

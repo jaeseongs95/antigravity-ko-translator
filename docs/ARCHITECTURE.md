@@ -6,19 +6,22 @@
 
 ```
 +-----------------------------------------------------------------------------+
-| Antigravity Desktop Native App + antigravity-native-addon-host (>= v2.1.0)  |
+| Antigravity Desktop Native App + antigravity-native-addon-host (>= v2.1.1)  |
 |                                                                             |
-|  1) Official Sidecar (AUX_PANE)        2) Renderer (Isolated World 998)     |
-|     sidecars/ko-translator-settings/      dist/renderer.js (IIFE)           |
-|     - Sole authenticated writer of        - Closure-scoped `addonHost`      |
-|       ko_translator_settings.json         - ZERO window.__agyKoTranslator   |
-|     - CSRF + same-host Origin/Host        - Consumes host settingsBridge    |
-|       + Content-Type + 413 cap              getSettings()/onSettingsChange()|
-|                                           - localStorage restricted to      |
-|  3) Host Read-Only settingsBridge           translation cache ONLY          |
-|     (owned by antigravity-native-         - Respects addonHost.             |
-|      addon-host v2.1.0 Main process)        isElementInsideIgnored()        |
-|     - Zero plugin mainHook code           - Thinking KO + Static UI KO      |
+|  1) Renderer (Isolated World 998) — dist/renderer.js (IIFE)                 |
+|     - Closure-scoped `addonHost` (ZERO window.__agyKoTranslator)            |
+|     - Statusbar engine button (`window.statusbarAddons.register`)           |
+|       · Click: opens Shadow DOM Quick Settings Modal (`addonHost.openModal`)|
+|       · Shift+click: instant Google Translate <-> Local LLM toggle          |
+|     - Consumes host `settingsBridge`: `getSettings()`, `onSettingsChange()`,|
+|       and trusted `saveSettings()`                                          |
+|     - `localStorage` restricted strictly to translation cache ONLY          |
+|     - Respects `addonHost.isElementInsideIgnored()` across Shadow DOM       |
+|                                                                             |
+|  2) Host Confined `settingsBridge` (owned by antigravity-native-addon-host) |
+|     - Zero plugin `mainHook` code, zero Sidecar AUX_PANE                    |
+|     - Atomic confined read/write/watch on `ko_translator_settings.json`     |
+|     - Immediate multi-window snapshot broadcast on save                     |
 +-----------------------------------------------------------------------------+
 ```
 
@@ -29,8 +32,8 @@
    - `storage-port.js`: strictly confines `window.localStorage` to `STORAGE_KEYS.cache`; ignores all security-sensitive settings keys.
    - `custom-provider.js`: defense-in-depth rejection of secret headers (`Authorization`, `X-API-Key`, etc.) and secret query parameters.
    - `ui-localizer.js`, `trigger-controller.js`, `thinking-translator.js`: integrate `addonHost.isElementInsideIgnored()` across Shadow DOM boundaries plus `[data-addon-host-owner]`, `[data-addon-host-slot]`, `[data-addon-host-no-translate]`.
-4. **`src/runtime/*` & `src/index.js`**: Vendor-neutral runtime subscribing to `addonHost.getSettings()` / `addonHost.onSettingsChange()` with fail-closed `missing`/`error` handling and zero mutable `window.*` exposure under `addonHost`.
-5. **Official Sidecar (`sidecars/ko-translator-settings/`)**: Antigravity `SIDECAR_UI_ENTRYPOINT_AUX_PANE` settings and diagnostics panel with per-instance CSRF token, same-host `isOriginMatchingHost` Origin/Host check, `application/json` `Content-Type`, and strict 64 KiB body cap (`413 Payload Too Large`).
+4. **`src/runtime/*` & `src/index.js`**: Vendor-neutral runtime subscribing to `addonHost.getSettings()` / `addonHost.onSettingsChange()` / `addonHost.saveSettings()` with fail-closed `missing`/`error` handling and zero mutable `window.*` exposure under `addonHost`.
+5. **In-App Statusbar & Shadow DOM Quick Settings (`src/adapters/antigravity/quick-settings-ui.js`)**: Registers live statusbar button (`번역:구글` / `번역:LLM` / `번역:꺼짐`, `Shift+click` instant toggle) via `window.statusbarAddons.register`, and mounts an isolated Shadow DOM Quick Settings Modal via `addonHost.openModal('ko-translator.quick-settings-modal', { shadow: true })` (legacy Sidecar AUX_PANE removed).
 6. **Isolated Host Layer (`addon-manifest.v2.json`, `host/*`, `scripts/build.js`)**:
    - Single deterministic renderer bundle `dist/renderer.js` (`scripts/build.js --check`).
    - Zero `hooks.json`, zero standalone watcher daemons, zero writes to Antigravity host internal storage or `config.json`.
