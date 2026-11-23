@@ -10,7 +10,8 @@ const {
   buildTranslatedBlockElement,
 } = require('./dom-tokenizer');
 
-const BASE_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]';
+const BASE_NO_TRANSLATE_SELECTOR =
+  '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
 
 function buildEffectiveNoTranslateSelector(extraSelector, doc) {
   if (typeof extraSelector !== 'string' || !extraSelector.trim()) return BASE_NO_TRANSLATE_SELECTOR;
@@ -31,6 +32,7 @@ function createAntigravityThinkingTranslator({
   translationService,
   triggerController,
   extraExcludedSelector = null,
+  isHostIgnoredElement = null,
   getTranslateThinkingEnabled = () => true,
   onTriggerPretranslate = null,
   isDisposed = () => false,
@@ -130,7 +132,13 @@ function createAntigravityThinkingTranslator({
   }
 
   function isInsideNoTranslateSubtree(el) {
-    if (!el || typeof el.closest !== 'function') return false;
+    if (!el) return false;
+    if (typeof isHostIgnoredElement === 'function') {
+      try {
+        if (isHostIgnoredElement(el)) return true;
+      } catch (_err) {}
+    }
+    if (typeof el.closest !== 'function') return false;
     return Boolean(el.closest(noTranslateSelector));
   }
 

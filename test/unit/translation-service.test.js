@@ -206,8 +206,11 @@ test('Isolated StoragePort & LocalLlmAdapter: zero host nativeStorage access and
     },
   });
 
-  storage.setItem(STORAGE_KEYS.provider, 'local-llm');
-  assert.equal(storage.getItem(STORAGE_KEYS.provider), 'local-llm');
+  // v2.1.0 cache-only localStorage boundary: cache key persists, while security-sensitive provider key is ignored
+  assert.equal(storage.setItem(STORAGE_KEYS.cache, '{"k":"v"}'), true);
+  assert.equal(storage.getItem(STORAGE_KEYS.cache), '{"k":"v"}');
+  assert.equal(storage.setItem(STORAGE_KEYS.provider, 'local-llm'), false);
+  assert.equal(storage.getItem(STORAGE_KEYS.provider), null);
   assert.equal(storage.getInitialSettings().llmConfig.model, 'qwen2.5:7b');
   assert.equal(nativeStorageTouched, false, 'StoragePort must NEVER read or write host nativeStorage');
 
@@ -234,8 +237,18 @@ test('Isolated StoragePort & LocalLlmAdapter: zero host nativeStorage access and
 });
 
 test('CustomProviderAdapter (Rev6-F5 #2): Array bodyTemplate, single-pass {{text|sourceLang|targetLang}} ($& safe), and forbidden headers', async () => {
-  // Forbidden headers rejected case-insensitively
-  for (const badHeader of ['Cookie', 'HOST', 'Sec-Fetch-Site', 'Proxy-Authorization', 'Origin', 'Referer']) {
+  // Forbidden & secret headers rejected case-insensitively
+  for (const badHeader of [
+    'Cookie',
+    'HOST',
+    'Sec-Fetch-Site',
+    'Proxy-Authorization',
+    'Origin',
+    'Referer',
+    'Authorization',
+    'X-Api-Key',
+    'X-Auth-Token',
+  ]) {
     assert.throws(
       () =>
         validateCustomProviderSpec({
@@ -257,7 +270,7 @@ test('CustomProviderAdapter (Rev6-F5 #2): Array bodyTemplate, single-pass {{text
     label: 'Array Gateway',
     endpointUrl: 'https://api.example.com/translate',
     allowRemoteHttps: true,
-    headers: { 'X-Api-Key': 'key-123' },
+    headers: { 'X-Client-App': 'ko-translator' },
     bodyTemplate: [
       {
         Text: '{{text}}',

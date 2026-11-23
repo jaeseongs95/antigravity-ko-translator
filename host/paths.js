@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * Profile-Driven Host Filesystem Path Resolver (AddonManifest.v1).
+ * Profile-Driven Host Filesystem Path Resolver (AddonManifest.v2).
  *
- * Resolves plugin manifest, renderer/mainHook entries, shared `addons.d` registry,
- * and isolated plugin settings paths without ever referencing `app.asar`.
+ * Resolves plugin manifest, renderer entry, shared `addons.d` registry,
+ * and isolated plugin settings paths without ever referencing `app.asar` or `mainHook`.
  */
 
 const os = require('node:os');
@@ -14,9 +14,8 @@ const { ANTIGRAVITY_HOST_PROFILE } = require('./profiles/antigravity');
 
 const PLUGIN_ID = ANTIGRAVITY_HOST_PROFILE.pluginId;
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
-const SOURCE_MANIFEST_PATH = path.join(PLUGIN_ROOT, 'addon-manifest.v1.json');
+const SOURCE_MANIFEST_PATH = path.join(PLUGIN_ROOT, 'addon-manifest.v2.json');
 const RENDERER_BUNDLE_PATH = path.join(PLUGIN_ROOT, 'dist', 'renderer.js');
-const MAIN_HOOK_PATH = path.join(PLUGIN_ROOT, 'dist', 'main-hook.js');
 
 function resolveHostPaths(env = process.env, profile = ANTIGRAVITY_HOST_PROFILE) {
   const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
@@ -40,7 +39,6 @@ function resolveHostPaths(env = process.env, profile = ANTIGRAVITY_HOST_PROFILE)
     PLUGIN_ROOT,
     SOURCE_MANIFEST_PATH,
     RENDERER_BUNDLE_PATH,
-    MAIN_HOOK_PATH,
     HOME_DIR,
     LOCAL_APPDATA,
     GEMINI_DIR,
@@ -62,6 +60,5 @@ module.exports = {
   PLUGIN_ROOT,
   SOURCE_MANIFEST_PATH,
   RENDERER_BUNDLE_PATH,
-  MAIN_HOOK_PATH,
   resolveHostPaths,
 };

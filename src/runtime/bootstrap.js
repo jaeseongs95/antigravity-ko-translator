@@ -1,14 +1,18 @@
 'use strict';
 
 /**
- * Vendor-Neutral Pure Read-Only DOM Overlay Runtime Bootstrap.
+ * Vendor-Neutral Pure Read-Only DOM Overlay Runtime Bootstrap (v2.1.0).
  *
- * Exports `createTranslatorRuntime({ win, doc, hostAdapter, providerBundle, settings, version, fetchFn, onStatus })`
+ * Exports `createTranslatorRuntime({ win, doc, hostAdapter, providerBundle, hostCapability, settings, version, fetchFn, onStatus })`
  * -> `{ start(), updateSettings(next), registerCustomProvider(spec), unregisterCustomProvider(id), dispose(), getStatus(), scanAll() }`.
  *
- * Zero concrete host/vendor or translator-provider imports:
- * - Host DOM rules, selectors, CSS, dictionaries, and storage port are injected via `hostAdapter`.
- * - Built-in / custom translation providers and aliases are injected via `providerBundle`.
+ * Security & DIP Invariants:
+ * - Zero concrete host/vendor or translator-provider imports.
+ * - Zero `localStorage` authority over security-sensitive settings (`enabled`, toggles,
+ *   `provider`, `llmConfig`, `customProviders`): `storage` is used strictly for the translation text cache.
+ * - Under `hostCapability` with `settingsBridge` (`getSettings` / `onSettingsChange`), missing or
+ *   corrupted host snapshots fail CLOSED (`enabled: false`, `provider: null`).
+ * - Respects `hostCapability.isElementInsideIgnored(el)` across Shadow DOM boundaries.
  */
 
 const { createDisposableRegistry } = require('../core/disposable-registry');
@@ -16,10 +20,8 @@ const { createProviderRegistry } = require('../core/provider-registry');
 const { createTranslationService } = require('../core/translation-service');
 const { createObserverScheduler } = require('./observer-scheduler');
 
-function resolveBooleanOption(overrideVal, storedVal, fallback) {
+function resolveBooleanOption(overrideVal, fallback) {
   if (typeof overrideVal === 'boolean') return overrideVal;
-  if (storedVal === '1' || storedVal === 'true' || storedVal === true) return true;
-  if (storedVal === '0' || storedVal === 'false' || storedVal === false) return false;
   return Boolean(fallback);
 }
 
@@ -32,6 +34,47 @@ function canonicalizeProviderId(rawId, aliasMap = {}) {
       ? aliasMap[trimmed]
       : trimmed;
   return /^[a-z0-9][a-z0-9._:-]{0,63}$/.test(mapped) ? mapped : null;
+}
+
+function unwrapHostSettingsSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return {
+      ok: false,
+      enabled: false,
+      settingsMissing: true,
+      settingsCorrupted: false,
+      reason: 'ERR_SETTINGS_FILE_MISSING',
+      data: null,
+    };
+  }
+  if (snapshot.status === 'ok' && snapshot.data && typeof snapshot.data === 'object' && !Array.isArray(snapshot.data)) {
+    return {
+      ok: true,
+      enabled: snapshot.data.enabled !== false,
+      settingsMissing: false,
+      settingsCorrupted: false,
+      reason: null,
+      data: snapshot.data,
+    };
+  }
+  if (snapshot.status === 'missing') {
+    return {
+      ok: false,
+      enabled: false,
+      settingsMissing: true,
+      settingsCorrupted: false,
+      reason: snapshot.reason || 'ERR_SETTINGS_FILE_MISSING',
+      data: null,
+    };
+  }
+  return {
+    ok: false,
+    enabled: false,
+    settingsMissing: false,
+    settingsCorrupted: true,
+    reason: snapshot.reason || 'SETTINGS_FILE_CORRUPTED',
+    data: null,
+  };
 }
 
 function createTranslatorRuntime({
@@ -74,50 +117,65 @@ function createTranslatorRuntime({
     Array.isArray(providerBundle.builtinProviderIds) ? providerBundle.builtinProviderIds : [defaultProviderId]
   );
 
-  const storage = hostAdapter.createStoragePort({ targetWin, initialSettings: settings });
+  const hasHostSettingsBridge = Boolean(
+    hostCapability && typeof hostCapability.getSettings === 'function'
+  );
+
+  let effectiveInitialSettings = settings;
+  let initialBridgeError = null;
+  let initialSettingsFailClosed = false;
+
+  if (effectiveInitialSettings === null && hasHostSettingsBridge) {
+    let rawSnap = null;
+    try {
+      rawSnap = hostCapability.getSettings();
+    } catch (_err) {
+      rawSnap = { status: 'error', reason: 'ERR_SETTINGS_BRIDGE_READ_FAILED', data: null };
+    }
+    const unwrapped = unwrapHostSettingsSnapshot(rawSnap);
+    if (unwrapped.ok) {
+      effectiveInitialSettings = unwrapped.data;
+    } else {
+      effectiveInitialSettings = {
+        enabled: false,
+        settingsCorrupted: unwrapped.settingsCorrupted,
+        settingsMissing: unwrapped.settingsMissing,
+      };
+      initialSettingsFailClosed = true;
+      initialBridgeError = unwrapped.reason;
+    }
+  }
+
+  const storage = hostAdapter.createStoragePort({ targetWin, initialSettings: effectiveInitialSettings });
   const initCfg = storage.getInitialSettings() || {};
   const settingsCorrupted = initCfg.settingsCorrupted === true;
+  const settingsMissing = initCfg.settingsMissing === true;
   const rawInitialProvider =
-    initCfg.provider !== undefined && initCfg.provider !== null
-      ? initCfg.provider
-      : storage.getItem(storageKeys.provider);
+    initCfg.provider !== undefined && initCfg.provider !== null ? initCfg.provider : null;
   const resolvedInitialProvider =
-    rawInitialProvider !== undefined && rawInitialProvider !== null && String(rawInitialProvider).trim() !== ''
+    rawInitialProvider !== null && String(rawInitialProvider).trim() !== ''
       ? canonicalizeProviderId(String(rawInitialProvider), aliasMap)
       : defaultProviderId;
   const invalidInitialProvider =
     !settingsCorrupted &&
-    rawInitialProvider !== undefined &&
+    !settingsMissing &&
+    !initialSettingsFailClosed &&
     rawInitialProvider !== null &&
     String(rawInitialProvider).trim() !== '' &&
     !resolvedInitialProvider;
+  const failClosed = settingsCorrupted || settingsMissing || initialSettingsFailClosed || invalidInitialProvider;
 
   let state = {
-    enabled: settingsCorrupted || invalidInitialProvider ? false : initCfg.enabled !== false,
-    translateThinking: resolveBooleanOption(
-      initCfg.translateThinking,
-      storage.getItem(storageKeys.translateThinking),
-      true
-    ),
-    showThinking: resolveBooleanOption(
-      initCfg.showThinking,
-      storage.getItem(storageKeys.showThinking),
-      true
-    ),
-    translateStaticUi: resolveBooleanOption(
-      initCfg.translateStaticUi,
-      storage.getItem(storageKeys.translateStaticUi),
-      true
-    ),
-    provider: settingsCorrupted || invalidInitialProvider ? null : resolvedInitialProvider,
+    enabled: failClosed ? false : initCfg.enabled !== false,
+    translateThinking: resolveBooleanOption(initCfg.translateThinking, true),
+    showThinking: resolveBooleanOption(initCfg.showThinking, true),
+    translateStaticUi: resolveBooleanOption(initCfg.translateStaticUi, true),
+    provider: failClosed ? null : resolvedInitialProvider,
     llmConfig: {
       ...defaultLlmConfig,
-      ...(storage.getJson(storageKeys.llmConfig, {}) || {}),
       ...(initCfg.llmConfig && typeof initCfg.llmConfig === 'object' ? initCfg.llmConfig : {}),
     },
-    customProviders: Array.isArray(initCfg.customProviders)
-      ? initCfg.customProviders
-      : storage.getJson(storageKeys.customProviders, []) || [],
+    customProviders: Array.isArray(initCfg.customProviders) ? initCfg.customProviders.slice() : [],
   };
 
   let started = false;
@@ -125,16 +183,21 @@ function createTranslatorRuntime({
   let disposed = false;
   let scanError = null;
   let customProviderError = null;
-  let translationError = settingsCorrupted
-    ? 'SETTINGS_FILE_CORRUPTED'
-    : invalidInitialProvider
-      ? `INVALID_PROVIDER_ID:${String(rawInitialProvider)}`
-      : null;
+  let translationError = initialBridgeError
+    ? initialBridgeError
+    : settingsCorrupted
+      ? 'SETTINGS_FILE_CORRUPTED'
+      : settingsMissing
+        ? 'ERR_SETTINGS_FILE_MISSING'
+        : invalidInitialProvider
+          ? `INVALID_PROVIDER_ID:${String(rawInitialProvider)}`
+          : null;
 
   const disposables = createDisposableRegistry();
   const catalog = hostAdapter.createDictionaryCatalog();
   const providerRegistry = createProviderRegistry({ aliasMap });
   const customProviderSpecFingerprints = new Map();
+  const imperativeCustomProviders = new Map();
   const llmConfigSubscribers = new Set();
 
   function notifyLlmConfigSubscribers() {
@@ -173,15 +236,9 @@ function createTranslatorRuntime({
     customProviderError = null;
     if (typeof providerBundle.createCustomProvider !== 'function') return;
     const nextIds = new Set();
-    const localRuntimeList = Array.isArray(storage.getJson(storageKeys.customProviders, []))
-      ? storage.getJson(storageKeys.customProviders, [])
-      : [];
-    // Host declarative customProviders ALWAYS take precedence over stale localStorage entries with the same id.
     const mergedById = new Map();
-    for (const spec of localRuntimeList) {
-      if (spec && typeof spec === 'object' && spec.id) {
-        mergedById.set(String(spec.id).trim().toLowerCase(), spec);
-      }
+    for (const [id, spec] of imperativeCustomProviders.entries()) {
+      mergedById.set(id, spec);
     }
     for (const spec of Array.isArray(hostList) ? hostList : []) {
       if (spec && typeof spec === 'object' && spec.id) {
@@ -215,7 +272,7 @@ function createTranslatorRuntime({
     registry: providerRegistry,
     storage,
     defaultProviderId,
-    providerStorageKey: storageKeys.provider,
+    providerStorageKey: null, // Strictly forbid localStorage authority over provider selection
     cacheStorageKey: storageKeys.cache,
     setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
     clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
@@ -241,11 +298,23 @@ function createTranslatorRuntime({
       ? hostCapability.getNoTranslateSelector()
       : null;
 
+  const isHostIgnoredElement =
+    hostCapability && typeof hostCapability.isElementInsideIgnored === 'function'
+      ? (el) => {
+          try {
+            return Boolean(hostCapability.isElementInsideIgnored(el));
+          } catch (_err) {
+            return false;
+          }
+        }
+      : null;
+
   const uiLocalizer = hostAdapter.createUiLocalizer({
     targetDoc,
     catalog,
     translationService,
     extraExcludedSelector: hostNoTranslateSelector,
+    isHostIgnoredElement,
     isDisposed: () => disposed,
   });
 
@@ -254,6 +323,7 @@ function createTranslatorRuntime({
     targetWin,
     catalog,
     extraExcludedSelector: hostNoTranslateSelector,
+    isHostIgnoredElement,
     getShowThinkingEnabled: () => state.showThinking,
     isDisposed: () => disposed,
   });
@@ -264,6 +334,7 @@ function createTranslatorRuntime({
     translationService,
     triggerController,
     extraExcludedSelector: hostNoTranslateSelector,
+    isHostIgnoredElement,
     getTranslateThinkingEnabled: () => state.enabled && state.translateThinking,
     isDisposed: () => disposed,
     setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
@@ -347,6 +418,7 @@ function createTranslatorRuntime({
         triggerController,
         thinkingTranslator,
         selectors: hostAdapter.selectors || null,
+        isHostIgnoredElement,
         isEnabled: () => !disposed && state.enabled,
         isTranslateThinkingEnabled: () => state.translateThinking,
         isTranslateStaticUiEnabled: () => state.translateStaticUi,
@@ -380,6 +452,53 @@ function createTranslatorRuntime({
     triggerController.restoreTriggerButtons();
   }
 
+  function applyFailClosed(reason) {
+    state.enabled = false;
+    state.provider = null;
+    translationError = reason || 'SETTINGS_FILE_CORRUPTED';
+    deactivateRuntime();
+    emitStatus();
+  }
+
+  function applyHostSettingsSnapshot(snapshot) {
+    if (disposed) return;
+    const unwrapped = unwrapHostSettingsSnapshot(snapshot);
+    if (!unwrapped.ok) {
+      applyFailClosed(unwrapped.reason);
+      return;
+    }
+    const data = unwrapped.data;
+    const rawProv = data.provider !== undefined && data.provider !== null ? String(data.provider).trim() : '';
+    if (rawProv && !canonicalizeProviderId(rawProv, aliasMap)) {
+      applyFailClosed(`INVALID_PROVIDER_ID:${rawProv}`);
+      return;
+    }
+    translationError = null;
+    updateSettings({
+      enabled: data.enabled !== false,
+      translateThinking: resolveBooleanOption(data.translateThinking, true),
+      showThinking: resolveBooleanOption(data.showThinking, true),
+      translateStaticUi: resolveBooleanOption(data.translateStaticUi, true),
+      llmConfig: {
+        ...defaultLlmConfig,
+        ...(data.llmConfig && typeof data.llmConfig === 'object' ? data.llmConfig : {}),
+      },
+      customProviders: Array.isArray(data.customProviders) ? data.customProviders : [],
+      provider: rawProv || defaultProviderId,
+    });
+  }
+
+  if (hostCapability && typeof hostCapability.onSettingsChange === 'function') {
+    try {
+      const unsubscribeSettings = hostCapability.onSettingsChange((snap) => {
+        applyHostSettingsSnapshot(snap);
+      });
+      if (typeof unsubscribeSettings === 'function') {
+        disposables.register(unsubscribeSettings);
+      }
+    } catch (_err) {}
+  }
+
   function start() {
     if (disposed) {
       throw new Error('Cannot start a disposed translator runtime instance');
@@ -398,6 +517,11 @@ function createTranslatorRuntime({
   function updateSettings(next = {}) {
     if (disposed || !next || typeof next !== 'object') return getStatus();
 
+    if (next.settingsCorrupted === true || next.settingsMissing === true) {
+      applyFailClosed(next.settingsCorrupted ? 'SETTINGS_FILE_CORRUPTED' : 'ERR_SETTINGS_FILE_MISSING');
+      return getStatus();
+    }
+
     const prevProvider = state.provider;
     const prevEnabled = state.enabled;
     const prevTranslateThinking = state.translateThinking;
@@ -411,19 +535,15 @@ function createTranslatorRuntime({
     if (typeof next.enabled === 'boolean') state.enabled = next.enabled;
     if (typeof next.translateThinking === 'boolean') {
       state.translateThinking = next.translateThinking;
-      storage.setItem(storageKeys.translateThinking, state.translateThinking ? '1' : '0');
     }
     if (typeof next.showThinking === 'boolean') {
       state.showThinking = next.showThinking;
-      storage.setItem(storageKeys.showThinking, state.showThinking ? '1' : '0');
     }
     if (typeof next.translateStaticUi === 'boolean') {
       state.translateStaticUi = next.translateStaticUi;
-      storage.setItem(storageKeys.translateStaticUi, state.translateStaticUi ? '1' : '0');
     }
     if (next.llmConfig && typeof next.llmConfig === 'object') {
       state.llmConfig = { ...state.llmConfig, ...next.llmConfig };
-      storage.setJson(storageKeys.llmConfig, state.llmConfig);
     }
     const nextLlmSig = getConfigSig(state.llmConfig);
     const llmConfigChanged = nextLlmSig !== prevLlmSig;
@@ -445,10 +565,13 @@ function createTranslatorRuntime({
         state.provider = candidate;
         translationError = null;
         if (providerRegistry.hasProvider(candidate)) {
-          translationService.setProvider(candidate, { persist: true });
+          translationService.setProvider(candidate, { persist: false });
         } else {
           translationService.syncDesiredProviderFromExternal(candidate);
         }
+      } else {
+        applyFailClosed(`INVALID_PROVIDER_ID:${next.provider}`);
+        return getStatus();
       }
     }
 
@@ -527,14 +650,9 @@ function createTranslatorRuntime({
     }
     const provider = providerBundle.createCustomProvider(spec, { fetchFn: effectiveFetch });
     const normalizedSpec = provider.spec ? { ...provider.spec } : { ...spec, id: provider.id };
+    imperativeCustomProviders.set(provider.id, normalizedSpec);
     providerRegistry.registerProvider(provider);
     customProviderSpecFingerprints.set(provider.id, buildCustomProviderFingerprint(normalizedSpec));
-    const localList = storage.getJson(storageKeys.customProviders, []) || [];
-    const filtered = Array.isArray(localList)
-      ? localList.filter((p) => p && providerRegistry.normalizeId(p.id) !== provider.id)
-      : [];
-    filtered.push(normalizedSpec);
-    storage.setJson(storageKeys.customProviders, filtered);
     translationService.bumpEpoch();
     if (started && runtimeActive && state.enabled && state.provider === provider.id) {
       thinkingTranslator.retranslateVisibleThoughts(false);
@@ -547,15 +665,9 @@ function createTranslatorRuntime({
     const normId = providerRegistry.normalizeId(rawId);
     if (!normId || builtinProviderIds.has(normId)) return false;
     const removed = providerRegistry.unregisterProvider(normId);
+    imperativeCustomProviders.delete(normId);
     registeredDeclarativeIds.delete(normId);
     customProviderSpecFingerprints.delete(normId);
-    const localList = storage.getJson(storageKeys.customProviders, []) || [];
-    if (Array.isArray(localList)) {
-      storage.setJson(
-        storageKeys.customProviders,
-        localList.filter((p) => p && providerRegistry.normalizeId(p.id) !== normId)
-      );
-    }
     if (removed) {
       translationService.bumpEpoch();
       if (state.provider === normId && started && runtimeActive && state.enabled) {

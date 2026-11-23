@@ -45,7 +45,8 @@ function isElementInLatestTurn(btn, doc, NodeCtor) {
   return false;
 }
 
-const BASE_TRIGGER_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]';
+const BASE_TRIGGER_NO_TRANSLATE_SELECTOR =
+  '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
 
 function buildTriggerNoTranslateSelector(extraSelector, doc) {
   if (typeof extraSelector !== 'string' || !extraSelector.trim()) return BASE_TRIGGER_NO_TRANSLATE_SELECTOR;
@@ -65,6 +66,7 @@ function createAntigravityTriggerController({
   targetWin,
   catalog,
   extraExcludedSelector = null,
+  isHostIgnoredElement = null,
   getShowThinkingEnabled = () => true,
   isDisposed = () => false,
 } = {}) {
@@ -75,7 +77,13 @@ function createAntigravityTriggerController({
   let clickListenerAttached = false;
 
   function isInsideNoTranslateSubtree(el) {
-    if (!el || typeof el.closest !== 'function') return false;
+    if (!el) return false;
+    if (typeof isHostIgnoredElement === 'function') {
+      try {
+        if (isHostIgnoredElement(el)) return true;
+      } catch (_err) {}
+    }
+    if (typeof el.closest !== 'function') return false;
     return Boolean(el.closest(noTranslateSelector));
   }
 

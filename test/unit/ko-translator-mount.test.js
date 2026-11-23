@@ -350,7 +350,6 @@ test('R7 F1+F3+F5+NB1+NB5: config-store strict validation, legacy file-lock defe
     acquireExclusiveLock,
     releaseExclusiveLock,
   } = require('../../host/config-store');
-  const { readFailClosedSettingsPayload } = require('../../host/main-hook');
 
   // F3: Forbidden provider IDs & non-string types must throw
   assert.throws(() => normalizeProviderId('constructor'), /Forbidden provider id/);
@@ -359,7 +358,32 @@ test('R7 F1+F3+F5+NB1+NB5: config-store strict validation, legacy file-lock defe
   assert.throws(() => sanitizeLlmConfig({ apiFormat: 'invalid-fmt' }, undefined, { strict: true }), /INVALID_API_FORMAT/);
   assert.throws(() => sanitizeLlmConfig({ timeoutMs: 999999 }, undefined, { strict: true }), /INVALID_TIMEOUT_MS/);
 
-  // NB1 & F1: Legacy regular-file lock + main-hook semantic corruption fail-closed
+  // NB1 & F1: Legacy regular-file lock + custom-provider secret header/query defense-in-depth
+  const { validateCustomProviderSpec } = require('../../src/adapters/translators/custom-provider');
+  assert.throws(
+    () =>
+      validateCustomProviderSpec({
+        id: 'bad-secret-hdr',
+        endpointUrl: 'https://api.example.com/v1',
+        allowRemoteHttps: true,
+        headers: { Authorization: 'Bearer leak' },
+        bodyTemplate: { q: '{{text}}' },
+        responsePath: 'text',
+      }),
+    /Forbidden HTTP header name/
+  );
+  assert.throws(
+    () =>
+      validateCustomProviderSpec({
+        id: 'bad-secret-qry',
+        endpointUrl: 'https://api.example.com/v1?api_key=leak',
+        allowRemoteHttps: true,
+        bodyTemplate: { q: '{{text}}' },
+        responsePath: 'text',
+      }),
+    /Forbidden secret query parameter/
+  );
+
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-lock-r7-'));
   try {
     const lockPath = path.join(tmpDir, 'settings.lock');
@@ -370,30 +394,6 @@ test('R7 F1+F3+F5+NB1+NB5: config-store strict validation, legacy file-lock defe
     const tok = acquireExclusiveLock(lockPath, 5000);
     assert.ok(tok, 'Stale legacy regular-file lock must be safely replaced by proper-lockfile');
     releaseExclusiveLock(lockPath, tok);
-
-    const semanticBadSettings = path.join(tmpDir, 'bad_settings.json');
-    fs.writeFileSync(
-      semanticBadSettings,
-      JSON.stringify({
-        schemaVersion: 1,
-        enabled: true,
-        customProviders: [
-          {
-            id: 'bad-secret',
-            endpointUrl: 'https://api.example.com/v1',
-            allowRemoteHttps: true,
-            headers: { Authorization: 'Bearer leak' },
-            bodyTemplate: { q: '{{text}}' },
-            responsePath: 'text',
-          },
-        ],
-      }),
-      'utf8'
-    );
-    assert.deepEqual(readFailClosedSettingsPayload({ SETTINGS_PATH: semanticBadSettings }), {
-      enabled: false,
-      settingsCorrupted: true,
-    });
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -539,8 +539,24 @@ test('R8 F1+F3: Thinking <pre><code> blocks never leak to translator & preserve 
   }
 });
 
-test('AddonManifest.v1 capability handle: dist/renderer.js uses addonHost.injectStyle/removeStyle/onDispose and skips [data-addon-host-owner] & dynamic getNoTranslateSelector()', async () => {
+test('AddonManifest.v2 capability handle: settingsBridge push, fail-closed missing/error, localStorage poisoning immunity, zero window globals, port rotation persistence, and isElementInsideIgnored()', async () => {
   const { win, doc, cleanup } = createHappyDomEnv();
+
+  // Poison localStorage with attacker-controlled provider & remote custom endpoint BEFORE mount (V2 test)
+  win.localStorage.setItem('agy-ko-thought-provider', 'evil-exfil');
+  win.localStorage.setItem(
+    'agy-ko-custom-providers-v2',
+    JSON.stringify([
+      {
+        id: 'evil-exfil',
+        endpointUrl: 'https://attacker.example.com/steal',
+        allowRemoteHttps: true,
+        bodyTemplate: { q: '{{text}}' },
+        responsePath: 'text',
+      },
+    ])
+  );
+  win.localStorage.setItem('agy-ko-llm-config-v2', JSON.stringify({ baseUrl: 'https://attacker.example.com' }));
 
   const convView = doc.createElement('div');
   convView.setAttribute('data-testid', 'conversation-view');
@@ -561,9 +577,9 @@ test('AddonManifest.v1 capability handle: dist/renderer.js uses addonHost.inject
   peerSlot.appendChild(peerTrigger);
   convView.appendChild(peerSlot);
 
-  // Custom opt-out selector supplied dynamically by host capability handle
+  // Host-ignored custom element protected strictly via addonHost.isElementInsideIgnored()
   const customPeer = doc.createElement('div');
-  customPeer.setAttribute('data-custom-host-optout', 'true');
+  customPeer.setAttribute('data-host-shadow-ignore', 'true');
   const customPeerLabel = doc.createElement('span');
   customPeerLabel.textContent = 'Thinking';
   customPeer.appendChild(customPeerLabel);
@@ -574,14 +590,36 @@ test('AddonManifest.v1 capability handle: dist/renderer.js uses addonHost.inject
   const injectedStyles = new Map();
   const removedStyles = [];
   const disposeCallbacks = [];
+  const settingsListeners = new Set();
+  let currentSettingsSnap = Object.freeze({
+    status: 'ok',
+    revision: 1,
+    data: Object.freeze({
+      enabled: true,
+      translateThinking: true,
+      showThinking: true,
+      translateStaticUi: true,
+      provider: 'local-llm',
+      llmConfig: Object.freeze({ baseUrl: 'http://127.0.0.1:11434', model: 'gemma3:4b' }),
+      customProviders: Object.freeze([]),
+    }),
+  });
+
   const mockAddonHost = Object.freeze({
     pluginId: 'ko-thought-translator',
-    hostVersion: '1.0.1',
-    hostProfileId: 'antigravity-desktop',
-    storageNamespace: 'ko-thought-translator',
-    ipcChannelPrefix: 'ko-translator:',
-    getNoTranslateSelector() {
-      return '[data-addon-host-owner], [translate="no"], [data-agy-no-translate="true"], [data-custom-host-optout="true"]';
+    version: '2.1.0',
+    trustLevel: 'trusted',
+    schemaVersion: 2,
+    hasSettingsBridge: true,
+    isElementInsideIgnored(el) {
+      return Boolean(el && typeof el.closest === 'function' && el.closest('[data-host-shadow-ignore="true"]'));
+    },
+    getSettings() {
+      return currentSettingsSnap;
+    },
+    onSettingsChange(cb) {
+      settingsListeners.add(cb);
+      return () => settingsListeners.delete(cb);
     },
     injectStyle(styleId, cssText) {
       injectedStyles.set(styleId, cssText);
@@ -595,6 +633,7 @@ test('AddonManifest.v1 capability handle: dist/renderer.js uses addonHost.inject
     },
   });
 
+  const fetchedUrls = [];
   const bundleCode = fs.readFileSync(BUNDLE_PATH, 'utf8');
   const wrapped = `(function(addonHost){\n${bundleCode}\n})(addonHost);`;
   const ctx = vm.createContext({
@@ -608,12 +647,20 @@ test('AddonManifest.v1 capability handle: dist/renderer.js uses addonHost.inject
     clearTimeout: win.clearTimeout.bind(win),
     setInterval: win.setInterval.bind(win),
     clearInterval: win.clearInterval.bind(win),
+    fetch: async (u) => {
+      fetchedUrls.push(String(u));
+      return { ok: true, json: async () => ({}) };
+    },
     console,
     addonHost: mockAddonHost,
   });
 
   try {
     vm.runInContext(wrapped, ctx, { filename: 'dist/renderer.js' });
+
+    // V2: ZERO mutable globals exposed on shared World 998 window
+    assert.equal(win.__agyKoTranslator, undefined, 'World 998 window.__agyKoTranslator must NOT be exposed under addonHost');
+    assert.equal(win.__agyCreateKoTranslator, undefined, 'World 998 window.__agyCreateKoTranslator must NOT be exposed under addonHost');
 
     assert.equal(nativeBtn.textContent, '설정', 'Native host button must be localized');
     assert.equal(peerLabel.textContent, 'Settings', 'Sibling plugin [data-addon-host-owner] UI must NEVER be translated');
@@ -625,21 +672,83 @@ test('AddonManifest.v1 capability handle: dist/renderer.js uses addonHost.inject
     assert.equal(
       customPeerLabel.textContent,
       'Thinking',
-      'Dynamic selector from addonHost.getNoTranslateSelector() must NEVER be translated'
+      'Element ignored by addonHost.isElementInsideIgnored() must NEVER be translated'
     );
     assert.equal(injectedStyles.has(STYLE_ID), true, 'Style must be registered through addonHost.injectStyle()');
     assert.equal(doc.getElementById(STYLE_ID), null, 'Raw <style> must not bypass addonHost.injectStyle()');
     assert.equal(disposeCallbacks.length, 1, 'onDispose hook must be registered with addonHost');
+    assert.equal(settingsListeners.size, 1, 'onSettingsChange listener must be registered');
+    assert.equal(fetchedUrls.some((u) => u.includes('attacker.example.com')), false, 'localStorage poisoning must have zero effect');
+
+    // Live fail-closed push on corrupted host settings snapshot -> restores DOM immediately
+    const corruptSnap = Object.freeze({ status: 'error', data: null, reason: 'ERR_SETTINGS_INVALID_JSON', revision: 2 });
+    currentSettingsSnap = corruptSnap;
+    for (const cb of settingsListeners) cb(corruptSnap);
+    assert.equal(nativeBtn.textContent, 'Settings', 'Corrupted settings push must fail closed and restore DOM');
+
+    // Recover via valid push
+    const recoveredSnap = Object.freeze({
+      status: 'ok',
+      revision: 3,
+      data: Object.freeze({ enabled: true, translateStaticUi: true, provider: 'local-llm' }),
+    });
+    currentSettingsSnap = recoveredSnap;
+    for (const cb of settingsListeners) cb(recoveredSnap);
+    assert.equal(nativeBtn.textContent, '설정', 'Valid settings push must re-enable cleanly');
 
     // Trigger host-managed dispose
     disposeCallbacks[0]();
     assert.equal(removedStyles.includes(STYLE_ID), true, 'Host dispose must call addonHost.removeStyle()');
     assert.equal(nativeBtn.textContent, 'Settings', 'Host dispose must restore localized native text');
-    assert.equal(win.__agyKoTranslator, undefined, 'Host dispose must clear window.__agyKoTranslator');
+    assert.equal(settingsListeners.size, 0, 'Host dispose must unsubscribe onSettingsChange');
   } finally {
-    if (win.__agyKoTranslator && typeof win.__agyKoTranslator.dispose === 'function') {
-      win.__agyKoTranslator.dispose();
-    }
     cleanup();
+  }
+
+  // V1: Missing host settings snapshot MUST fail closed (enabled:false, provider:null, 0 Google calls)
+  // AND LS port rotation (wiped localStorage + enabled:false snapshot) MUST stay disabled with 0 Google calls
+  const port2 = createHappyDomEnv();
+  try {
+    let externalFetchCount = 0;
+    const missingHostCap = {
+      getSettings: () => ({ status: 'missing', data: null, reason: 'ERR_SETTINGS_FILE_MISSING' }),
+      onSettingsChange: () => () => {},
+    };
+    const missingTr = createKoTranslator({
+      win: port2.win,
+      doc: port2.doc,
+      hostCapability: missingHostCap,
+      fetchFn: async () => {
+        externalFetchCount += 1;
+        return { ok: true, json: async () => [[['외부전송금지']]] };
+      },
+    });
+    const stMissing = missingTr.start();
+    assert.equal(stMissing.enabled, false, 'Missing host settingsBridge file MUST fail closed');
+    assert.equal(stMissing.provider, null);
+    assert.equal(stMissing.lastError, 'ERR_SETTINGS_FILE_MISSING');
+    assert.equal(externalFetchCount, 0);
+    missingTr.dispose();
+
+    const disabledAfterRotationCap = {
+      getSettings: () => ({ status: 'ok', data: { enabled: false, provider: 'local-llm' } }),
+      onSettingsChange: () => () => {},
+    };
+    const rotTr = createKoTranslator({
+      win: port2.win,
+      doc: port2.doc,
+      hostCapability: disabledAfterRotationCap,
+      fetchFn: async () => {
+        externalFetchCount += 1;
+        return { ok: true, json: async () => [[['외부전송금지']]] };
+      },
+    });
+    const stRot = rotTr.start();
+    assert.equal(stRot.enabled, false);
+    assert.equal(stRot.provider, 'local-llm');
+    assert.equal(externalFetchCount, 0);
+    rotTr.dispose();
+  } finally {
+    port2.cleanup();
   }
 });

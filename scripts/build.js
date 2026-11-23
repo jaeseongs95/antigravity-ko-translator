@@ -3,9 +3,7 @@
 
 /**
  * Deterministic Bundle Builder powered by `esbuild`:
- * 1. `dist/renderer.js` — self-contained browser IIFE for Isolated World 999
- * 2. `dist/main-hook.js` — self-contained Node CJS bundle for AddonManifest.v1 mainHook
- *    (bundles `proper-lockfile` / `ipaddr.js` so plugin install directories need zero `node_modules`)
+ * - `dist/renderer.js` — self-contained browser IIFE for Isolated World 998 (`AddonManifest.v2`, renderer-only).
  */
 
 const fs = require('node:fs');
@@ -17,9 +15,7 @@ const esbuild = require('esbuild');
 const REPO_ROOT = path.resolve(__dirname, '..');
 const SRC_ROOT = path.join(REPO_ROOT, 'src');
 const ENTRY_FILE = path.join(SRC_ROOT, 'index.js');
-const MAIN_HOOK_ENTRY_FILE = path.join(REPO_ROOT, 'host', 'main-hook.js');
 const OUTPUT_BUNDLE_REL_PATH = 'dist/renderer.js';
-const OUTPUT_MAIN_HOOK_REL_PATH = 'dist/main-hook.js';
 
 function generateBundleSource(entryAbs = ENTRY_FILE) {
   const result = esbuild.buildSync({
@@ -36,7 +32,7 @@ function generateBundleSource(entryAbs = ENTRY_FILE) {
     legalComments: 'none',
     logLevel: 'silent',
     banner: {
-      js: '// === Antigravity Korean Thought & UI Translator v2.1.0 (AddonManifest.v1 Desktop Native App Only — Generated Bundle) ===',
+      js: '// === Antigravity Korean Thought & UI Translator v2.1.0 (AddonManifest.v2 World 998 Renderer-Only — Generated Bundle) ===',
     },
     footer: {
       js: 'if (typeof module !== "undefined" && module && module.exports) { module.exports = __agyKoTranslatorBundleExports; }',
@@ -49,33 +45,6 @@ function generateBundleSource(entryAbs = ENTRY_FILE) {
 
   const bundleSource = result.outputFiles[0].text.replace(/\r\n/g, '\n');
   new vm.Script(bundleSource, { filename: OUTPUT_BUNDLE_REL_PATH });
-  return bundleSource;
-}
-
-function generateMainHookBundleSource(entryAbs = MAIN_HOOK_ENTRY_FILE) {
-  const result = esbuild.buildSync({
-    entryPoints: [entryAbs],
-    bundle: true,
-    platform: 'node',
-    target: ['node20'],
-    format: 'cjs',
-    write: false,
-    minify: false,
-    keepNames: true,
-    charset: 'utf8',
-    legalComments: 'none',
-    logLevel: 'silent',
-    banner: {
-      js: '// === Antigravity Korean Thought & UI Translator v2.1.0 (AddonManifest.v1 Main Hook — Generated Bundle) ===',
-    },
-  });
-
-  if (!result || !Array.isArray(result.outputFiles) || result.outputFiles.length === 0) {
-    throw new Error('esbuild produced no main-hook output files');
-  }
-
-  const bundleSource = result.outputFiles[0].text.replace(/\r\n/g, '\n');
-  new vm.Script(bundleSource, { filename: OUTPUT_MAIN_HOOK_REL_PATH });
   return bundleSource;
 }
 
@@ -103,14 +72,12 @@ function writeOrCheckArtifact(relPath, sourceText, checkOnly) {
 
 function buildBundle({ checkOnly = false } = {}) {
   const rendererInfo = writeOrCheckArtifact(OUTPUT_BUNDLE_REL_PATH, generateBundleSource(), checkOnly);
-  const mainHookInfo = writeOrCheckArtifact(OUTPUT_MAIN_HOOK_REL_PATH, generateMainHookBundleSource(), checkOnly);
   return {
     ok: true,
     checkOnly: Boolean(checkOnly),
     output: rendererInfo.output,
     bytes: rendererInfo.bytes,
     sha256: rendererInfo.sha256,
-    mainHook: mainHookInfo,
   };
 }
 
@@ -127,8 +94,6 @@ if (require.main === module) {
 
 module.exports = {
   OUTPUT_BUNDLE_REL_PATH,
-  OUTPUT_MAIN_HOOK_REL_PATH,
   generateBundleSource,
-  generateMainHookBundleSource,
   buildBundle,
 };

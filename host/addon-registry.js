@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * AddonManifest.v1 Registry & Diagnostics Adapter (Zero `app.asar` Access).
+ * AddonManifest.v2 Registry & Diagnostics Adapter (Zero `app.asar` Access).
  *
  * Manages ONLY this plugin's declarative manifest in `<appDir>/addons.d/<pluginId>.json`
  * and reports read-only shared host loader presence (`addon-host-loader.js`).
@@ -20,7 +20,15 @@ const {
 } = require('./config-store');
 
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/;
+const SETTINGS_FILE_RE = /^[a-z0-9][a-z0-9._-]{1,63}\.json$/;
 const FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+const RESERVED_SETTINGS_FILES = new Set([
+  'trust-policy.json',
+  'config.json',
+  'index.json',
+  'build-manifest.json',
+  'package.json',
+]);
 const SEMVER_RE =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
@@ -85,7 +93,7 @@ function validateAddonManifestContract(
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return { ok: false, reason: 'INVALID_MANIFEST_OBJECT' };
   }
-  if (manifest.schemaVersion !== 1) {
+  if (manifest.schemaVersion !== 2) {
     return { ok: false, reason: 'UNSUPPORTED_SCHEMA_VERSION' };
   }
   if (typeof manifest.pluginId !== 'string' || !PLUGIN_ID_RE.test(manifest.pluginId) || FORBIDDEN_IDS.has(manifest.pluginId)) {
@@ -96,6 +104,9 @@ function validateAddonManifestContract(
   }
   if (typeof manifest.version !== 'string' || !SEMVER_RE.test(manifest.version)) {
     return { ok: false, reason: 'ERR_INVALID_VERSION' };
+  }
+  if (manifest.trustLevel !== undefined && manifest.trustLevel !== 'trusted' && manifest.trustLevel !== 'restricted') {
+    return { ok: false, reason: 'ERR_INVALID_TRUST_LEVEL' };
   }
   if (
     expectedHostProfileId &&
@@ -115,17 +126,39 @@ function validateAddonManifestContract(
   if (!entry) {
     return { ok: false, reason: 'ERR_MISSING_ENTRY' };
   }
+  if (capSet.has('mainHook') || entry.mainHookScript) {
+    return { ok: false, reason: 'ERR_MAIN_HOOK_FORBIDDEN_IN_V2_PLUGIN' };
+  }
   if (capSet.has('renderer') && !entry.rendererScript) {
     return { ok: false, reason: 'ERR_MISSING_RENDERER_ENTRY' };
-  }
-  if (capSet.has('mainHook') && !entry.mainHookScript) {
-    return { ok: false, reason: 'ERR_MISSING_MAIN_HOOK_ENTRY' };
   }
   if (!capSet.has('renderer') && entry.rendererScript) {
     return { ok: false, reason: 'ERR_UNDECLARED_RENDERER_CAPABILITY' };
   }
-  if (!capSet.has('mainHook') && entry.mainHookScript) {
-    return { ok: false, reason: 'ERR_UNDECLARED_MAIN_HOOK_CAPABILITY' };
+
+  if (manifest.settingsBridge !== undefined) {
+    const sb = manifest.settingsBridge;
+    if (
+      !sb ||
+      typeof sb !== 'object' ||
+      Array.isArray(sb) ||
+      typeof sb.fileName !== 'string' ||
+      !SETTINGS_FILE_RE.test(sb.fileName) ||
+      sb.fileName.includes('..') ||
+      RESERVED_SETTINGS_FILES.has(sb.fileName.toLowerCase()) ||
+      sb.fileName.toLowerCase().endsWith('.orig.json')
+    ) {
+      return { ok: false, reason: 'ERR_INVALID_SETTINGS_BRIDGE' };
+    }
+    if (
+      sb.maxBytes !== undefined &&
+      (!Number.isInteger(sb.maxBytes) || sb.maxBytes < 1024 || sb.maxBytes > 262144)
+    ) {
+      return { ok: false, reason: 'ERR_INVALID_SETTINGS_BRIDGE_MAX_BYTES' };
+    }
+    if (manifest.trustLevel !== 'trusted') {
+      return { ok: false, reason: 'ERR_RESTRICTED_SETTINGS_BRIDGE_FORBIDDEN' };
+    }
   }
 
   if (!manifest.isolation || typeof manifest.isolation !== 'object') {
@@ -141,11 +174,17 @@ function validateAddonManifestContract(
       return { ok: false, reason: 'ERR_INVALID_UI_SLOT' };
     }
     if (s.slot === 'document-transform') {
+      if (s.shadow === true) {
+        return { ok: false, reason: 'ERR_DOCUMENT_TRANSFORM_CANNOT_USE_SHADOW' };
+      }
       if (s.scope !== 'native-host-only') {
         return { ok: false, reason: 'ERR_DOCUMENT_TRANSFORM_SCOPE_REQUIRED' };
       }
       if (manifest.isolation.respectsNoTranslate === false) {
         return { ok: false, reason: 'ERR_DOCUMENT_TRANSFORM_MUST_RESPECT_NO_TRANSLATE' };
+      }
+      if (manifest.trustLevel !== 'trusted') {
+        return { ok: false, reason: 'ERR_RESTRICTED_DOCUMENT_TRANSFORM_FORBIDDEN' };
       }
     }
   }
@@ -153,7 +192,7 @@ function validateAddonManifestContract(
   const pluginDir = pluginsRootDir
     ? path.join(pluginsRootDir, manifest.pluginId)
     : path.join('plugins', manifest.pluginId);
-  const resolvedEntries = { rendererScript: null, mainHookScript: null };
+  const resolvedEntries = { rendererScript: null };
 
   if (entry.rendererScript) {
     const res = resolveConfinedScript(entry.rendererScript, pluginDir, pluginsRootDir, {
@@ -161,13 +200,6 @@ function validateAddonManifestContract(
     });
     if (!res.ok) return res;
     resolvedEntries.rendererScript = res.resolvedPath;
-  }
-  if (entry.mainHookScript) {
-    const res = resolveConfinedScript(entry.mainHookScript, pluginDir, pluginsRootDir, {
-      checkFilesExist: Boolean(checkFilesExist && pluginsRootDir),
-    });
-    if (!res.ok) return res;
-    resolvedEntries.mainHookScript = res.resolvedPath;
   }
 
   return {

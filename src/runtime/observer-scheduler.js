@@ -34,6 +34,7 @@ function createObserverScheduler({
   triggerController = null,
   thinkingTranslator = null,
   selectors = null,
+  isHostIgnoredElement = null,
   isEnabled = () => true,
   isTranslateThinkingEnabled = () => true,
   isTranslateStaticUiEnabled = () => true,
@@ -301,7 +302,13 @@ function createObserverScheduler({
   }
 
   function isIgnoredSubtree(el) {
-    if (!el || typeof el.closest !== 'function' || !sel.noTranslateSubtree) return false;
+    if (!el) return false;
+    if (typeof isHostIgnoredElement === 'function') {
+      try {
+        if (isHostIgnoredElement(el)) return true;
+      } catch (_err) {}
+    }
+    if (typeof el.closest !== 'function' || !sel.noTranslateSubtree) return false;
     return Boolean(el.closest(sel.noTranslateSubtree));
   }
 

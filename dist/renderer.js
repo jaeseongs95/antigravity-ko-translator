@@ -1,4 +1,4 @@
-// === Antigravity Korean Thought & UI Translator v2.1.0 (AddonManifest.v1 Desktop Native App Only — Generated Bundle) ===
+// === Antigravity Korean Thought & UI Translator v2.1.0 (AddonManifest.v2 World 998 Renderer-Only — Generated Bundle) ===
 "use strict";
 var __agyKoTranslatorBundleExports = (() => {
   var __defProp = Object.defineProperty;
@@ -755,14 +755,15 @@ var __agyKoTranslatorBundleExports = (() => {
         let saveCacheTimer = null;
         let desiredProviderId = normalizedDefaultId;
         let pendingSavedCustomProviderId = null;
-        const savedRaw = storage && typeof storage.getItem === "function" ? storage.getItem(providerStorageKey) : null;
+        const hasProviderStorage = Boolean(providerStorageKey && typeof providerStorageKey === "string") && Boolean(storage && typeof storage.getItem === "function");
+        const savedRaw = hasProviderStorage ? storage.getItem(providerStorageKey) : null;
         const savedNorm = savedRaw ? registry.normalizeId(savedRaw) : null;
         if (savedNorm) {
           desiredProviderId = savedNorm;
           if (!registry.hasProvider(savedNorm)) {
             pendingSavedCustomProviderId = savedNorm;
           }
-        } else if (storage && typeof storage.setItem === "function") {
+        } else if (hasProviderStorage && typeof storage.setItem === "function") {
           storage.setItem(providerStorageKey, desiredProviderId);
         }
         function notifySubscribers() {
@@ -784,7 +785,7 @@ var __agyKoTranslatorBundleExports = (() => {
           if (type === "register" && pendingSavedCustomProviderId && id === pendingSavedCustomProviderId) {
             desiredProviderId = id;
             pendingSavedCustomProviderId = null;
-            if (storage && typeof storage.setItem === "function") {
+            if (hasProviderStorage && typeof storage.setItem === "function") {
               storage.setItem(providerStorageKey, id);
             }
           }
@@ -936,7 +937,7 @@ var __agyKoTranslatorBundleExports = (() => {
           const prevEffective = resolveEffectiveProvider();
           desiredProviderId = normId;
           pendingSavedCustomProviderId = null;
-          if (persist && storage && typeof storage.setItem === "function") {
+          if (persist && hasProviderStorage && typeof storage.setItem === "function") {
             storage.setItem(providerStorageKey, desiredProviderId);
           }
           const nextEffective = resolveEffectiveProvider();
@@ -978,7 +979,7 @@ var __agyKoTranslatorBundleExports = (() => {
             if (desiredProviderId !== normId) {
               const prevEff = resolveEffectiveProvider();
               desiredProviderId = normId;
-              if (storage && typeof storage.setItem === "function") {
+              if (hasProviderStorage && typeof storage.setItem === "function") {
                 storage.setItem(providerStorageKey, normId);
               }
               const nextEff = resolveEffectiveProvider();
@@ -997,7 +998,7 @@ var __agyKoTranslatorBundleExports = (() => {
           }
           pendingSavedCustomProviderId = normId;
           desiredProviderId = normId;
-          if (storage && typeof storage.getItem === "function" && !storage.getItem(providerStorageKey)) {
+          if (hasProviderStorage && typeof storage.setItem === "function" && !storage.getItem(providerStorageKey)) {
             storage.setItem(providerStorageKey, normId);
           }
           notifySubscribers();
@@ -1242,6 +1243,7 @@ var __agyKoTranslatorBundleExports = (() => {
         triggerController = null,
         thinkingTranslator = null,
         selectors = null,
+        isHostIgnoredElement = null,
         isEnabled = /* @__PURE__ */ __name(() => true, "isEnabled"),
         isTranslateThinkingEnabled = /* @__PURE__ */ __name(() => true, "isTranslateThinkingEnabled"),
         isTranslateStaticUiEnabled = /* @__PURE__ */ __name(() => true, "isTranslateStaticUiEnabled"),
@@ -1483,7 +1485,14 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         __name(scheduleCoalescedScan, "scheduleCoalescedScan");
         function isIgnoredSubtree(el) {
-          if (!el || typeof el.closest !== "function" || !sel.noTranslateSubtree) return false;
+          if (!el) return false;
+          if (typeof isHostIgnoredElement === "function") {
+            try {
+              if (isHostIgnoredElement(el)) return true;
+            } catch (_err) {
+            }
+          }
+          if (typeof el.closest !== "function" || !sel.noTranslateSubtree) return false;
           return Boolean(el.closest(sel.noTranslateSubtree));
         }
         __name(isIgnoredSubtree, "isIgnoredSubtree");
@@ -1651,10 +1660,8 @@ var __agyKoTranslatorBundleExports = (() => {
       var { createProviderRegistry } = require_provider_registry();
       var { createTranslationService } = require_translation_service();
       var { createObserverScheduler } = require_observer_scheduler();
-      function resolveBooleanOption(overrideVal, storedVal, fallback) {
+      function resolveBooleanOption(overrideVal, fallback) {
         if (typeof overrideVal === "boolean") return overrideVal;
-        if (storedVal === "1" || storedVal === "true" || storedVal === true) return true;
-        if (storedVal === "0" || storedVal === "false" || storedVal === false) return false;
         return Boolean(fallback);
       }
       __name(resolveBooleanOption, "resolveBooleanOption");
@@ -1666,6 +1673,47 @@ var __agyKoTranslatorBundleExports = (() => {
         return /^[a-z0-9][a-z0-9._:-]{0,63}$/.test(mapped) ? mapped : null;
       }
       __name(canonicalizeProviderId, "canonicalizeProviderId");
+      function unwrapHostSettingsSnapshot(snapshot) {
+        if (!snapshot || typeof snapshot !== "object") {
+          return {
+            ok: false,
+            enabled: false,
+            settingsMissing: true,
+            settingsCorrupted: false,
+            reason: "ERR_SETTINGS_FILE_MISSING",
+            data: null
+          };
+        }
+        if (snapshot.status === "ok" && snapshot.data && typeof snapshot.data === "object" && !Array.isArray(snapshot.data)) {
+          return {
+            ok: true,
+            enabled: snapshot.data.enabled !== false,
+            settingsMissing: false,
+            settingsCorrupted: false,
+            reason: null,
+            data: snapshot.data
+          };
+        }
+        if (snapshot.status === "missing") {
+          return {
+            ok: false,
+            enabled: false,
+            settingsMissing: true,
+            settingsCorrupted: false,
+            reason: snapshot.reason || "ERR_SETTINGS_FILE_MISSING",
+            data: null
+          };
+        }
+        return {
+          ok: false,
+          enabled: false,
+          settingsMissing: false,
+          settingsCorrupted: true,
+          reason: snapshot.reason || "SETTINGS_FILE_CORRUPTED",
+          data: null
+        };
+      }
+      __name(unwrapHostSettingsSnapshot, "unwrapHostSettingsSnapshot");
       function createTranslatorRuntime({
         win = typeof window !== "undefined" ? window : null,
         doc = null,
@@ -1696,47 +1744,63 @@ var __agyKoTranslatorBundleExports = (() => {
         const builtinProviderIds = new Set(
           Array.isArray(providerBundle.builtinProviderIds) ? providerBundle.builtinProviderIds : [defaultProviderId]
         );
-        const storage = hostAdapter.createStoragePort({ targetWin, initialSettings: settings });
+        const hasHostSettingsBridge = Boolean(
+          hostCapability && typeof hostCapability.getSettings === "function"
+        );
+        let effectiveInitialSettings = settings;
+        let initialBridgeError = null;
+        let initialSettingsFailClosed = false;
+        if (effectiveInitialSettings === null && hasHostSettingsBridge) {
+          let rawSnap = null;
+          try {
+            rawSnap = hostCapability.getSettings();
+          } catch (_err) {
+            rawSnap = { status: "error", reason: "ERR_SETTINGS_BRIDGE_READ_FAILED", data: null };
+          }
+          const unwrapped = unwrapHostSettingsSnapshot(rawSnap);
+          if (unwrapped.ok) {
+            effectiveInitialSettings = unwrapped.data;
+          } else {
+            effectiveInitialSettings = {
+              enabled: false,
+              settingsCorrupted: unwrapped.settingsCorrupted,
+              settingsMissing: unwrapped.settingsMissing
+            };
+            initialSettingsFailClosed = true;
+            initialBridgeError = unwrapped.reason;
+          }
+        }
+        const storage = hostAdapter.createStoragePort({ targetWin, initialSettings: effectiveInitialSettings });
         const initCfg = storage.getInitialSettings() || {};
         const settingsCorrupted = initCfg.settingsCorrupted === true;
-        const rawInitialProvider = initCfg.provider !== void 0 && initCfg.provider !== null ? initCfg.provider : storage.getItem(storageKeys.provider);
-        const resolvedInitialProvider = rawInitialProvider !== void 0 && rawInitialProvider !== null && String(rawInitialProvider).trim() !== "" ? canonicalizeProviderId(String(rawInitialProvider), aliasMap) : defaultProviderId;
-        const invalidInitialProvider = !settingsCorrupted && rawInitialProvider !== void 0 && rawInitialProvider !== null && String(rawInitialProvider).trim() !== "" && !resolvedInitialProvider;
+        const settingsMissing = initCfg.settingsMissing === true;
+        const rawInitialProvider = initCfg.provider !== void 0 && initCfg.provider !== null ? initCfg.provider : null;
+        const resolvedInitialProvider = rawInitialProvider !== null && String(rawInitialProvider).trim() !== "" ? canonicalizeProviderId(String(rawInitialProvider), aliasMap) : defaultProviderId;
+        const invalidInitialProvider = !settingsCorrupted && !settingsMissing && !initialSettingsFailClosed && rawInitialProvider !== null && String(rawInitialProvider).trim() !== "" && !resolvedInitialProvider;
+        const failClosed = settingsCorrupted || settingsMissing || initialSettingsFailClosed || invalidInitialProvider;
         let state = {
-          enabled: settingsCorrupted || invalidInitialProvider ? false : initCfg.enabled !== false,
-          translateThinking: resolveBooleanOption(
-            initCfg.translateThinking,
-            storage.getItem(storageKeys.translateThinking),
-            true
-          ),
-          showThinking: resolveBooleanOption(
-            initCfg.showThinking,
-            storage.getItem(storageKeys.showThinking),
-            true
-          ),
-          translateStaticUi: resolveBooleanOption(
-            initCfg.translateStaticUi,
-            storage.getItem(storageKeys.translateStaticUi),
-            true
-          ),
-          provider: settingsCorrupted || invalidInitialProvider ? null : resolvedInitialProvider,
+          enabled: failClosed ? false : initCfg.enabled !== false,
+          translateThinking: resolveBooleanOption(initCfg.translateThinking, true),
+          showThinking: resolveBooleanOption(initCfg.showThinking, true),
+          translateStaticUi: resolveBooleanOption(initCfg.translateStaticUi, true),
+          provider: failClosed ? null : resolvedInitialProvider,
           llmConfig: {
             ...defaultLlmConfig,
-            ...storage.getJson(storageKeys.llmConfig, {}) || {},
             ...initCfg.llmConfig && typeof initCfg.llmConfig === "object" ? initCfg.llmConfig : {}
           },
-          customProviders: Array.isArray(initCfg.customProviders) ? initCfg.customProviders : storage.getJson(storageKeys.customProviders, []) || []
+          customProviders: Array.isArray(initCfg.customProviders) ? initCfg.customProviders.slice() : []
         };
         let started = false;
         let runtimeActive = false;
         let disposed = false;
         let scanError = null;
         let customProviderError = null;
-        let translationError = settingsCorrupted ? "SETTINGS_FILE_CORRUPTED" : invalidInitialProvider ? `INVALID_PROVIDER_ID:${String(rawInitialProvider)}` : null;
+        let translationError = initialBridgeError ? initialBridgeError : settingsCorrupted ? "SETTINGS_FILE_CORRUPTED" : settingsMissing ? "ERR_SETTINGS_FILE_MISSING" : invalidInitialProvider ? `INVALID_PROVIDER_ID:${String(rawInitialProvider)}` : null;
         const disposables = createDisposableRegistry();
         const catalog = hostAdapter.createDictionaryCatalog();
         const providerRegistry = createProviderRegistry({ aliasMap });
         const customProviderSpecFingerprints = /* @__PURE__ */ new Map();
+        const imperativeCustomProviders = /* @__PURE__ */ new Map();
         const llmConfigSubscribers = /* @__PURE__ */ new Set();
         function notifyLlmConfigSubscribers() {
           for (const fn of Array.from(llmConfigSubscribers)) {
@@ -1770,12 +1834,9 @@ var __agyKoTranslatorBundleExports = (() => {
           customProviderError = null;
           if (typeof providerBundle.createCustomProvider !== "function") return;
           const nextIds = /* @__PURE__ */ new Set();
-          const localRuntimeList = Array.isArray(storage.getJson(storageKeys.customProviders, [])) ? storage.getJson(storageKeys.customProviders, []) : [];
           const mergedById = /* @__PURE__ */ new Map();
-          for (const spec of localRuntimeList) {
-            if (spec && typeof spec === "object" && spec.id) {
-              mergedById.set(String(spec.id).trim().toLowerCase(), spec);
-            }
+          for (const [id, spec] of imperativeCustomProviders.entries()) {
+            mergedById.set(id, spec);
           }
           for (const spec of Array.isArray(hostList) ? hostList : []) {
             if (spec && typeof spec === "object" && spec.id) {
@@ -1809,7 +1870,8 @@ var __agyKoTranslatorBundleExports = (() => {
           registry: providerRegistry,
           storage,
           defaultProviderId,
-          providerStorageKey: storageKeys.provider,
+          providerStorageKey: null,
+          // Strictly forbid localStorage authority over provider selection
           cacheStorageKey: storageKeys.cache,
           setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
           clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
@@ -1830,11 +1892,19 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         disposables.register(() => translationService.dispose());
         const hostNoTranslateSelector = hostCapability && typeof hostCapability.getNoTranslateSelector === "function" ? hostCapability.getNoTranslateSelector() : null;
+        const isHostIgnoredElement = hostCapability && typeof hostCapability.isElementInsideIgnored === "function" ? (el) => {
+          try {
+            return Boolean(hostCapability.isElementInsideIgnored(el));
+          } catch (_err) {
+            return false;
+          }
+        } : null;
         const uiLocalizer = hostAdapter.createUiLocalizer({
           targetDoc,
           catalog,
           translationService,
           extraExcludedSelector: hostNoTranslateSelector,
+          isHostIgnoredElement,
           isDisposed: /* @__PURE__ */ __name(() => disposed, "isDisposed")
         });
         const triggerController = hostAdapter.createTriggerController({
@@ -1842,6 +1912,7 @@ var __agyKoTranslatorBundleExports = (() => {
           targetWin,
           catalog,
           extraExcludedSelector: hostNoTranslateSelector,
+          isHostIgnoredElement,
           getShowThinkingEnabled: /* @__PURE__ */ __name(() => state.showThinking, "getShowThinkingEnabled"),
           isDisposed: /* @__PURE__ */ __name(() => disposed, "isDisposed")
         });
@@ -1851,6 +1922,7 @@ var __agyKoTranslatorBundleExports = (() => {
           translationService,
           triggerController,
           extraExcludedSelector: hostNoTranslateSelector,
+          isHostIgnoredElement,
           getTranslateThinkingEnabled: /* @__PURE__ */ __name(() => state.enabled && state.translateThinking, "getTranslateThinkingEnabled"),
           isDisposed: /* @__PURE__ */ __name(() => disposed, "isDisposed"),
           setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
@@ -1933,6 +2005,7 @@ var __agyKoTranslatorBundleExports = (() => {
               triggerController,
               thinkingTranslator,
               selectors: hostAdapter.selectors || null,
+              isHostIgnoredElement,
               isEnabled: /* @__PURE__ */ __name(() => !disposed && state.enabled, "isEnabled"),
               isTranslateThinkingEnabled: /* @__PURE__ */ __name(() => state.translateThinking, "isTranslateThinkingEnabled"),
               isTranslateStaticUiEnabled: /* @__PURE__ */ __name(() => state.translateStaticUi, "isTranslateStaticUiEnabled"),
@@ -1966,6 +2039,53 @@ var __agyKoTranslatorBundleExports = (() => {
           triggerController.restoreTriggerButtons();
         }
         __name(deactivateRuntime, "deactivateRuntime");
+        function applyFailClosed(reason) {
+          state.enabled = false;
+          state.provider = null;
+          translationError = reason || "SETTINGS_FILE_CORRUPTED";
+          deactivateRuntime();
+          emitStatus();
+        }
+        __name(applyFailClosed, "applyFailClosed");
+        function applyHostSettingsSnapshot(snapshot) {
+          if (disposed) return;
+          const unwrapped = unwrapHostSettingsSnapshot(snapshot);
+          if (!unwrapped.ok) {
+            applyFailClosed(unwrapped.reason);
+            return;
+          }
+          const data = unwrapped.data;
+          const rawProv = data.provider !== void 0 && data.provider !== null ? String(data.provider).trim() : "";
+          if (rawProv && !canonicalizeProviderId(rawProv, aliasMap)) {
+            applyFailClosed(`INVALID_PROVIDER_ID:${rawProv}`);
+            return;
+          }
+          translationError = null;
+          updateSettings({
+            enabled: data.enabled !== false,
+            translateThinking: resolveBooleanOption(data.translateThinking, true),
+            showThinking: resolveBooleanOption(data.showThinking, true),
+            translateStaticUi: resolveBooleanOption(data.translateStaticUi, true),
+            llmConfig: {
+              ...defaultLlmConfig,
+              ...data.llmConfig && typeof data.llmConfig === "object" ? data.llmConfig : {}
+            },
+            customProviders: Array.isArray(data.customProviders) ? data.customProviders : [],
+            provider: rawProv || defaultProviderId
+          });
+        }
+        __name(applyHostSettingsSnapshot, "applyHostSettingsSnapshot");
+        if (hostCapability && typeof hostCapability.onSettingsChange === "function") {
+          try {
+            const unsubscribeSettings = hostCapability.onSettingsChange((snap) => {
+              applyHostSettingsSnapshot(snap);
+            });
+            if (typeof unsubscribeSettings === "function") {
+              disposables.register(unsubscribeSettings);
+            }
+          } catch (_err) {
+          }
+        }
         function start() {
           if (disposed) {
             throw new Error("Cannot start a disposed translator runtime instance");
@@ -1982,6 +2102,10 @@ var __agyKoTranslatorBundleExports = (() => {
         __name(start, "start");
         function updateSettings(next = {}) {
           if (disposed || !next || typeof next !== "object") return getStatus();
+          if (next.settingsCorrupted === true || next.settingsMissing === true) {
+            applyFailClosed(next.settingsCorrupted ? "SETTINGS_FILE_CORRUPTED" : "ERR_SETTINGS_FILE_MISSING");
+            return getStatus();
+          }
           const prevProvider = state.provider;
           const prevEnabled = state.enabled;
           const prevTranslateThinking = state.translateThinking;
@@ -1991,19 +2115,15 @@ var __agyKoTranslatorBundleExports = (() => {
           if (typeof next.enabled === "boolean") state.enabled = next.enabled;
           if (typeof next.translateThinking === "boolean") {
             state.translateThinking = next.translateThinking;
-            storage.setItem(storageKeys.translateThinking, state.translateThinking ? "1" : "0");
           }
           if (typeof next.showThinking === "boolean") {
             state.showThinking = next.showThinking;
-            storage.setItem(storageKeys.showThinking, state.showThinking ? "1" : "0");
           }
           if (typeof next.translateStaticUi === "boolean") {
             state.translateStaticUi = next.translateStaticUi;
-            storage.setItem(storageKeys.translateStaticUi, state.translateStaticUi ? "1" : "0");
           }
           if (next.llmConfig && typeof next.llmConfig === "object") {
             state.llmConfig = { ...state.llmConfig, ...next.llmConfig };
-            storage.setJson(storageKeys.llmConfig, state.llmConfig);
           }
           const nextLlmSig = getConfigSig(state.llmConfig);
           const llmConfigChanged = nextLlmSig !== prevLlmSig;
@@ -2025,10 +2145,13 @@ var __agyKoTranslatorBundleExports = (() => {
               state.provider = candidate;
               translationError = null;
               if (providerRegistry.hasProvider(candidate)) {
-                translationService.setProvider(candidate, { persist: true });
+                translationService.setProvider(candidate, { persist: false });
               } else {
                 translationService.syncDesiredProviderFromExternal(candidate);
               }
+            } else {
+              applyFailClosed(`INVALID_PROVIDER_ID:${next.provider}`);
+              return getStatus();
             }
           }
           if (next.clearCache === true) {
@@ -2097,12 +2220,9 @@ var __agyKoTranslatorBundleExports = (() => {
           }
           const provider = providerBundle.createCustomProvider(spec, { fetchFn: effectiveFetch });
           const normalizedSpec = provider.spec ? { ...provider.spec } : { ...spec, id: provider.id };
+          imperativeCustomProviders.set(provider.id, normalizedSpec);
           providerRegistry.registerProvider(provider);
           customProviderSpecFingerprints.set(provider.id, buildCustomProviderFingerprint(normalizedSpec));
-          const localList = storage.getJson(storageKeys.customProviders, []) || [];
-          const filtered = Array.isArray(localList) ? localList.filter((p) => p && providerRegistry.normalizeId(p.id) !== provider.id) : [];
-          filtered.push(normalizedSpec);
-          storage.setJson(storageKeys.customProviders, filtered);
           translationService.bumpEpoch();
           if (started && runtimeActive && state.enabled && state.provider === provider.id) {
             thinkingTranslator.retranslateVisibleThoughts(false);
@@ -2115,15 +2235,9 @@ var __agyKoTranslatorBundleExports = (() => {
           const normId = providerRegistry.normalizeId(rawId);
           if (!normId || builtinProviderIds.has(normId)) return false;
           const removed = providerRegistry.unregisterProvider(normId);
+          imperativeCustomProviders.delete(normId);
           registeredDeclarativeIds.delete(normId);
           customProviderSpecFingerprints.delete(normId);
-          const localList = storage.getJson(storageKeys.customProviders, []) || [];
-          if (Array.isArray(localList)) {
-            storage.setJson(
-              storageKeys.customProviders,
-              localList.filter((p) => p && providerRegistry.normalizeId(p.id) !== normId)
-            );
-          }
           if (removed) {
             translationService.bumpEpoch();
             if (state.provider === normId && started && runtimeActive && state.enabled) {
@@ -4090,7 +4204,12 @@ var __agyKoTranslatorBundleExports = (() => {
       __name(createSafeLocalStorage, "createSafeLocalStorage");
       function createStoragePort({ targetWin, initialSettings = null } = {}) {
         const ls = createSafeLocalStorage(targetWin);
+        function isAllowedCacheKey(key) {
+          return key === STORAGE_KEYS.cache;
+        }
+        __name(isAllowedCacheKey, "isAllowedCacheKey");
         function getItem(key) {
+          if (!isAllowedCacheKey(key)) return null;
           try {
             return ls.getItem(key);
           } catch (_err) {
@@ -4099,6 +4218,7 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         __name(getItem, "getItem");
         function setItem(key, value) {
+          if (!isAllowedCacheKey(key)) return false;
           try {
             ls.setItem(key, String(value));
             return true;
@@ -4108,6 +4228,7 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         __name(setItem, "setItem");
         function removeItem(key) {
+          if (!isAllowedCacheKey(key)) return false;
           try {
             ls.removeItem(key);
             return true;
@@ -4117,6 +4238,7 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         __name(removeItem, "removeItem");
         function getJson(key, fallback = null) {
+          if (!isAllowedCacheKey(key)) return fallback;
           const raw = getItem(key);
           if (!raw) return fallback;
           try {
@@ -4127,6 +4249,7 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         __name(getJson, "getJson");
         function setJson(key, value) {
+          if (!isAllowedCacheKey(key)) return false;
           try {
             return setItem(key, JSON.stringify(value));
           } catch (_err) {
@@ -4162,7 +4285,7 @@ var __agyKoTranslatorBundleExports = (() => {
     "src/adapters/antigravity/ui-localizer.js"(exports, module) {
       "use strict";
       var { isAlreadyKoreanOrNonEnglish } = require_text_tokenizer();
-      var BASE_EXCLUDED_SELECTOR = 'style, script, code, pre, kbd, samp, var, svg, math, [contenteditable="true"], .monaco-editor, .xterm, .cm-editor, .cm-content, .cm-line, .shiki, .code-block, .code-line, .line-content, .token, [class*="language-"], [data-line-number], [data-line], [data-line-start], [data-line-end], [data-start-line], [data-end-line], [data-diff-type], [data-diff-line], [data-file-uri], [data-active-file-uri], [data-current-line], [data-current-start-line], [data-current-end-line], [data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], [data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], [data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], [data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"], .agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], [data-testid="side-question-answer"] button[aria-expanded], [data-testid="planner-response-text"], [data-testid="user-message-bubble"], [data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], .cursor-edit, [data-agy-ko-thought-host="1"]';
+      var BASE_EXCLUDED_SELECTOR = 'style, script, code, pre, kbd, samp, var, svg, math, [contenteditable="true"], .monaco-editor, .xterm, .cm-editor, .cm-content, .cm-line, .shiki, .code-block, .code-line, .line-content, .token, [class*="language-"], [data-line-number], [data-line], [data-line-start], [data-line-end], [data-start-line], [data-end-line], [data-diff-type], [data-diff-line], [data-file-uri], [data-active-file-uri], [data-current-line], [data-current-start-line], [data-current-end-line], [data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], [data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], [data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"], .agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], [data-testid="side-question-answer"] button[aria-expanded], [data-testid="planner-response-text"], [data-testid="user-message-bubble"], [data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], .cursor-edit, [data-agy-ko-thought-host="1"]';
       var TEXT_EXCLUDED_SELECTOR = "textarea, " + BASE_EXCLUDED_SELECTOR;
       var STATIC_UI_SUBTREE_PRUNE_SELECTOR = TEXT_EXCLUDED_SELECTOR;
       var EXCLUDED_CODE_DATA_ATTR_PREFIX_REGEX = /^data-(?:line-|quotable|diff-|code-|token-|syntax-|file-path|file-uri|symbol-|lsp-)/i;
@@ -4214,18 +4337,29 @@ var __agyKoTranslatorBundleExports = (() => {
         catalog,
         translationService = null,
         extraExcludedSelector = null,
+        isHostIgnoredElement = null,
         isDisposed = /* @__PURE__ */ __name(() => false, "isDisposed")
       } = {}) {
         const doc = targetDoc || (typeof document !== "undefined" ? document : null);
         const effectiveBaseExcludedSelector = mergeExcludedSelector(BASE_EXCLUDED_SELECTOR, extraExcludedSelector, doc);
         const effectiveTextExcludedSelector = `textarea, ${effectiveBaseExcludedSelector}`;
         const effectiveSubtreePruneSelector = effectiveTextExcludedSelector;
+        function isIgnoredByHost(el) {
+          if (typeof isHostIgnoredElement !== "function" || !el) return false;
+          try {
+            return Boolean(isHostIgnoredElement(el));
+          } catch (_err) {
+            return false;
+          }
+        }
+        __name(isIgnoredByHost, "isIgnoredByHost");
         function translateSync(raw) {
           return catalog && typeof catalog.translateSync === "function" ? catalog.translateSync(raw) : null;
         }
         __name(translateSync, "translateSync");
         function isExcludedFromStaticUiLocalization(el, forAttributes = false, rootBoundary = null) {
           if (!el || typeof el.closest !== "function") return true;
+          if (isIgnoredByHost(el)) return true;
           const selector = forAttributes ? effectiveBaseExcludedSelector : effectiveTextExcludedSelector;
           if (el.closest(selector)) {
             return true;
@@ -4378,7 +4512,7 @@ var __agyKoTranslatorBundleExports = (() => {
         function localizeStaticUiInRoot(rootNode, observer = null) {
           const activeDoc = rootNode && rootNode.ownerDocument || doc;
           if (!rootNode || !activeDoc || typeof activeDoc.createTreeWalker !== "function") return;
-          if (rootNode.nodeType === 1 && (typeof rootNode.getAttribute === "function" && (rootNode.getAttribute("data-agy-no-translate") === "true" || rootNode.getAttribute("translate") === "no" || rootNode.hasAttribute("data-addon-host-owner")) || typeof rootNode.matches === "function" && rootNode.matches(effectiveBaseExcludedSelector))) {
+          if (rootNode.nodeType === 1 && (isIgnoredByHost(rootNode) || typeof rootNode.getAttribute === "function" && (rootNode.getAttribute("data-agy-no-translate") === "true" || rootNode.getAttribute("translate") === "no" || rootNode.hasAttribute("data-addon-host-owner") || rootNode.hasAttribute("data-addon-host-slot") || rootNode.hasAttribute("data-addon-host-no-translate")) || typeof rootNode.matches === "function" && rootNode.matches(effectiveBaseExcludedSelector))) {
             return;
           }
           localizeAttributesInRoot(rootNode);
@@ -4387,6 +4521,9 @@ var __agyKoTranslatorBundleExports = (() => {
               if (!node) return 2;
               if (node.nodeType === 1) {
                 if (node !== rootNode) {
+                  if (isIgnoredByHost(node)) {
+                    return 2;
+                  }
                   if (typeof node.matches === "function" && node.matches(effectiveSubtreePruneSelector)) {
                     return 2;
                   }
@@ -4550,7 +4687,7 @@ var __agyKoTranslatorBundleExports = (() => {
         return false;
       }
       __name(isElementInLatestTurn, "isElementInLatestTurn");
-      var BASE_TRIGGER_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]';
+      var BASE_TRIGGER_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
       function buildTriggerNoTranslateSelector(extraSelector, doc) {
         if (typeof extraSelector !== "string" || !extraSelector.trim()) return BASE_TRIGGER_NO_TRANSLATE_SELECTOR;
         if (doc && typeof doc.querySelector === "function") {
@@ -4569,6 +4706,7 @@ var __agyKoTranslatorBundleExports = (() => {
         targetWin,
         catalog,
         extraExcludedSelector = null,
+        isHostIgnoredElement = null,
         getShowThinkingEnabled = /* @__PURE__ */ __name(() => true, "getShowThinkingEnabled"),
         isDisposed = /* @__PURE__ */ __name(() => false, "isDisposed")
       } = {}) {
@@ -4578,7 +4716,14 @@ var __agyKoTranslatorBundleExports = (() => {
         const noTranslateSelector = buildTriggerNoTranslateSelector(extraExcludedSelector, doc);
         let clickListenerAttached = false;
         function isInsideNoTranslateSubtree(el) {
-          if (!el || typeof el.closest !== "function") return false;
+          if (!el) return false;
+          if (typeof isHostIgnoredElement === "function") {
+            try {
+              if (isHostIgnoredElement(el)) return true;
+            } catch (_err) {
+            }
+          }
+          if (typeof el.closest !== "function") return false;
           return Boolean(el.closest(noTranslateSelector));
         }
         __name(isInsideNoTranslateSubtree, "isInsideNoTranslateSubtree");
@@ -4895,7 +5040,7 @@ var __agyKoTranslatorBundleExports = (() => {
         tokenizeBlockElement,
         buildTranslatedBlockElement
       } = require_dom_tokenizer();
-      var BASE_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]';
+      var BASE_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
       function buildEffectiveNoTranslateSelector(extraSelector, doc) {
         if (typeof extraSelector !== "string" || !extraSelector.trim()) return BASE_NO_TRANSLATE_SELECTOR;
         if (doc && typeof doc.querySelector === "function") {
@@ -4915,6 +5060,7 @@ var __agyKoTranslatorBundleExports = (() => {
         translationService,
         triggerController,
         extraExcludedSelector = null,
+        isHostIgnoredElement = null,
         getTranslateThinkingEnabled = /* @__PURE__ */ __name(() => true, "getTranslateThinkingEnabled"),
         onTriggerPretranslate = null,
         isDisposed = /* @__PURE__ */ __name(() => false, "isDisposed"),
@@ -5012,7 +5158,14 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         __name(restoreOriginalCursorEdits, "restoreOriginalCursorEdits");
         function isInsideNoTranslateSubtree(el) {
-          if (!el || typeof el.closest !== "function") return false;
+          if (!el) return false;
+          if (typeof isHostIgnoredElement === "function") {
+            try {
+              if (isHostIgnoredElement(el)) return true;
+            } catch (_err) {
+            }
+          }
+          if (typeof el.closest !== "function") return false;
           return Boolean(el.closest(noTranslateSelector));
         }
         __name(isInsideNoTranslateSubtree, "isInsideNoTranslateSubtree");
@@ -5401,7 +5554,7 @@ var __agyKoTranslatorBundleExports = (() => {
       var { createAntigravityThinkingTranslator } = require_thinking_translator();
       var STYLE_ID = "agy-ko-thought-localizer-style";
       var ANTIGRAVITY_SELECTORS = Object.freeze({
-        noTranslateSubtree: '.agy-ko-thought-wrap, [data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"]',
+        noTranslateSubtree: '.agy-ko-thought-wrap, [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]',
         triggerLabelClass: "agy-ko-trigger-label",
         conversationViews: '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]',
         conversationViewFallbackList: Object.freeze([
@@ -6746,6 +6899,8 @@ var __agyKoTranslatorBundleExports = (() => {
       } = require_endpoint_validator();
       var { createLinkedAbort } = require_google_translate();
       var HEADER_NAME_REGEX = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
+      var SECRET_HEADER_RE = /^(?:authorization|proxy-authorization|x-api-key|api-key|x-goog-api-key|x-auth-token|x-access-token|x-secret|cookie)$/i;
+      var SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
       var FORBIDDEN_HEADER_NAMES = /* @__PURE__ */ new Set([
         "__proto__",
         "prototype",
@@ -6753,6 +6908,14 @@ var __agyKoTranslatorBundleExports = (() => {
         "host",
         "cookie",
         "cookie2",
+        "authorization",
+        "proxy-authorization",
+        "x-api-key",
+        "api-key",
+        "x-goog-api-key",
+        "x-auth-token",
+        "x-access-token",
+        "x-secret",
         "content-length",
         "transfer-encoding",
         "connection",
@@ -6782,7 +6945,7 @@ var __agyKoTranslatorBundleExports = (() => {
             throw new RangeError(`Invalid HTTP header name: "${rawName}"`);
           }
           const lower = name.toLowerCase();
-          if (FORBIDDEN_HEADER_NAMES.has(lower) || lower.startsWith("sec-") || lower.startsWith("proxy-")) {
+          if (FORBIDDEN_HEADER_NAMES.has(lower) || SECRET_HEADER_RE.test(lower) || lower.startsWith("sec-") || lower.startsWith("proxy-")) {
             throw new RangeError(`Forbidden HTTP header name: "${name}"`);
           }
           const val = String(rawVal ?? "");
@@ -6873,6 +7036,9 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         const label = sanitizeLabel(rawSpec.label, id);
         const allowRemoteHttps = Boolean(rawSpec.allowRemoteHttps);
+        if (SECRET_QUERY_RE.test(String(rawSpec.endpointUrl || ""))) {
+          throw new RangeError("Forbidden secret query parameter in custom provider endpointUrl");
+        }
         const parsedUrl = validateTranslationEndpointUrl(rawSpec.endpointUrl, { allowRemoteHttps });
         const method = rawSpec.method === void 0 ? "POST" : String(rawSpec.method).toUpperCase();
         if (method !== "POST") {
@@ -7054,25 +7220,30 @@ var __agyKoTranslatorBundleExports = (() => {
         const doc = win && win.document ? win.document : typeof document !== "undefined" ? document : null;
         if (!win || !doc) return null;
         const resolvedHostCap = (hostCapabilityArg && typeof hostCapabilityArg === "object" ? hostCapabilityArg : null) || (win && win.__ADDON_HOST_API__ && typeof win.__ADDON_HOST_API__ === "object" ? win.__ADDON_HOST_API__ : null);
+        const isHostManaged = Boolean(resolvedHostCap);
         if (win.__AGY_KO_TRANSLATOR_AUTO_MOUNT__ === false) {
-          win.__agyCreateKoTranslator = createKoTranslator;
+          if (!isHostManaged) {
+            win.__agyCreateKoTranslator = createKoTranslator;
+          }
           return null;
         }
         try {
           if (win.top && win.top !== win) {
-            win.__agyCreateKoTranslator = createKoTranslator;
+            if (!isHostManaged) {
+              win.__agyCreateKoTranslator = createKoTranslator;
+            }
             return null;
           }
         } catch (_err) {
           return null;
         }
-        if (win.__agyKoTranslator && typeof win.__agyKoTranslator.dispose === "function") {
+        if (!isHostManaged && win.__agyKoTranslator && typeof win.__agyKoTranslator.dispose === "function") {
           try {
             win.__agyKoTranslator.dispose();
           } catch (_err) {
           }
         }
-        const initialSettings = win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ && typeof win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ === "object" ? win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ : null;
+        const initialSettings = !isHostManaged && win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ && typeof win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ === "object" ? win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ : null;
         const instance = createKoTranslator({
           win,
           doc,
@@ -7080,15 +7251,14 @@ var __agyKoTranslatorBundleExports = (() => {
           hostCapability: resolvedHostCap,
           version: "2.1.0"
         });
-        win.__agyCreateKoTranslator = createKoTranslator;
-        win.__agyKoTranslator = instance;
+        if (!isHostManaged) {
+          win.__agyCreateKoTranslator = createKoTranslator;
+          win.__agyKoTranslator = instance;
+        }
         if (resolvedHostCap && typeof resolvedHostCap.onDispose === "function") {
           try {
             resolvedHostCap.onDispose(() => {
               instance.dispose();
-              if (win.__agyKoTranslator === instance) {
-                delete win.__agyKoTranslator;
-              }
             });
           } catch (_err) {
           }

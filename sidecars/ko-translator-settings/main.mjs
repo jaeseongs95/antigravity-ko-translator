@@ -181,8 +181,11 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
       return jsonResponse(403, { ok: false, error: 'FORBIDDEN_HOST' });
     }
     const origin = String(headers.origin || '').trim();
-    if (origin && !LOOPBACK_ORIGIN_RE.test(origin)) {
-      return jsonResponse(403, { ok: false, error: 'FORBIDDEN_ORIGIN' });
+    if (origin) {
+      const originAllowed = host ? isOriginMatchingHost(origin, host) : LOOPBACK_ORIGIN_RE.test(origin);
+      if (!originAllowed) {
+        return jsonResponse(403, { ok: false, error: 'FORBIDDEN_ORIGIN' });
+      }
     }
     return null;
   }

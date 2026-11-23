@@ -106,6 +106,15 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
     });
     assert.equal(badOrigin.status, 403);
 
+    // 2b. Cross-port loopback Origin -> 403 (enforces isOriginMatchingHost in validateLoopbackRequest)
+    const crossPortOrigin = handle({
+      method: 'POST',
+      urlPath: '/api/settings',
+      headers: { ...validHeaders, origin: 'http://127.0.0.1:9999' },
+      rawBody: JSON.stringify({ provider: 'google-translate' }),
+    });
+    assert.equal(crossPortOrigin.status, 403);
+
     // 3. External Host header -> 403 (blocks DNS rebinding)
     const badHost = handle({
       method: 'POST',

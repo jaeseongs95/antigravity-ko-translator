@@ -57,9 +57,12 @@ test('Clean-Slate Zero-Interference & AddonManifest.v1: zero legacy patch, app.a
   }
 });
 
-test('AddonManifest.v1 invariant: legacy host/dropin-loader.js is removed and package.json has zero @electron/asar dependency', () => {
+test('AddonManifest.v2 invariant: legacy host/dropin-loader.js, host/main-hook.js, dist/main-hook.js, and addon-manifest.v1.json are removed', () => {
   assert.equal(fs.existsSync(path.join(REPO_ROOT, 'host', 'dropin-loader.js')), false);
-  assert.equal(fs.existsSync(path.join(REPO_ROOT, 'addon-manifest.v1.json')), true);
+  assert.equal(fs.existsSync(path.join(REPO_ROOT, 'host', 'main-hook.js')), false);
+  assert.equal(fs.existsSync(path.join(REPO_ROOT, 'dist', 'main-hook.js')), false);
+  assert.equal(fs.existsSync(path.join(REPO_ROOT, 'addon-manifest.v1.json')), false);
+  assert.equal(fs.existsSync(path.join(REPO_ROOT, 'addon-manifest.v2.json')), true);
   const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
   assert.equal(Boolean(pkg.dependencies && pkg.dependencies['@electron/asar']), false);
 });

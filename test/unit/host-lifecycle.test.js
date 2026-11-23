@@ -27,15 +27,13 @@ function makeTempEnv() {
   fs.mkdirSync(agyDir, { recursive: true });
   fs.mkdirSync(path.join(pluginDir, 'dist'), { recursive: true });
   fs.writeFileSync(path.join(pluginDir, 'dist', 'renderer.js'), '// renderer\n', 'utf8');
-  fs.writeFileSync(path.join(pluginDir, 'dist', 'main-hook.js'), 'module.exports = {};\n', 'utf8');
   return {
     dir,
     pluginDir,
     paths: {
       PLUGIN_ID: 'ko-thought-translator',
-      SOURCE_MANIFEST_PATH: path.join(REPO_ROOT, 'addon-manifest.v1.json'),
+      SOURCE_MANIFEST_PATH: path.join(REPO_ROOT, 'addon-manifest.v2.json'),
       RENDERER_BUNDLE_PATH: path.join(pluginDir, 'dist', 'renderer.js'),
-      MAIN_HOOK_PATH: path.join(pluginDir, 'dist', 'main-hook.js'),
       ADDONS_DIR: path.join(agyDir, 'addons.d'),
       MANIFEST_PATH: path.join(agyDir, 'addons.d', 'ko-thought-translator.json'),
       ADDONS_LOCK_PATH: path.join(agyDir, 'addon-host-addons.lock'),
@@ -131,22 +129,34 @@ test('isPluginEnabled reads config.json read-only without mutating it', () => {
   }
 });
 
-test('host CLI --status is 100% read-only and --install/--uninstall/--rollback manage AddonManifest.v1 cleanly without touching app.asar', async () => {
+test('host CLI --status is 100% read-only and --install/--uninstall/--rollback manage AddonManifest.v2 cleanly without touching app.asar', async () => {
   const { dir, pluginDir, paths } = makeTempEnv();
   try {
     const before = buildStatusReport(paths);
-    assert.equal(before.manifestSchema, 'AddonManifest.v1');
+    assert.equal(before.manifestSchema, 'AddonManifest.v2');
     assert.equal(before.manifestRegistered, false);
     assert.equal(before.addonHostInstalled, false);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), false);
 
     // Simulate installed shared host loader
-    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V1\n', 'utf8');
+    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\n', 'utf8');
 
     const inst = await runCli(['--install'], paths);
     assert.equal(inst.status, 'INSTALLED');
     assert.equal(inst.addonHostInstalled, true);
+    assert.equal(inst.settingsInitialized, true);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), true);
+    assert.equal(fs.existsSync(paths.SETTINGS_PATH), true);
+    assert.match(inst.trustApproveHint, /addon-host trust approve ko-thought-translator/);
+
+    // Re-running --install MUST NOT overwrite existing user settings
+    saveTranslatorSettings({ enabled: false, provider: 'local-llm' }, paths);
+    const inst2 = await runCli(['--install'], paths);
+    assert.equal(inst2.settingsInitialized, false);
+    const preserved = readTranslatorSettings(paths, { strict: true });
+    assert.equal(preserved.enabled, false);
+    assert.equal(preserved.provider, 'local-llm');
+
     const afterInstall = buildStatusReport(paths);
     assert.equal(afterInstall.manifestRegistered, true);
     assert.equal(afterInstall.addonHostInstalled, true);

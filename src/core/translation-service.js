@@ -41,14 +41,17 @@ function createTranslationService({
   let desiredProviderId = normalizedDefaultId;
   let pendingSavedCustomProviderId = null;
 
-  const savedRaw = storage && typeof storage.getItem === 'function' ? storage.getItem(providerStorageKey) : null;
+  const hasProviderStorage =
+    Boolean(providerStorageKey && typeof providerStorageKey === 'string') &&
+    Boolean(storage && typeof storage.getItem === 'function');
+  const savedRaw = hasProviderStorage ? storage.getItem(providerStorageKey) : null;
   const savedNorm = savedRaw ? registry.normalizeId(savedRaw) : null;
   if (savedNorm) {
     desiredProviderId = savedNorm;
     if (!registry.hasProvider(savedNorm)) {
       pendingSavedCustomProviderId = savedNorm;
     }
-  } else if (storage && typeof storage.setItem === 'function') {
+  } else if (hasProviderStorage && typeof storage.setItem === 'function') {
     storage.setItem(providerStorageKey, desiredProviderId);
   }
 
@@ -72,7 +75,7 @@ function createTranslationService({
           if (type === 'register' && pendingSavedCustomProviderId && id === pendingSavedCustomProviderId) {
             desiredProviderId = id;
             pendingSavedCustomProviderId = null;
-            if (storage && typeof storage.setItem === 'function') {
+            if (hasProviderStorage && typeof storage.setItem === 'function') {
               storage.setItem(providerStorageKey, id);
             }
           }
@@ -227,7 +230,7 @@ function createTranslationService({
     const prevEffective = resolveEffectiveProvider();
     desiredProviderId = normId;
     pendingSavedCustomProviderId = null;
-    if (persist && storage && typeof storage.setItem === 'function') {
+    if (persist && hasProviderStorage && typeof storage.setItem === 'function') {
       storage.setItem(providerStorageKey, desiredProviderId);
     }
     const nextEffective = resolveEffectiveProvider();
@@ -271,7 +274,7 @@ function createTranslationService({
       if (desiredProviderId !== normId) {
         const prevEff = resolveEffectiveProvider();
         desiredProviderId = normId;
-        if (storage && typeof storage.setItem === 'function') {
+        if (hasProviderStorage && typeof storage.setItem === 'function') {
           storage.setItem(providerStorageKey, normId);
         }
         const nextEff = resolveEffectiveProvider();
@@ -289,7 +292,7 @@ function createTranslationService({
     }
     pendingSavedCustomProviderId = normId;
     desiredProviderId = normId;
-    if (storage && typeof storage.getItem === 'function' && !storage.getItem(providerStorageKey)) {
+    if (hasProviderStorage && typeof storage.setItem === 'function' && !storage.getItem(providerStorageKey)) {
       storage.setItem(providerStorageKey, normId);
     }
     notifySubscribers();

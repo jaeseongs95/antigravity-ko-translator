@@ -13,7 +13,7 @@ const BASE_EXCLUDED_SELECTOR =
   '[data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], ' +
   '[data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], ' +
   '[data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], ' +
-  '[data-addon-host-owner], [data-agy-no-translate="true"], [translate="no"], ' +
+  '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"], ' +
   '.agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, ' +
   '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
   'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
@@ -77,6 +77,7 @@ function createAntigravityUiLocalizer({
   catalog,
   translationService = null,
   extraExcludedSelector = null,
+  isHostIgnoredElement = null,
   isDisposed = () => false,
 } = {}) {
   const doc = targetDoc || (typeof document !== 'undefined' ? document : null);
@@ -84,12 +85,22 @@ function createAntigravityUiLocalizer({
   const effectiveTextExcludedSelector = `textarea, ${effectiveBaseExcludedSelector}`;
   const effectiveSubtreePruneSelector = effectiveTextExcludedSelector;
 
+  function isIgnoredByHost(el) {
+    if (typeof isHostIgnoredElement !== 'function' || !el) return false;
+    try {
+      return Boolean(isHostIgnoredElement(el));
+    } catch (_err) {
+      return false;
+    }
+  }
+
   function translateSync(raw) {
     return catalog && typeof catalog.translateSync === 'function' ? catalog.translateSync(raw) : null;
   }
 
   function isExcludedFromStaticUiLocalization(el, forAttributes = false, rootBoundary = null) {
     if (!el || typeof el.closest !== 'function') return true;
+    if (isIgnoredByHost(el)) return true;
     const selector = forAttributes ? effectiveBaseExcludedSelector : effectiveTextExcludedSelector;
     if (el.closest(selector)) {
       return true;
@@ -314,10 +325,13 @@ function createAntigravityUiLocalizer({
     if (!rootNode || !activeDoc || typeof activeDoc.createTreeWalker !== 'function') return;
     if (
       rootNode.nodeType === 1 &&
-      ((typeof rootNode.getAttribute === 'function' &&
-        (rootNode.getAttribute('data-agy-no-translate') === 'true' ||
-          rootNode.getAttribute('translate') === 'no' ||
-          rootNode.hasAttribute('data-addon-host-owner'))) ||
+      (isIgnoredByHost(rootNode) ||
+        (typeof rootNode.getAttribute === 'function' &&
+          (rootNode.getAttribute('data-agy-no-translate') === 'true' ||
+            rootNode.getAttribute('translate') === 'no' ||
+            rootNode.hasAttribute('data-addon-host-owner') ||
+            rootNode.hasAttribute('data-addon-host-slot') ||
+            rootNode.hasAttribute('data-addon-host-no-translate'))) ||
         (typeof rootNode.matches === 'function' && rootNode.matches(effectiveBaseExcludedSelector)))
     ) {
       return;
@@ -330,6 +344,9 @@ function createAntigravityUiLocalizer({
         if (!node) return 2;
         if (node.nodeType === 1) {
           if (node !== rootNode) {
+            if (isIgnoredByHost(node)) {
+              return 2;
+            }
             if (typeof node.matches === 'function' && node.matches(effectiveSubtreePruneSelector)) {
               return 2;
             }

@@ -1,11 +1,15 @@
 'use strict';
 
 /**
- * Clean-Slate Composition Root for Antigravity Desktop Korean Thought & UI Translator.
+ * Clean-Slate Composition Root for Antigravity Desktop Korean Thought & UI Translator (v2.1.0).
  *
- * Wires the Antigravity HostUiAdapter and Default Provider Bundle into the
- * vendor-neutral `createTranslatorRuntime`, exposing `createKoTranslator` both
- * as CommonJS export and as `window.__agyKoTranslator` in top-frame Electron Hub windows.
+ * Security Invariant (V2 — World 998 Isolation):
+ * - When executed inside `antigravity-native-addon-host` (`addonHost` capability handle present),
+ *   the runtime instance is strictly closure-scoped: ZERO mutable globals (`window.__agyKoTranslator`
+ *   / `window.__agyCreateKoTranslator`) are exposed on shared World 998 `window`, and settings come
+ *   exclusively from `addonHost.getSettings()` / `addonHost.onSettingsChange(...)`.
+ * - Standalone browser/VM invocations without `addonHost` retain `window.__agyCreateKoTranslator`
+ *   and `window.__agyKoTranslator` for isolated tests.
  */
 
 const { createTranslatorRuntime } = require('./runtime/bootstrap');
@@ -32,31 +36,39 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
   const resolvedHostCap =
     (hostCapabilityArg && typeof hostCapabilityArg === 'object' ? hostCapabilityArg : null) ||
     (win && win.__ADDON_HOST_API__ && typeof win.__ADDON_HOST_API__ === 'object' ? win.__ADDON_HOST_API__ : null);
+  const isHostManaged = Boolean(resolvedHostCap);
 
   // Never run inside non-top frames (e.g. Sidecar AUX_PANE iframes) unless explicitly mounted by caller.
   if (win.__AGY_KO_TRANSLATOR_AUTO_MOUNT__ === false) {
-    win.__agyCreateKoTranslator = createKoTranslator;
+    if (!isHostManaged) {
+      win.__agyCreateKoTranslator = createKoTranslator;
+    }
     return null;
   }
 
   try {
     if (win.top && win.top !== win) {
-      win.__agyCreateKoTranslator = createKoTranslator;
+      if (!isHostManaged) {
+        win.__agyCreateKoTranslator = createKoTranslator;
+      }
       return null;
     }
   } catch (_err) {
     return null;
   }
 
-  // Cleanly dispose any previous instance on hot reload.
-  if (win.__agyKoTranslator && typeof win.__agyKoTranslator.dispose === 'function') {
+  // In standalone (non-host) mode, cleanly dispose any previous instance on hot reload.
+  if (!isHostManaged && win.__agyKoTranslator && typeof win.__agyKoTranslator.dispose === 'function') {
     try {
       win.__agyKoTranslator.dispose();
     } catch (_err) {}
   }
 
+  // Under host v2.1.0+, ignore mutable window globals; settings come exclusively from addonHost.getSettings().
   const initialSettings =
-    win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ && typeof win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ === 'object'
+    !isHostManaged &&
+    win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ &&
+    typeof win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ === 'object'
       ? win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__
       : null;
 
@@ -67,16 +79,16 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
     hostCapability: resolvedHostCap,
     version: '2.1.0',
   });
-  win.__agyCreateKoTranslator = createKoTranslator;
-  win.__agyKoTranslator = instance;
+
+  if (!isHostManaged) {
+    win.__agyCreateKoTranslator = createKoTranslator;
+    win.__agyKoTranslator = instance;
+  }
 
   if (resolvedHostCap && typeof resolvedHostCap.onDispose === 'function') {
     try {
       resolvedHostCap.onDispose(() => {
         instance.dispose();
-        if (win.__agyKoTranslator === instance) {
-          delete win.__agyKoTranslator;
-        }
       });
     } catch (_err) {}
   }
@@ -87,7 +99,7 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   // Capture the per-plugin scoped capability handle supplied by antigravity-native-addon-host's
-  // `(function(addonHost){ ... })(__addonHandle)` wrapper when present.
+  // `(function(addonHost){ ... })(__h)` wrapper when present.
   // eslint-disable-next-line no-undef
   const detectedHostCap = typeof addonHost !== 'undefined' ? addonHost : null;
   mountIfBrowser(window, detectedHostCap);

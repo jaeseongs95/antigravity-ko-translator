@@ -1,24 +1,26 @@
 'use strict';
 
 /**
- * Explicit, Zero-Daemon Addon CLI for `ko-thought-translator` (AddonManifest.v1).
+ * Explicit, Zero-Daemon Addon CLI for `ko-thought-translator` (AddonManifest.v2).
  *
  * Zero `app.asar` mutation: `app.asar` install/rollback belongs solely to
- * `antigravity-native-addon-host`. This CLI manages ONLY this plugin's manifest
- * registration in `<appDir>/addons.d/ko-thought-translator.json` and isolated settings.
+ * `antigravity-native-addon-host` (>= v2.1.0). This CLI manages ONLY this plugin's
+ * manifest registration in `<appDir>/addons.d/ko-thought-translator.json` and isolated settings.
  *
  * Commands:
  *   --status     Read-only JSON status report (0 file mutations)
- *   --install    Register `addons.d/ko-thought-translator.json` (AddonManifest.v1)
+ *   --install    Register `addons.d/ko-thought-translator.json` (AddonManifest.v2) and initialize missing settings
  *   --uninstall  Unregister manifest & clean `ko_translator_settings.json`
  *   --rollback   Unregister this plugin's manifest & settings (delegates `app.asar` rollback to addon-host)
  */
 
+const fs = require('node:fs');
 const { resolveHostPaths } = require('./paths');
 const { ANTIGRAVITY_HOST_PROFILE } = require('./profiles/antigravity');
 const {
   isPluginEnabled,
   readTranslatorSettings,
+  saveTranslatorSettings,
   removeTranslatorSettings,
 } = require('./config-store');
 const {
@@ -30,7 +32,9 @@ const {
 } = require('./addon-registry');
 
 const HOST_INSTALL_HINT =
-  'Install the shared host via antigravity-native-addon-host (`addon-host --install`) to load AddonManifest.v1 plugins.';
+  'Install/upgrade antigravity-native-addon-host (>= v2.1.0) via `addon-host --upgrade` and approve trust via `addon-host trust approve ko-thought-translator` (using real copied plugin files, zero symlinks).';
+const TRUST_APPROVE_HINT =
+  'Run `addon-host trust approve ko-thought-translator` after installing/updating real copied files in `~/.gemini/config/plugins/ko-thought-translator/`.';
 
 function buildStatusReport(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROFILE) {
   const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
@@ -55,7 +59,7 @@ function buildStatusReport(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROF
   }
   return {
     version: '2.1.0',
-    manifestSchema: 'AddonManifest.v1',
+    manifestSchema: 'AddonManifest.v2',
     patchMarker: activeProfile.patchMarker,
     pluginEnabled: isPluginEnabled(p.CONFIG_JSON_PATH, activeProfile.pluginId),
     manifestRegistered: Boolean(manifestValidation.ok),
@@ -91,13 +95,20 @@ async function runCli(argv = process.argv.slice(2), pathOverrides = null, profil
       process.exitCode = 1;
       return out;
     }
+    let settingsInitialized = false;
+    if (p.SETTINGS_PATH && !fs.existsSync(p.SETTINGS_PATH)) {
+      saveTranslatorSettings({}, p);
+      settingsInitialized = true;
+    }
     const addonHostInstalled = isAddonHostLoaderPresent(p.LOADER_SCRIPT_PATH);
     const out = {
       status: 'INSTALLED',
       manifestPath: reg.manifestPath,
       manifest: reg.manifest,
       manifestValidation: reg.manifestValidation,
+      settingsInitialized,
       addonHostInstalled,
+      trustApproveHint: TRUST_APPROVE_HINT,
       ...(addonHostInstalled ? {} : { hostInstallHint: HOST_INSTALL_HINT }),
     };
     process.stdout.write(JSON.stringify(out, null, 2) + '\n');
