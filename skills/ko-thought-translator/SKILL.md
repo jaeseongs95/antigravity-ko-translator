@@ -1,57 +1,28 @@
 ---
 name: ko-thought-translator
-description: Antigravity 2.0의 Thinking(추론 과정) 및 고정 UI 한글 번역 패치 상태를 점검하거나 수동 재적용할 때 사용한다.
+description: Antigravity 2.0 데스크톱 네이티브 앱 전용 한국어 Thinking 번역 및 영문 고정 UI 한글화 플러그인 관리·진단 스킬입니다.
 ---
 
-# Antigravity 2.0 한국어 번역기 스킬 (`ko-thought-translator`)
+# Antigravity 2.0 한국어 번역기 (데스크톱 전용 · v2.1.0 · AddonManifest.v2)
 
-사용자가 Thinking(추론 과정) 및 고정 UI 한글 번역 상태를 확인·수정·재적용하려고 할 때 이 스킬을 사용한다.
-- **실시간 비동기 번역**: 오직 Thinking 본문(`.cursor-edit`) 및 동적 질문 위젯에만 적용(코드·경로·식별자 원문 보호).
-- **0ms 정적 사전 치환 (`STATIC_UI_MAP`)**: 상단 메뉴, 좌측 사이드바, 우측 패널 탭, 설정/맞춤 설정 고정 항목, 권한 승인 창에만 적용.
-- **번역 제외(원문 유지)**: 하단 상태바(`.agy-ctx-statusbar`), 입력창 모델/권한 선택 컨트롤, 모델 드롭다운 `New` 배지, MCP/플러그인/모델 등 모든 고유명사.
+## 역할 및 안전 경계
 
-## 주요 파일 경로
-- **렌더러 모듈 디렉터리**: `~/.gemini/config/plugins/ko-thought-translator/scripts/renderer/` (`01-bootstrap-and-cache.js` ~ `08-dom-observer.js`)
-- **호스트 모듈 디렉터리**: `~/.gemini/config/plugins/ko-thought-translator/scripts/host/` (`paths.js`, `local-llm-service.js`, `settings-storage.js`, `bundle-injector.js`)
-- **조립된 렌더러 번들**: `~/.gemini/config/plugins/ko-thought-translator/scripts/ko_thought_autoinject.js`
-- **패치 및 업데이트 자동 복구 런처**: `~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js`
-- **통합 자동 주입 번들**: `~/.gemini/antigravity/statusbar_autoinject.js`
-- **ASAR & CDP 자동 패처**: `~/.gemini/antigravity/ensure_statusbar_patch.js`
+- **단일 책임**: Antigravity 데스크톱 네이티브 앱의 영문 `Thinking` 블록과 고정 UI 텍스트를 순수 읽기 전용 DOM 오버레이로 한국어 표시합니다.
+- **호스트 불간섭**: `mainHook`과 `app.asar` 직접 패치가 전혀 없는 렌더러 전용(`capabilities: ["renderer"]`) 플러그인입니다. `fetch`, `lsClient`, Protobuf, `React Fiber`, `Angular`, `Worker`, `AudioWorklet`, `iframe`에 개입하지 않으며, 호스트 `app_storage.json`이나 타 플러그인 슬롯(`status-bar` 등)을 건드리지 않습니다.
+- **신뢰 경계 및 `settingsBridge`**: `antigravity-native-addon-host` `v2.1.0` 이상의 단방향 읽기 전용 `settingsBridge`를 통해 `~/.gemini/antigravity/ko_translator_settings.json`을 수신합니다. `localStorage`는 번역 캐시 전용이며 보안 설정(프로바이더·엔드포인트·활성 여부) 권한을 갖지 않습니다.
+- **코드·diff 보호**: 표준 CSS 선택자, `hasExcludedCodeDataAttrPrefix`, `addonHost.isElementInsideIgnored()`로 코드 블록, diff 뷰어, 터미널, 입력창, 에이전트 본문 응답 및 타 플러그인 Shadow DOM을 번역에서 제외합니다.
 
-## 상태 점검 및 즉시 적용 명령
-```powershell
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --worker
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --status
-```
+## 공식 Sidecar 설정 패널
 
-## Thinking 사전 번역(Pre-translate) 옵션 켜기 / 끄기
-- 기본값: 꺼짐(`off`)
-```powershell
-# 사전 번역 끄기 (기본)
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --pretranslate off
+- 설정 UI는 Antigravity 공식 보조 패널(`sidecars/ko-translator-settings/sidecar.json`)에서 제공합니다:
+  - `[한글 번역 설정](sidecar://ko-thought-translator/ko-translator-settings/)`
+- 설정은 전용 파일 `~/.gemini/antigravity/ko_translator_settings.json`에만 저장되며 호스트 `settingsBridge`가 실행 중인 창에 실시간 반영합니다.
 
-# 사전 번역 켜기
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --pretranslate on
-```
-- 런타임 제어: `window.__agySetPretranslate(true)` / `window.__agySetPretranslate(false)`
+## 설치 및 명시적 CLI 명령
 
-## 번역 어댑터(Provider) 전환 (`google-translate` / `local-llm`)
-- 기본값: `google-translate`
-```powershell
-# Google 번역 어댑터 사용 (기본, 로컬 LLM 서버 자동 종료)
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --provider google-translate
-
-# 로컬 LLM 어댑터 사용
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --provider local-llm
-```
-- 런타임 제어 및 커스텀 어댑터 등록:
-  - `window.__agySetTranslationProvider('local-llm' | 'google-translate')`
-  - `window.__agyGetTranslationProvider()`
-  - `window.__agyRegisterTranslationAdapter(id, { maxConcurrency, translate })`
-  - `window.__agyRetranslateVisibleThoughts(clearCache)` (현재 화면 Thinking 즉시 재번역)
-
-## Antigravity 2.0 네이티브 앱 내 설정창 진입점
-- **네이티브 설정창 (`설정` 버튼)**:
-  - 좌측 설정 사이드바 메뉴의 **`한글 번역` 탭**을 클릭하면 전용 설정 페이지(번역 어댑터 선택, `Thinking (추론 과정) 번역` ON/OFF, `Thinking 사전 번역` ON/OFF, 화면 재번역/캐시 초기화)가 열림.
-  - 채팅 입력창 하단 모델 선택 드롭다운 및 `설정 > 모양 및 테마(Appearance) > 채팅(Chat)`에는 **`Thinking (추론 과정) 표시` ON/OFF** 전용 스위치가 제공됨.
-  - 설정창에서 `Google 번역` 어댑터로 전환하면 로컬 LLM 서버가 자동으로 종료되어 GPU/메모리를 반환하고, `로컬 LLM` 어댑터로 전환하면 헤드리스로 자동 재기동됨.
+- 실제 파일 설치 경로(심볼릭 링크 금지): `~/.gemini/config/plugins/ko-thought-translator/`
+- 호스트 신뢰 승인(최초 설치/업데이트 후 1회): `addon-host trust approve ko-thought-translator`
+- 상태 확인 (읽기 전용): `node ./scripts/ensure_ko_thought_patch.js --status`
+- 매니페스트 등록 및 기본 설정 초기화: `node ./scripts/ensure_ko_thought_patch.js --install`
+- 매니페스트·설정 제거: `node ./scripts/ensure_ko_thought_patch.js --uninstall`
+- 매니페스트·설정 원복 (공유 호스트 보존): `node ./scripts/ensure_ko_thought_patch.js --rollback`

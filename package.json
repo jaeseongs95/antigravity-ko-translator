@@ -1,13 +1,27 @@
 {
   "name": "antigravity-ko-translator",
-  "version": "1.2.39",
-  "description": "Real-time Korean localization for Antigravity 2.0 Thinking blocks and static UI with modular SOLID architecture and pure StatusBarAdapter integration.",
+  "version": "2.1.0",
+  "description": "Antigravity Desktop Native App Korean Thinking & Static UI Translator (AddonManifest.v2 Renderer-Only Plugin + Host settingsBridge + Pure Read-Only DOM Overlay + Official Sidecar Settings).",
   "private": true,
   "scripts": {
-    "test": "node --test test/ko-translator.test.js",
-    "sync:mirrors": "node ./scripts/ensure_ko_thought_patch.js --sync-mirrors",
-    "patch": "node ./scripts/ensure_ko_thought_patch.js --worker",
-    "status": "node ./scripts/ensure_ko_thought_patch.js --status"
+    "build": "node ./scripts/build.js",
+    "build:check": "node ./scripts/build.js --check",
+    "test:unit": "node --test test/unit/*.test.js",
+    "test": "node ./scripts/build.js --check && node --test test/unit/*.test.js",
+    "install:addon": "node ./scripts/ensure_ko_thought_patch.js --install",
+    "install:loader": "node ./scripts/ensure_ko_thought_patch.js --install",
+    "status": "node ./scripts/ensure_ko_thought_patch.js --status",
+    "uninstall:addon": "node ./scripts/ensure_ko_thought_patch.js --uninstall",
+    "uninstall:loader": "node ./scripts/ensure_ko_thought_patch.js --uninstall",
+    "rollback": "node ./scripts/ensure_ko_thought_patch.js --rollback"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "ipaddr.js": "^2.5.0",
+    "proper-lockfile": "^4.1.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "happy-dom": "^21.0.4"
+  }
 }

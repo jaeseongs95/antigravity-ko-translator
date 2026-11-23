@@ -1,0 +1,39 @@
+{
+  "$schema": "https://github.com/jaeseongs95/antigravity-native-addon-host/schemas/addon-manifest.v2.schema.json",
+  "schemaVersion": 2,
+  "pluginId": "ko-thought-translator",
+  "displayName": "Antigravity Korean Thought & UI Translator",
+  "version": "2.1.0",
+  "trustLevel": "trusted",
+  "compatibility": {
+    "hostProfile": "antigravity-desktop",
+    "minHostVersion": "2.1.0"
+  },
+  "capabilities": [
+    "renderer"
+  ],
+  "entry": {
+    "rendererScript": "dist/renderer.js"
+  },
+  "settingsBridge": {
+    "fileName": "ko_translator_settings.json",
+    "maxBytes": 65536
+  },
+  "uiSlots": [
+    {
+      "slot": "document-transform",
+      "slotId": "ko-translator.native-app",
+      "exclusive": false,
+      "scope": "native-host-only",
+      "shadow": false
+    }
+  ],
+  "isolation": {
+    "noTranslate": false,
+    "i18nSelfManaged": true,
+    "respectsNoTranslate": true,
+    "storageNamespace": "ko-thought-translator",
+    "ipcChannelPrefix": "ko-translator:"
+  },
+  "loadOrder": 200
+}

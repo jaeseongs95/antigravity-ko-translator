@@ -2,11 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop, 'fix/**', 'feature/**', 'release/**', 'hotfix/**']
-    tags: ['v*']
+    branches: [main, develop, 'feature/**']
   pull_request:
-    branches: [main, develop, 'fix/**', 'feature/**', 'release/**', 'hotfix/**']
-  workflow_dispatch:
+    branches: [main, develop]
 
 jobs:
   test:
@@ -16,11 +14,12 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Run unit and contract tests
-        run: node --test test/ko-translator.test.js
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify deterministic bundle and run full test suite
+        run: npm test
