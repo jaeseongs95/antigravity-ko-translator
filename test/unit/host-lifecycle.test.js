@@ -79,10 +79,25 @@ test('config-store persists settings atomically to ko_translator_settings.json a
     assert.equal(removeTranslatorSettings(paths), true);
     assert.equal(fs.existsSync(paths.SETTINGS_PATH), false);
 
-    // Corrupted settings file MUST fail closed on save (never silently reset to google-translate)
+    // Corrupted settings file MUST fail closed on normal save (never silently reset to google-translate)
     fs.writeFileSync(paths.SETTINGS_PATH, '{corrupted-user-settings', 'utf8');
     assert.throws(() => saveTranslatorSettings({ showThinking: false }, paths), /SETTINGS_FILE_CORRUPTED/);
     assert.equal(fs.readFileSync(paths.SETTINGS_PATH, 'utf8'), '{corrupted-user-settings');
+
+    // I3: Explicit allowCorruptedRecovery:true overwrites corrupted file cleanly with validated payload
+    const recovered = saveTranslatorSettings(
+      { provider: 'local-llm', showThinking: false },
+      paths,
+      { allowCorruptedRecovery: true }
+    );
+    assert.equal(recovered.provider, 'local-llm');
+    assert.equal(recovered.showThinking, false);
+    assert.equal(readTranslatorSettings(paths, { strict: true }).provider, 'local-llm');
+
+    // I3: Prototype-polluted JSON on disk MUST fail closed under strict read
+    fs.writeFileSync(paths.SETTINGS_PATH, '{"__proto__":{"polluted":true},"provider":"local-llm"}', 'utf8');
+    assert.throws(() => readTranslatorSettings(paths, { strict: true }), /ERR_UNSAFE_JSON_PROTO_KEY/);
+    assert.equal(({}).polluted, undefined);
     fs.unlinkSync(paths.SETTINGS_PATH);
 
     // Non-array customProviders and secret headers/query params MUST fail closed
@@ -138,12 +153,20 @@ test('host CLI --status is 100% read-only and --install/--uninstall/--rollback m
     assert.equal(before.addonHostInstalled, false);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), false);
 
-    // Simulate installed shared host loader
-    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\n', 'utf8');
+    // Simulate installed shared host loader with older vs compatible hostVersion (I7)
+    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\nconst HOST_CFG = {"hostVersion":"2.0.0"};\n', 'utf8');
+    const oldStatus = buildStatusReport(paths);
+    assert.equal(oldStatus.addonHostInstalled, true);
+    assert.equal(oldStatus.addonHostVersion, '2.0.0');
+    assert.equal(oldStatus.addonHostCompatible, false);
+
+    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\nconst HOST_CFG = {"hostVersion":"2.1.1"};\n', 'utf8');
 
     const inst = await runCli(['--install'], paths);
     assert.equal(inst.status, 'INSTALLED');
     assert.equal(inst.addonHostInstalled, true);
+    assert.equal(inst.addonHostVersion, '2.1.1');
+    assert.equal(inst.addonHostCompatible, true);
     assert.equal(inst.settingsInitialized, true);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), true);
     assert.equal(fs.existsSync(paths.SETTINGS_PATH), true);

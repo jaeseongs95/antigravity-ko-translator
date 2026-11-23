@@ -315,10 +315,33 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
         const loopbackHost = `127.0.0.1:${port}`;
         const loopbackOrigin = `http://127.0.0.1:${port}`;
 
-        // GET / and GET /preload.js succeed with loopback Host
-        const idxRes = await httpReq(port, { reqPath: '/index.html', headers: { host: loopbackHost } });
-        assert.equal(idxRes.statusCode, 200, `${label}: GET /index.html`);
+        // I5: Unauthenticated GET /index.html and GET /api/settings MUST be rejected (401) when UI token is set
+        const unauthPage = await httpReq(port, { reqPath: '/index.html', headers: { host: loopbackHost } });
+        assert.equal(unauthPage.statusCode, 401, `${label}: unauthenticated GET /index.html must be rejected`);
+        const unauthApi = await httpReq(port, { reqPath: '/api/settings', headers: { host: loopbackHost } });
+        assert.equal(unauthApi.statusCode, 401, `${label}: unauthenticated GET /api/settings must be rejected`);
+        const queryApiBypass = await httpReq(port, {
+          reqPath: `/api/settings?token=${encodeURIComponent(uiToken)}`,
+          headers: { host: loopbackHost },
+        });
+        assert.equal(queryApiBypass.statusCode, 401, `${label}: GET /api/settings query ?token= bypass must be rejected`);
+
+        // GET /index.html succeeds with ?token= query (webview entry) and returns CSP nonce + AddonManifest.v2 badge
+        const idxRes = await httpReq(port, {
+          reqPath: `/index.html?token=${encodeURIComponent(uiToken)}`,
+          headers: { host: loopbackHost },
+        });
+        assert.equal(idxRes.statusCode, 200, `${label}: GET /index.html?token=`);
         assert.match(idxRes.body, /ko-csrf-token/);
+        assert.match(idxRes.body, /AddonManifest\.v2/);
+        assert.match(String(idxRes.headers['content-security-policy'] || ''), /script-src 'nonce-[^']+'/);
+
+        // GET /api/settings succeeds with x-sidecar-token header
+        const authApi = await httpReq(port, {
+          reqPath: '/api/settings',
+          headers: { host: loopbackHost, 'x-sidecar-token': uiToken },
+        });
+        assert.equal(authApi.statusCode, 200, `${label}: authenticated GET /api/settings succeeds`);
 
         const preloadRes = await httpReq(port, { reqPath: '/preload.js', headers: { host: loopbackHost } });
         assert.equal(preloadRes.statusCode, 200, `${label}: GET /preload.js must pass through`);
@@ -419,6 +442,38 @@ test('F5: Official Sidecar enforces CSRF, loopback Origin/Host, Content-Type, 41
         });
         assert.equal(okPost.statusCode, 200, `${label}: valid POST /api/settings succeeds`);
         assert.equal(JSON.parse(okPost.body).settings.provider, 'google-translate');
+
+        // I3: Corrupted settings file recovery via GUI resetCorrupted:true
+        fs.writeFileSync(path.join(agyDir, 'ko_translator_settings.json'), '{broken-json-on-disk', 'utf8');
+        const blockedNormalSave = await httpReq(port, {
+          method: 'POST',
+          reqPath: '/api/settings',
+          headers: {
+            host: loopbackHost,
+            origin: loopbackOrigin,
+            'content-type': 'application/json',
+            'x-sidecar-token': uiToken,
+            'x-ko-csrf-token': handle.csrfToken,
+          },
+          body: JSON.stringify({ provider: 'local-llm', translateThinking: true }),
+        });
+        assert.equal(blockedNormalSave.statusCode, 400, `${label}: normal POST without resetCorrupted must fail closed`);
+
+        const recoveredSave = await httpReq(port, {
+          method: 'POST',
+          reqPath: '/api/settings',
+          headers: {
+            host: loopbackHost,
+            origin: loopbackOrigin,
+            'content-type': 'application/json',
+            'x-sidecar-token': uiToken,
+            'x-ko-csrf-token': handle.csrfToken,
+          },
+          body: JSON.stringify({ resetCorrupted: true, provider: 'local-llm', translateThinking: true }),
+        });
+        assert.equal(recoveredSave.statusCode, 200, `${label}: resetCorrupted:true must recover corrupted settings via GUI`);
+        assert.equal(JSON.parse(recoveredSave.body).settings.provider, 'local-llm');
+        assert.equal(JSON.parse(recoveredSave.body).settingsCorrupted, false);
       } finally {
         if (typeof sdkSrv.closeAllConnections === 'function') sdkSrv.closeAllConnections();
         await app.close();

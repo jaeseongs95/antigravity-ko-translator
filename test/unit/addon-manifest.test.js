@@ -137,6 +137,31 @@ test('addon-registry enforces v2 path confinement, rejects mainHook, restricted 
     );
     assert.equal(badNoTranslate.ok, false);
     assert.equal(badNoTranslate.reason, 'ERR_DOCUMENT_TRANSFORM_MUST_RESPECT_NO_TRANSLATE');
+
+    // 7. I7: Windows DOS device names in settingsBridge.fileName MUST be rejected
+    for (const dosName of ['nul.json', 'con.json', 'com1.json', 'lpt9.json']) {
+      const badDos = validateAddonManifestContract(
+        { ...baseManifest, settingsBridge: { fileName: dosName, maxBytes: 65536 } },
+        pluginsRoot,
+        { checkFilesExist: false }
+      );
+      assert.equal(badDos.ok, false, `DOS name ${dosName} must be rejected`);
+      assert.equal(badDos.reason, 'ERR_INVALID_SETTINGS_BRIDGE');
+    }
+
+    // 8. I7: compatibility.minHostVersion SemVer comparison against hostVersion
+    const tooOldHost = validateAddonManifestContract(baseManifest, pluginsRoot, {
+      hostVersion: '2.0.9',
+      checkFilesExist: false,
+    });
+    assert.equal(tooOldHost.ok, false);
+    assert.equal(tooOldHost.reason, 'ERR_HOST_VERSION_TOO_OLD');
+
+    const okHost = validateAddonManifestContract(baseManifest, pluginsRoot, {
+      hostVersion: '2.1.1',
+      checkFilesExist: false,
+    });
+    assert.equal(okHost.ok, true);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

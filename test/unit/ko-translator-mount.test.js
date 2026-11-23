@@ -748,6 +748,61 @@ test('AddonManifest.v2 capability handle: settingsBridge push, fail-closed missi
     assert.equal(stRot.provider, 'local-llm');
     assert.equal(externalFetchCount, 0);
     rotTr.dispose();
+
+    // Q3: Missing provider key in host settingsBridge snapshot MUST fail closed (MISSING_PROVIDER_ID, zero Google calls)
+    const missingProvCap = {
+      getSettings: () => ({ status: 'ok', data: { enabled: true, translateStaticUi: true } }),
+      onSettingsChange: () => () => {},
+    };
+    const missingProvTr = createKoTranslator({
+      win: port2.win,
+      doc: port2.doc,
+      hostCapability: missingProvCap,
+      fetchFn: async () => {
+        externalFetchCount += 1;
+        return { ok: true, json: async () => [[['외부전송금지']]] };
+      },
+    });
+    const stNoProv = missingProvTr.start();
+    assert.equal(stNoProv.enabled, false, 'Missing provider key in settingsBridge snapshot must fail closed');
+    assert.equal(stNoProv.provider, null);
+    assert.equal(stNoProv.lastError, 'MISSING_PROVIDER_ID');
+    assert.equal(externalFetchCount, 0);
+    missingProvTr.dispose();
+
+    // NB-Q3-1: Non-string provider value MUST fail closed as INVALID_PROVIDER_ID (both initial snapshot AND live push)
+    let liveSettingsCb = null;
+    const nonStringProvCap = {
+      getSettings: () => ({ status: 'ok', data: { enabled: true, provider: 12345 } }),
+      onSettingsChange: (cb) => {
+        liveSettingsCb = cb;
+        return () => {
+          liveSettingsCb = null;
+        };
+      },
+    };
+    const nonStrTr = createKoTranslator({
+      win: port2.win,
+      doc: port2.doc,
+      hostCapability: nonStringProvCap,
+      fetchFn: async () => {
+        externalFetchCount += 1;
+        return { ok: true, json: async () => [[['외부전송금지']]] };
+      },
+    });
+    const stNonStr = nonStrTr.start();
+    assert.equal(stNonStr.enabled, false);
+    assert.equal(stNonStr.provider, null);
+    assert.equal(stNonStr.lastError, 'INVALID_PROVIDER_ID:12345');
+    assert.ok(typeof liveSettingsCb === 'function');
+    liveSettingsCb({ status: 'ok', data: { enabled: true, provider: 'local-llm' } });
+    assert.equal(nonStrTr.getStatus().enabled, true);
+    liveSettingsCb({ status: 'ok', data: { enabled: true, provider: 99999 } });
+    assert.equal(nonStrTr.getStatus().enabled, false);
+    assert.equal(nonStrTr.getStatus().provider, null);
+    assert.equal(nonStrTr.getStatus().lastError, 'INVALID_PROVIDER_ID:99999');
+    assert.equal(externalFetchCount, 0);
+    nonStrTr.dispose();
   } finally {
     port2.cleanup();
   }
