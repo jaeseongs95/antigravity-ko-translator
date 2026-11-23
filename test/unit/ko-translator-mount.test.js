@@ -770,10 +770,16 @@ test('AddonManifest.v2 capability handle: settingsBridge push, fail-closed missi
     assert.equal(externalFetchCount, 0);
     missingProvTr.dispose();
 
-    // NB-Q3-1: Non-string provider value MUST fail closed as INVALID_PROVIDER_ID
+    // NB-Q3-1: Non-string provider value MUST fail closed as INVALID_PROVIDER_ID (both initial snapshot AND live push)
+    let liveSettingsCb = null;
     const nonStringProvCap = {
       getSettings: () => ({ status: 'ok', data: { enabled: true, provider: 12345 } }),
-      onSettingsChange: () => () => {},
+      onSettingsChange: (cb) => {
+        liveSettingsCb = cb;
+        return () => {
+          liveSettingsCb = null;
+        };
+      },
     };
     const nonStrTr = createKoTranslator({
       win: port2.win,
@@ -788,6 +794,13 @@ test('AddonManifest.v2 capability handle: settingsBridge push, fail-closed missi
     assert.equal(stNonStr.enabled, false);
     assert.equal(stNonStr.provider, null);
     assert.equal(stNonStr.lastError, 'INVALID_PROVIDER_ID:12345');
+    assert.ok(typeof liveSettingsCb === 'function');
+    liveSettingsCb({ status: 'ok', data: { enabled: true, provider: 'local-llm' } });
+    assert.equal(nonStrTr.getStatus().enabled, true);
+    liveSettingsCb({ status: 'ok', data: { enabled: true, provider: 99999 } });
+    assert.equal(nonStrTr.getStatus().enabled, false);
+    assert.equal(nonStrTr.getStatus().provider, null);
+    assert.equal(nonStrTr.getStatus().lastError, 'INVALID_PROVIDER_ID:99999');
     assert.equal(externalFetchCount, 0);
     nonStrTr.dispose();
   } finally {
