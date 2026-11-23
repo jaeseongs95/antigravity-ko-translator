@@ -13,7 +13,7 @@ const BASE_EXCLUDED_SELECTOR =
   '[data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], ' +
   '[data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], ' +
   '[data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], ' +
-  '[data-agy-no-translate="true"], .agy-ctx-statusbar, .agy-ctx-menu, #agy-ctx-debug-modal, .agy-ctx-modal-backdrop, ' +
+  '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"], ' +
   '.agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, ' +
   '[data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], ' +
   'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], ' +
@@ -24,9 +24,7 @@ const BASE_EXCLUDED_SELECTOR =
 
 const TEXT_EXCLUDED_SELECTOR = 'textarea, ' + BASE_EXCLUDED_SELECTOR;
 
-const STATIC_UI_SUBTREE_PRUNE_SELECTOR =
-  TEXT_EXCLUDED_SELECTOR +
-  ', #agy-mcp-manager-modal-backdrop, #agy-mcp-edit-popup-backdrop, #agy-mcp-oauth-connect-backdrop, #agy-mcp-settings-pane';
+const STATIC_UI_SUBTREE_PRUNE_SELECTOR = TEXT_EXCLUDED_SELECTOR;
 
 const EXCLUDED_CODE_DATA_ATTR_PREFIX_REGEX =
   /^data-(?:line-|quotable|diff-|code-|token-|syntax-|file-path|file-uri|symbol-|lsp-)/i;
@@ -60,13 +58,41 @@ function isExcludedByFontMonoInheritance(el) {
   return true;
 }
 
+function mergeExcludedSelector(baseSelector, extraSelector, doc) {
+  if (typeof extraSelector !== 'string' || !extraSelector.trim()) return baseSelector;
+  const candidate = `${baseSelector}, ${extraSelector.trim()}`;
+  if (doc && typeof doc.querySelector === 'function') {
+    try {
+      doc.querySelector(extraSelector.trim());
+      return candidate;
+    } catch (_err) {
+      return baseSelector;
+    }
+  }
+  return candidate;
+}
+
 function createAntigravityUiLocalizer({
   targetDoc,
   catalog,
   translationService = null,
+  extraExcludedSelector = null,
+  isHostIgnoredElement = null,
   isDisposed = () => false,
 } = {}) {
   const doc = targetDoc || (typeof document !== 'undefined' ? document : null);
+  const effectiveBaseExcludedSelector = mergeExcludedSelector(BASE_EXCLUDED_SELECTOR, extraExcludedSelector, doc);
+  const effectiveTextExcludedSelector = `textarea, ${effectiveBaseExcludedSelector}`;
+  const effectiveSubtreePruneSelector = effectiveTextExcludedSelector;
+
+  function isIgnoredByHost(el) {
+    if (typeof isHostIgnoredElement !== 'function' || !el) return false;
+    try {
+      return Boolean(isHostIgnoredElement(el));
+    } catch (_err) {
+      return false;
+    }
+  }
 
   function translateSync(raw) {
     return catalog && typeof catalog.translateSync === 'function' ? catalog.translateSync(raw) : null;
@@ -74,7 +100,8 @@ function createAntigravityUiLocalizer({
 
   function isExcludedFromStaticUiLocalization(el, forAttributes = false, rootBoundary = null) {
     if (!el || typeof el.closest !== 'function') return true;
-    const selector = forAttributes ? BASE_EXCLUDED_SELECTOR : TEXT_EXCLUDED_SELECTOR;
+    if (isIgnoredByHost(el)) return true;
+    const selector = forAttributes ? effectiveBaseExcludedSelector : effectiveTextExcludedSelector;
     if (el.closest(selector)) {
       return true;
     }
@@ -151,27 +178,6 @@ function createAntigravityUiLocalizer({
       }
     }
 
-    if (
-      !forAttributes &&
-      el.classList &&
-      (el.classList.contains('agy-mcp-server-name') || el.classList.contains('agy-mcp-tool-chip'))
-    ) {
-      return true;
-    }
-
-    if (!forAttributes && el.classList && el.classList.contains('agy-mcp-cmd-preview')) {
-      const txt = String(el.textContent || '').trim();
-      if (
-        txt !== '(managed by plugin)' &&
-        txt !== '(플러그인에서 관리됨)' &&
-        txt !== '(empty command)' &&
-        txt !== '(빈 명령어)' &&
-        !/\[(?:🔑\s*(?:Auth Header Configured|인증 헤더 설정됨)|🔗\s*OAuth(?:\s*Connected|\s*연결됨)?)\]/.test(txt)
-      ) {
-        return true;
-      }
-    }
-
     const testId =
       (typeof el.getAttribute === 'function' && el.getAttribute('data-testid')) ||
       (el.closest('[data-testid]') && el.closest('[data-testid]').getAttribute('data-testid')) ||
@@ -226,13 +232,19 @@ function createAntigravityUiLocalizer({
         const ko = translateSync(trimmed);
         if (ko && ko !== trimmed) {
           let origMap = {};
+          let appliedMap = {};
           try {
             origMap = JSON.parse(el.getAttribute('data-agy-orig-attr') || '{}');
           } catch (_err) {}
-          if (origMap[attr] === undefined) {
+          try {
+            appliedMap = el.__agyAppliedAttrs || {};
+          } catch (_err) {}
+          if (origMap[attr] === undefined || appliedMap[attr] !== trimmed) {
             origMap[attr] = val;
             el.setAttribute('data-agy-orig-attr', JSON.stringify(origMap));
           }
+          appliedMap[attr] = ko;
+          el.__agyAppliedAttrs = appliedMap;
           el.setAttribute(attr, ko);
         }
       }
@@ -259,7 +271,7 @@ function createAntigravityUiLocalizer({
       if (syncKo && syncKo !== raw) {
         if (el.childNodes && el.childNodes.length === 1 && el.firstChild.nodeType === 3) {
           const tn = el.firstChild;
-          if (!tn.__agyOrigValue) tn.__agyOrigValue = tn.nodeValue;
+          if (!tn.__agyOrigValue || tn.__agyKoApplied !== raw) tn.__agyOrigValue = tn.nodeValue;
           tn.__agyKoApplied = syncKo;
           tn.nodeValue = syncKo;
         }
@@ -313,8 +325,14 @@ function createAntigravityUiLocalizer({
     if (!rootNode || !activeDoc || typeof activeDoc.createTreeWalker !== 'function') return;
     if (
       rootNode.nodeType === 1 &&
-      typeof rootNode.getAttribute === 'function' &&
-      rootNode.getAttribute('data-agy-no-translate') === 'true'
+      (isIgnoredByHost(rootNode) ||
+        (typeof rootNode.getAttribute === 'function' &&
+          (rootNode.getAttribute('data-agy-no-translate') === 'true' ||
+            rootNode.getAttribute('translate') === 'no' ||
+            rootNode.hasAttribute('data-addon-host-owner') ||
+            rootNode.hasAttribute('data-addon-host-slot') ||
+            rootNode.hasAttribute('data-addon-host-no-translate'))) ||
+        (typeof rootNode.matches === 'function' && rootNode.matches(effectiveBaseExcludedSelector)))
     ) {
       return;
     }
@@ -326,7 +344,10 @@ function createAntigravityUiLocalizer({
         if (!node) return 2;
         if (node.nodeType === 1) {
           if (node !== rootNode) {
-            if (typeof node.matches === 'function' && node.matches(STATIC_UI_SUBTREE_PRUNE_SELECTOR)) {
+            if (isIgnoredByHost(node)) {
+              return 2;
+            }
+            if (typeof node.matches === 'function' && node.matches(effectiveSubtreePruneSelector)) {
               return 2;
             }
             if (hasExcludedCodeDataAttrPrefix(node, node)) {
@@ -398,7 +419,10 @@ function createAntigravityUiLocalizer({
         const leading = (raw.match(/^\s*/) || [''])[0];
         const trailing = (raw.match(/\s*$/) || [''])[0];
         const nextVal = leading + syncKo + trailing;
-        if (!textNode.__agyOrigValue) textNode.__agyOrigValue = raw;
+        // NB5: Always update __agyOrigValue when React replaced the text node in-place with new source text.
+        if (!textNode.__agyOrigValue || textNode.__agyKoApplied !== trimmed) {
+          textNode.__agyOrigValue = raw;
+        }
         textNode.__agyKoApplied = syncKo;
         textNode.nodeValue = nextVal;
       }

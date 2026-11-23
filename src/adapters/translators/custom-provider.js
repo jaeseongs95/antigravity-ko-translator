@@ -8,6 +8,9 @@ const {
 const { createLinkedAbort } = require('./google-translate');
 
 const HEADER_NAME_REGEX = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
+const SECRET_HEADER_RE =
+  /^(?:authorization|proxy-authorization|x-api-key|api-key|x-goog-api-key|x-auth-token|x-access-token|x-secret|cookie)$/i;
+const SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
 const FORBIDDEN_HEADER_NAMES = new Set([
   '__proto__',
   'prototype',
@@ -15,6 +18,14 @@ const FORBIDDEN_HEADER_NAMES = new Set([
   'host',
   'cookie',
   'cookie2',
+  'authorization',
+  'proxy-authorization',
+  'x-api-key',
+  'api-key',
+  'x-goog-api-key',
+  'x-auth-token',
+  'x-access-token',
+  'x-secret',
   'content-length',
   'transfer-encoding',
   'connection',
@@ -49,6 +60,7 @@ function sanitizeHeaders(rawHeaders) {
     const lower = name.toLowerCase();
     if (
       FORBIDDEN_HEADER_NAMES.has(lower) ||
+      SECRET_HEADER_RE.test(lower) ||
       lower.startsWith('sec-') ||
       lower.startsWith('proxy-')
     ) {
@@ -145,6 +157,9 @@ function validateCustomProviderSpec(rawSpec) {
   }
   const label = sanitizeLabel(rawSpec.label, id);
   const allowRemoteHttps = Boolean(rawSpec.allowRemoteHttps);
+  if (SECRET_QUERY_RE.test(String(rawSpec.endpointUrl || ''))) {
+    throw new RangeError('Forbidden secret query parameter in custom provider endpointUrl');
+  }
   const parsedUrl = validateTranslationEndpointUrl(rawSpec.endpointUrl, { allowRemoteHttps });
   const method = rawSpec.method === undefined ? 'POST' : String(rawSpec.method).toUpperCase();
   if (method !== 'POST') {
@@ -167,7 +182,7 @@ function validateCustomProviderSpec(rawSpec) {
     : 2;
   const timeoutRaw = Number(rawSpec.timeoutMs);
   const timeoutMs = Number.isFinite(timeoutRaw)
-    ? Math.min(60000, Math.max(1000, Math.trunc(timeoutRaw)))
+    ? Math.min(120000, Math.max(1000, Math.trunc(timeoutRaw)))
     : 15000;
 
   return Object.freeze({

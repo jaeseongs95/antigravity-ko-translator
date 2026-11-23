@@ -1,318 +1,363 @@
 'use strict';
 
-const fs = require('fs');
-const { resolveHostPaths } = require('./paths');
-const {
-  writeFileAtomicSync,
-  acquireExclusiveFileLockWithWait,
-  releaseExclusiveFileLock,
-} = require('./process-sentinel');
-const { validateTranslationEndpointUrl } = require('../src/adapters/translators/endpoint-validator');
+/**
+ * Isolated Settings Store for `~/.gemini/antigravity/ko_translator_settings.json`.
+ *
+ * - Fail-closed exclusive file lock on writes (never falls back to lockless overwrite).
+ * - Atomic temp-file + rename persistence.
+ * - Read-only `isPluginEnabled` check against `~/.gemini/config/config.json` (never writes to `config.json`).
+ * - NEVER touches Antigravity host internal storage.
+ */
 
-const DEFAULT_LLM_CONFIG = Object.freeze({
-  baseUrl: 'http://127.0.0.1:11434',
-  model: 'gemma3:4b',
-  apiFormat: 'ollama',
-  allowRemoteHttps: false,
-  timeoutMs: 15000,
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const lockfile = require('proper-lockfile');
+
+const { resolveHostPaths, PLUGIN_ID } = require('./paths');
+const { DEFAULT_LLM_CONFIG } = require('../src/adapters/translators/default-providers');
+const { validateTranslationEndpointUrl } = require('../src/adapters/translators/endpoint-validator');
+const { validateCustomProviderSpec } = require('../src/adapters/translators/custom-provider');
+
+const activeLockReleases = new Map();
+
+const DEFAULT_SETTINGS = Object.freeze({
+  schemaVersion: 1,
+  enabled: true,
+  translateThinking: true,
+  showThinking: true,
+  translateStaticUi: true,
+  provider: 'google-translate',
+  llmConfig: DEFAULT_LLM_CONFIG,
+  customProviders: Object.freeze([]),
 });
 
-function normalizeProviderId(raw) {
-  const val = String(raw || '').trim().toLowerCase();
-  if (!val) return null;
-  if (val === 'google' || val === 'gtx' || val === 'google-translate') return 'google-translate';
-  if (val === 'local' || val === 'llm' || val === 'ollama' || val === 'local-llm') return 'local-llm';
-  if (val === '__proto__' || val === 'constructor' || val === 'prototype') return null;
-  if (/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(val)) return val;
-  return null;
-}
-
-function sanitizeLlmConfig(rawCandidate, fallback = DEFAULT_LLM_CONFIG) {
-  const base = fallback || DEFAULT_LLM_CONFIG;
-  if (!rawCandidate || typeof rawCandidate !== 'object' || Array.isArray(rawCandidate)) {
-    return Object.freeze({ ...base });
-  }
-  const allowRemoteHttps =
-    typeof rawCandidate.allowRemoteHttps === 'boolean'
-      ? rawCandidate.allowRemoteHttps
-      : Boolean(base.allowRemoteHttps);
-  const rawUrl =
-    typeof rawCandidate.baseUrl === 'string' && rawCandidate.baseUrl.trim()
-      ? rawCandidate.baseUrl.trim()
-      : base.baseUrl;
-  let validatedUrl = base.baseUrl;
+function acquireExclusiveLock(lockPath, staleMs = 15000) {
+  if (!lockPath) return null;
+  const effectiveStaleMs = Math.max(Number(staleMs) || 15000, 2000);
   try {
-    const parsed = validateTranslationEndpointUrl(rawUrl, { allowRemoteHttps });
-    validatedUrl = `${parsed.origin}${parsed.pathname.replace(/\/+$/, '')}`;
-  } catch (_err) {
-    return Object.freeze({ ...base });
-  }
-  const model =
-    typeof rawCandidate.model === 'string' && rawCandidate.model.trim()
-      ? rawCandidate.model.trim().slice(0, 128)
-      : base.model;
-  const apiFormat =
-    rawCandidate.apiFormat === 'openai' || rawCandidate.apiFormat === 'ollama'
-      ? rawCandidate.apiFormat
-      : base.apiFormat;
-  const timeoutNum = Number(rawCandidate.timeoutMs);
-  const timeoutMs = Number.isFinite(timeoutNum)
-    ? Math.min(60000, Math.max(1000, Math.trunc(timeoutNum)))
-    : base.timeoutMs;
-  return Object.freeze({
-    baseUrl: validatedUrl,
-    model,
-    apiFormat,
-    allowRemoteHttps,
-    timeoutMs,
-  });
-}
-
-function parseLlmConfigRaw(rawVal, fallback = DEFAULT_LLM_CONFIG) {
-  if (!rawVal) return null;
-  let obj = rawVal;
-  if (typeof rawVal === 'string') {
-    try {
-      obj = JSON.parse(rawVal);
-    } catch (_err) {
-      return null;
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    // NB1: Guard against legacy regular-file locks colliding with proper-lockfile's directory lock (ENOTDIR/EEXIST).
+    if (fs.existsSync(lockPath)) {
+      const st = fs.lstatSync(lockPath);
+      if (st.isFile()) {
+        if (Date.now() - st.mtimeMs <= effectiveStaleMs) {
+          return null;
+        }
+        fs.unlinkSync(lockPath);
+      }
     }
-  }
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
-  const allowRemoteHttps = Boolean(obj.allowRemoteHttps);
-  const rawUrl = typeof obj.baseUrl === 'string' ? obj.baseUrl.trim() : '';
-  if (rawUrl) {
-    try {
-      validateTranslationEndpointUrl(rawUrl, { allowRemoteHttps });
-    } catch (_err) {
-      return null;
+    const sentinelPath = `${lockPath}.target`;
+    if (!fs.existsSync(sentinelPath)) {
+      fs.writeFileSync(sentinelPath, '', { encoding: 'utf8', mode: 0o600 });
     }
-  }
-  return sanitizeLlmConfig(obj, fallback);
-}
-
-function parsePretranslateCliArg(args) {
-  for (let i = 0; i < args.length; i++) {
-    const a = String(args[i] || '');
-    if (a.startsWith('--pretranslate=')) {
-      const val = a.slice(a.indexOf('=') + 1).trim().toLowerCase();
-      if (val === 'on' || val === 'true' || val === '1') return true;
-      if (val === 'off' || val === 'false' || val === '0') return false;
-    } else if (a === '--pretranslate' && i + 1 < args.length) {
-      const val = String(args[i + 1] || '').trim().toLowerCase();
-      if (val === 'on' || val === 'true' || val === '1') return true;
-      if (val === 'off' || val === 'false' || val === '0') return false;
-    }
-  }
-  return null;
-}
-
-function parseProviderCliArg(args) {
-  for (let i = 0; i < args.length; i++) {
-    const a = String(args[i] || '');
-    if (a.startsWith('--provider=') || a.startsWith('--adapter=')) {
-      const norm = normalizeProviderId(a.slice(a.indexOf('=') + 1));
-      if (norm) return norm;
-    } else if ((a === '--provider' || a === '--adapter') && i + 1 < args.length) {
-      const norm = normalizeProviderId(args[i + 1]);
-      if (norm) return norm;
-    }
-  }
-  return null;
-}
-
-function resolveEffectivePaths(pathOverrides = null) {
-  const defaults = resolveHostPaths(process.env);
-  if (!pathOverrides || typeof pathOverrides !== 'object') return defaults;
-  return {
-    ...defaults,
-    CONFIG_JSON_PATH: pathOverrides.configPath || pathOverrides.CONFIG_JSON_PATH || defaults.CONFIG_JSON_PATH,
-    SETTINGS_SSOT_PATH:
-      pathOverrides.settingsSsotPath || pathOverrides.SETTINGS_SSOT_PATH || defaults.SETTINGS_SSOT_PATH,
-    SETTINGS_SSOT_LOCK_PATH:
-      pathOverrides.settingsSsotLockPath ||
-      (pathOverrides.settingsSsotPath ? `${pathOverrides.settingsSsotPath}.lock` : defaults.SETTINGS_SSOT_LOCK_PATH),
-    APP_STORAGE_PATH:
-      pathOverrides.appStoragePath || pathOverrides.APP_STORAGE_PATH || defaults.APP_STORAGE_PATH,
-    APP_STORAGE_LOCK_PATH:
-      pathOverrides.appStorageLockPath || pathOverrides.APP_STORAGE_LOCK_PATH || defaults.APP_STORAGE_LOCK_PATH,
-  };
-}
-
-function readJsonFileSafe(filePath) {
-  try {
-    if (!filePath || !fs.existsSync(filePath)) return null;
-    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    const release = lockfile.lockSync(sentinelPath, {
+      lockfilePath: lockPath,
+      stale: effectiveStaleMs,
+      realpath: false,
+    });
+    const token = crypto.randomBytes(12).toString('hex');
+    activeLockReleases.set(token, { lockPath, release });
+    return token;
   } catch (_err) {
     return null;
   }
 }
 
-function isPluginEnabled(pathOverrides = null) {
-  const { CONFIG_JSON_PATH } = resolveEffectivePaths(pathOverrides);
-  const cfg = readJsonFileSafe(CONFIG_JSON_PATH);
-  const entry = cfg && cfg.plugins && cfg.plugins['ko-thought-translator'];
-  if (entry && entry.enabled === false) return false;
-  return true;
-}
-
-// 100% read-only status/options reader (NEVER writes to disk — safe for `--status`!)
-function readTranslatorOptionsReadOnly(pathOverrides = null) {
-  const p = resolveEffectivePaths(pathOverrides);
-  const cfg = readJsonFileSafe(p.CONFIG_JSON_PATH);
-  const ssot = readJsonFileSafe(p.SETTINGS_SSOT_PATH);
-  const appStorage = readJsonFileSafe(p.APP_STORAGE_PATH);
-
-  const pluginEntry = (cfg && cfg.plugins && cfg.plugins['ko-thought-translator']) || {};
-  const pluginEnabled = pluginEntry.enabled !== false;
-
-  const ssotPre = ssot && typeof ssot.pretranslateEnabled === 'boolean' ? ssot.pretranslateEnabled : null;
-  const ssotProv = ssot && ssot.translationProvider ? normalizeProviderId(ssot.translationProvider) : null;
-  const ssotLlm = ssot && ssot.llmConfig ? parseLlmConfigRaw(ssot.llmConfig) : null;
-  const ssotPendingAsar = Boolean(ssot && ssot.pendingAsarPatch);
-
-  const legacyPre = typeof pluginEntry.pretranslate === 'boolean' ? pluginEntry.pretranslate : null;
-  const legacyProv = pluginEntry.provider ? normalizeProviderId(pluginEntry.provider) : null;
-
-  const storagePre =
-    appStorage && appStorage['agy-ko-thought-pretranslate'] !== undefined
-      ? appStorage['agy-ko-thought-pretranslate'] === '1' || appStorage['agy-ko-thought-pretranslate'] === true
-      : null;
-  const storageProv =
-    appStorage && appStorage['agy-ko-thought-provider']
-      ? normalizeProviderId(appStorage['agy-ko-thought-provider'])
-      : null;
-  const storageLlm =
-    appStorage && appStorage['agy-ko-llm-config'] !== undefined
-      ? parseLlmConfigRaw(appStorage['agy-ko-llm-config'])
-      : null;
-
-  // Precedence: SSOT (`ko_translator_settings.json`) > legacy `config.json` (1-time migration) > `app_storage.json` > defaults
-  const pretranslateEnabled =
-    ssotPre !== null ? ssotPre : legacyPre !== null ? legacyPre : storagePre !== null ? storagePre : false;
-  const translationProvider = ssotProv || legacyProv || storageProv || 'google-translate';
-  const llmConfig = ssotLlm || storageLlm || DEFAULT_LLM_CONFIG;
-
-  return {
-    pluginEnabled,
-    pretranslateEnabled,
-    translationProvider,
-    llmConfig,
-    pendingAsarPatch: ssotPendingAsar,
-  };
-}
-
-// Writes/syncs SSOT (`ko_translator_settings.json` 0o600 under `ko_translator_settings.lock`) and renderer keys in `app_storage.json` (under `APP_STORAGE_LOCK_PATH`).
-// NEVER writes custom provider headers (`agy-ko-custom-providers-v2`)!
-function updateTranslatorSettings({
-  explicitPretranslate = null,
-  explicitProvider = null,
-  explicitLlmConfig = null,
-  pendingAsarPatch = null,
-  syncToAppStorage = true,
-  pathOverrides = null,
-} = {}) {
-  const p = resolveEffectivePaths(pathOverrides);
-  const ssotLockTok = acquireExclusiveFileLockWithWait(p.SETTINGS_SSOT_LOCK_PATH, 2500, 15000);
-  let nextRecord;
+function releaseExclusiveLock(lockPath, token) {
+  if (!token) return;
+  const entry = activeLockReleases.get(token);
+  if (!entry) return;
+  if (lockPath && entry.lockPath !== lockPath) return;
+  activeLockReleases.delete(token);
   try {
-    const current = readTranslatorOptionsReadOnly(pathOverrides);
-    const normProv =
-      explicitProvider !== null && explicitProvider !== undefined
-        ? normalizeProviderId(explicitProvider) || current.translationProvider
-        : current.translationProvider;
-    const nextPre =
-      explicitPretranslate !== null && explicitPretranslate !== undefined
-        ? Boolean(explicitPretranslate)
-        : current.pretranslateEnabled;
-    const nextLlm =
-      explicitLlmConfig !== null && explicitLlmConfig !== undefined
-        ? sanitizeLlmConfig(explicitLlmConfig, current.llmConfig)
-        : current.llmConfig;
-    const nextPending =
-      pendingAsarPatch !== null && pendingAsarPatch !== undefined
-        ? Boolean(pendingAsarPatch)
-        : current.pendingAsarPatch;
+    entry.release();
+  } catch (_err) {}
+}
 
-    nextRecord = {
-      schemaVersion: 2,
-      pretranslateEnabled: nextPre,
-      translationProvider: normProv,
-      llmConfig: nextLlm,
-      pendingAsarPatch: nextPending,
-      updatedAt: new Date().toISOString(),
-    };
-
-    writeFileAtomicSync(p.SETTINGS_SSOT_PATH, JSON.stringify(nextRecord, null, 2) + '\n', { mode: 0o600 });
+function writeFileAtomicSync(targetPath, content) {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const tmpPath = `${targetPath}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmpPath, targetPath);
   } finally {
-    if (ssotLockTok) {
-      releaseExclusiveFileLock(p.SETTINGS_SSOT_LOCK_PATH, ssotLockTok);
+    if (fs.existsSync(tmpPath)) {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch (_err) {}
     }
   }
+}
 
-  if (syncToAppStorage && p.APP_STORAGE_PATH && fs.existsSync(p.APP_STORAGE_PATH)) {
-    const appLockTok = acquireExclusiveFileLockWithWait(p.APP_STORAGE_LOCK_PATH, 2500, 15000);
-    if (appLockTok) {
-      try {
-        const data = readJsonFileSafe(p.APP_STORAGE_PATH);
-        if (data) {
-          const desiredPreStr = nextRecord.pretranslateEnabled ? '1' : '0';
-          const desiredLlmStr = JSON.stringify(nextRecord.llmConfig);
-          let changed = false;
-          if (data['agy-ko-thought-pretranslate'] !== desiredPreStr) {
-            data['agy-ko-thought-pretranslate'] = desiredPreStr;
-            changed = true;
-          }
-          if (data['agy-ko-thought-provider'] !== nextRecord.translationProvider) {
-            data['agy-ko-thought-provider'] = nextRecord.translationProvider;
-            changed = true;
-          }
-          if (data['agy-ko-llm-config'] !== desiredLlmStr) {
-            data['agy-ko-llm-config'] = desiredLlmStr;
-            changed = true;
-          }
-          if (changed) {
-            writeFileAtomicSync(p.APP_STORAGE_PATH, JSON.stringify(data, null, 2));
-          }
-        }
-      } finally {
-        releaseExclusiveFileLock(p.APP_STORAGE_LOCK_PATH, appLockTok);
+const FORBIDDEN_PROVIDER_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function normalizeProviderId(raw) {
+  if (raw === undefined || raw === null || raw === '') return 'google-translate';
+  if (typeof raw !== 'string') {
+    throw new Error(`Invalid provider id type: ${typeof raw}`);
+  }
+  const s = raw.trim().toLowerCase();
+  if (!s) return 'google-translate';
+  if (FORBIDDEN_PROVIDER_IDS.has(s)) {
+    throw new Error(`Forbidden provider id: ${raw}`);
+  }
+  if (s === 'google' || s === 'gtx' || s === 'google-translate') return 'google-translate';
+  if (s === 'local' || s === 'llm' || s === 'ollama' || s === 'local-llm') return 'local-llm';
+  if (/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(s)) return s;
+  throw new Error(`Invalid provider id: ${raw}`);
+}
+
+function sanitizeLlmConfig(raw, existing = DEFAULT_LLM_CONFIG, { strict = false } = {}) {
+  const base = { ...DEFAULT_LLM_CONFIG, ...(existing || {}) };
+  if (raw === undefined || raw === null) return base;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    if (strict) throw new Error('INVALID_LLM_CONFIG');
+    return base;
+  }
+
+  if (raw.allowRemoteHttps !== undefined && typeof raw.allowRemoteHttps !== 'boolean') {
+    if (strict) throw new Error('INVALID_ALLOW_REMOTE_HTTPS');
+  }
+  const allowRemoteHttps =
+    typeof raw.allowRemoteHttps === 'boolean' ? raw.allowRemoteHttps : Boolean(base.allowRemoteHttps);
+  const rawUrl = raw.baseUrl !== undefined ? String(raw.baseUrl).trim() : base.baseUrl;
+  if (SECRET_QUERY_RE.test(rawUrl)) {
+    throw new Error('FORBIDDEN_SECRET_QUERY_IN_LLM_BASE_URL');
+  }
+  const parsedUrl = validateTranslationEndpointUrl(rawUrl, { allowRemoteHttps });
+
+  if (raw.model !== undefined && typeof raw.model !== 'string') {
+    if (strict) throw new Error('INVALID_LLM_MODEL');
+  }
+  const model =
+    typeof raw.model === 'string' && raw.model.trim()
+      ? raw.model.trim().slice(0, 128)
+      : base.model;
+
+  let apiFormat = base.apiFormat === 'openai-compat' ? 'openai' : base.apiFormat;
+  if (raw.apiFormat !== undefined) {
+    if (typeof raw.apiFormat !== 'string') {
+      if (strict) throw new Error('INVALID_API_FORMAT');
+    } else {
+      const rawFormat = raw.apiFormat.trim().toLowerCase();
+      if (rawFormat === 'openai' || rawFormat === 'openai-compat') {
+        apiFormat = 'openai';
+      } else if (rawFormat === 'ollama') {
+        apiFormat = 'ollama';
+      } else if (strict) {
+        throw new Error(`INVALID_API_FORMAT:${raw.apiFormat}`);
       }
     }
   }
 
-  return nextRecord;
+  let timeoutMs = base.timeoutMs;
+  if (raw.timeoutMs !== undefined) {
+    if (typeof raw.timeoutMs === 'number' && Number.isFinite(raw.timeoutMs) && raw.timeoutMs >= 1000 && raw.timeoutMs <= 120000) {
+      timeoutMs = Math.floor(raw.timeoutMs);
+    } else if (strict) {
+      throw new Error(`INVALID_TIMEOUT_MS:${raw.timeoutMs}`);
+    }
+  }
+
+  return {
+    baseUrl: parsedUrl.href.replace(/\/+$/, ''),
+    model,
+    apiFormat,
+    allowRemoteHttps,
+    timeoutMs,
+  };
 }
 
-function removeSettingsSsotFile(pathOverrides = null) {
-  const p = resolveEffectivePaths(pathOverrides);
-  const ssotLockTok = acquireExclusiveFileLockWithWait(p.SETTINGS_SSOT_LOCK_PATH, 2500, 15000);
+const SECRET_HEADER_RE =
+  /^(?:authorization|proxy-authorization|x-api-key|api-key|x-goog-api-key|x-auth-token|x-access-token|x-secret|cookie)$/i;
+const SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
+
+function sanitizeCustomProviders(rawList, { strict = false } = {}) {
+  if (!Array.isArray(rawList)) {
+    if (strict) throw new Error('INVALID_CUSTOM_PROVIDERS_LIST');
+    return [];
+  }
+  if (strict && rawList.length > 16) {
+    throw new Error('TOO_MANY_CUSTOM_PROVIDERS');
+  }
+  const out = [];
+  const seen = new Set();
+  for (const item of rawList.slice(0, 16)) {
+    try {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error('INVALID_CUSTOM_PROVIDER_SPEC');
+      }
+      if (item.headers && typeof item.headers === 'object' && !Array.isArray(item.headers)) {
+        for (const k of Object.keys(item.headers)) {
+          if (SECRET_HEADER_RE.test(String(k || '').trim())) {
+            throw new Error(`FORBIDDEN_SECRET_HEADER_IN_HOST_SETTINGS:${k}`);
+          }
+        }
+      }
+      const rawEndpoint = item.endpointUrl !== undefined ? item.endpointUrl : item.url;
+      if (SECRET_QUERY_RE.test(String(rawEndpoint || ''))) {
+        throw new Error('FORBIDDEN_SECRET_QUERY_IN_HOST_SETTINGS');
+      }
+      const normalizedInput = {
+        ...item,
+        endpointUrl: rawEndpoint,
+        allowRemoteHttps: Boolean(item.allowRemoteHttps),
+      };
+      const spec = validateCustomProviderSpec(normalizedInput);
+      if (seen.has(spec.id)) {
+        throw new Error(`DUPLICATE_CUSTOM_PROVIDER_ID:${spec.id}`);
+      }
+      seen.add(spec.id);
+      out.push({
+        id: spec.id,
+        label: spec.label,
+        endpointUrl: spec.endpointUrl,
+        method: spec.method,
+        headers: spec.headers,
+        bodyTemplate: spec.bodyTemplate,
+        responsePath: spec.responsePath,
+        allowRemoteHttps: spec.allowRemoteHttps,
+        maxConcurrency: spec.maxConcurrency,
+        timeoutMs: spec.timeoutMs,
+      });
+    } catch (err) {
+      if (strict) throw err;
+    }
+  }
+  return out;
+}
+
+function isPluginEnabled(configJsonPath, pluginId = PLUGIN_ID) {
+  const target = configJsonPath || resolveHostPaths(process.env).CONFIG_JSON_PATH;
+  const effectivePluginId = pluginId || PLUGIN_ID;
   try {
-    if (fs.existsSync(p.SETTINGS_SSOT_PATH)) {
-      fs.unlinkSync(p.SETTINGS_SSOT_PATH);
+    if (!target || !fs.existsSync(target)) return true;
+    const cfg = JSON.parse(fs.readFileSync(target, 'utf8'));
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return false;
+    const entry = cfg.plugins && cfg.plugins[effectivePluginId];
+    if (entry && entry.enabled === false) return false;
+    return true;
+  } catch (_err) {
+    // Fail-closed when an existing config.json is corrupted.
+    return false;
+  }
+}
+
+function readTranslatorSettings(pathOverrides = null, { strict = false } = {}) {
+  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+  try {
+    if (!fs.existsSync(p.SETTINGS_PATH)) {
+      return {
+        ...DEFAULT_SETTINGS,
+        llmConfig: { ...DEFAULT_LLM_CONFIG },
+        customProviders: [],
+      };
+    }
+    const parsed = JSON.parse(fs.readFileSync(p.SETTINGS_PATH, 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('SETTINGS_FILE_CORRUPTED');
+    }
+    if (parsed.schemaVersion !== undefined && parsed.schemaVersion !== 1) {
+      throw new Error(`UNSUPPORTED_SETTINGS_SCHEMA_VERSION:${parsed.schemaVersion}`);
+    }
+    if (strict) {
+      for (const boolKey of ['enabled', 'translateThinking', 'showThinking', 'translateStaticUi']) {
+        if (parsed[boolKey] !== undefined && typeof parsed[boolKey] !== 'boolean') {
+          throw new Error(`INVALID_BOOLEAN_SETTING:${boolKey}`);
+        }
+      }
+    }
+    return {
+      schemaVersion: 1,
+      enabled: parsed.enabled !== false,
+      translateThinking: parsed.translateThinking !== false,
+      showThinking: parsed.showThinking !== false,
+      translateStaticUi: parsed.translateStaticUi !== false,
+      provider: normalizeProviderId(parsed.provider),
+      llmConfig: sanitizeLlmConfig(parsed.llmConfig, DEFAULT_LLM_CONFIG, { strict }),
+      customProviders:
+        parsed.customProviders === undefined
+          ? []
+          : sanitizeCustomProviders(parsed.customProviders, { strict }),
+    };
+  } catch (err) {
+    if (strict) {
+      throw new Error(`SETTINGS_FILE_CORRUPTED: ${err && err.message ? err.message : String(err)}`);
+    }
+    return {
+      ...DEFAULT_SETTINGS,
+      llmConfig: { ...DEFAULT_LLM_CONFIG },
+      customProviders: [],
+    };
+  }
+}
+
+function saveTranslatorSettings(patch, pathOverrides = null) {
+  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+  const lockToken = acquireExclusiveLock(p.SETTINGS_LOCK_PATH);
+  if (!lockToken) {
+    throw new Error('SETTINGS_LOCK_BUSY');
+  }
+  try {
+    const current = readTranslatorSettings(p, { strict: true });
+    for (const boolKey of ['enabled', 'translateThinking', 'showThinking', 'translateStaticUi']) {
+      if (patch[boolKey] !== undefined && typeof patch[boolKey] !== 'boolean') {
+        throw new Error(`INVALID_BOOLEAN_SETTING:${boolKey}`);
+      }
+    }
+    const next = {
+      schemaVersion: 1,
+      enabled: typeof patch.enabled === 'boolean' ? patch.enabled : current.enabled !== false,
+      translateThinking:
+        typeof patch.translateThinking === 'boolean' ? patch.translateThinking : current.translateThinking,
+      showThinking: typeof patch.showThinking === 'boolean' ? patch.showThinking : current.showThinking,
+      translateStaticUi:
+        typeof patch.translateStaticUi === 'boolean' ? patch.translateStaticUi : current.translateStaticUi,
+      provider: patch.provider !== undefined ? normalizeProviderId(patch.provider) : current.provider,
+      llmConfig:
+        patch.llmConfig !== undefined
+          ? sanitizeLlmConfig(patch.llmConfig, current.llmConfig, { strict: true })
+          : current.llmConfig,
+      customProviders:
+        patch.customProviders !== undefined
+          ? sanitizeCustomProviders(patch.customProviders, { strict: true })
+          : current.customProviders,
+    };
+    writeFileAtomicSync(p.SETTINGS_PATH, JSON.stringify(next, null, 2) + '\n');
+    return next;
+  } finally {
+    releaseExclusiveLock(p.SETTINGS_LOCK_PATH, lockToken);
+  }
+}
+
+function removeTranslatorSettings(pathOverrides = null) {
+  const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
+  const lockToken = acquireExclusiveLock(p.SETTINGS_LOCK_PATH);
+  if (!lockToken) {
+    throw new Error('SETTINGS_LOCK_BUSY');
+  }
+  try {
+    if (fs.existsSync(p.SETTINGS_PATH)) {
+      fs.unlinkSync(p.SETTINGS_PATH);
       return true;
     }
     return false;
-  } catch (_err) {
-    return false;
   } finally {
-    if (ssotLockTok) {
-      releaseExclusiveFileLock(p.SETTINGS_SSOT_LOCK_PATH, ssotLockTok);
-    }
+    releaseExclusiveLock(p.SETTINGS_LOCK_PATH, lockToken);
   }
 }
 
 module.exports = {
   DEFAULT_LLM_CONFIG,
+  DEFAULT_SETTINGS,
+  acquireExclusiveLock,
+  releaseExclusiveLock,
+  writeFileAtomicSync,
   normalizeProviderId,
   sanitizeLlmConfig,
-  parseLlmConfigRaw,
-  parsePretranslateCliArg,
-  parseProviderCliArg,
-  resolveEffectivePaths,
   isPluginEnabled,
-  readTranslatorOptionsReadOnly,
-  updateTranslatorSettings,
-  removeSettingsSsotFile,
+  readTranslatorSettings,
+  saveTranslatorSettings,
+  removeTranslatorSettings,
 };

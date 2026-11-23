@@ -1,11 +1,15 @@
 {
   "name": "ko-thought-translator",
-  "displayName": "Antigravity 2.0 한국어 번역기 (Thinking & 전체 UI)",
-  "description": "Antigravity 2.0 데스크톱 및 Remote Control 웹의 Thinking(추론 과정)과 고정 UI 요소를 한국어로 표시하며, 헥사고날 아키텍처 기반 번역 어댑터(Google Translate / Local LLM / Custom Provider), 상태바 연동, 네이티브 설정창 통합 및 원자적 자동 복구를 지원합니다.",
-  "version": "2.0.0",
+  "displayName": "Antigravity 2.0 한국어 번역기 (데스크톱 전용)",
+  "description": "Antigravity 2.0 데스크톱 네이티브 앱의 Thinking(추론 과정)과 영문 고정 UI를 순수 읽기 전용 DOM 오버레이로 한국어 표시하는 AddonManifest.v2 호환 렌더러 전용 플러그인입니다(호스트 settingsBridge + 공식 Sidecar 설정 패널 포함, mainHook·app.asar 직접 패치 0건).",
+  "version": "2.1.0",
+  "repository": "https://github.com/jaeseongs95/antigravity-ko-translator",
+  "sidecars": [
+    "sidecars/ko-translator-settings/sidecar.json"
+  ],
   "suggestedPrompts": [
-    "한글 번역 플러그인 패치 상태를 확인해줘",
-    "번역 어댑터를 Google 번역으로 전환해줘",
-    "번역 어댑터를 로컬 LLM으로 전환해줘"
+    "한글 번역 설정 패널을 열어줘",
+    "한글 번역기 애드온 상태를 확인해줘",
+    "한글 번역기 애드온 등록을 해제해줘"
   ]
 }

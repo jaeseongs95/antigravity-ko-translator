@@ -5,15 +5,34 @@ const {
   isInvalidCachedOrTranslatedText,
 } = require('../../core/text-tokenizer');
 const {
+  isWholeProtectedCodeBlock,
   tokenizeBlockElement,
   buildTranslatedBlockElement,
 } = require('./dom-tokenizer');
+
+const BASE_NO_TRANSLATE_SELECTOR =
+  '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
+
+function buildEffectiveNoTranslateSelector(extraSelector, doc) {
+  if (typeof extraSelector !== 'string' || !extraSelector.trim()) return BASE_NO_TRANSLATE_SELECTOR;
+  if (doc && typeof doc.querySelector === 'function') {
+    try {
+      doc.querySelector(extraSelector.trim());
+      return `${BASE_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+    } catch (_err) {
+      return BASE_NO_TRANSLATE_SELECTOR;
+    }
+  }
+  return `${BASE_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+}
 
 function createAntigravityThinkingTranslator({
   targetDoc,
   catalog,
   translationService,
   triggerController,
+  extraExcludedSelector = null,
+  isHostIgnoredElement = null,
   getTranslateThinkingEnabled = () => true,
   onTriggerPretranslate = null,
   isDisposed = () => false,
@@ -21,6 +40,7 @@ function createAntigravityThinkingTranslator({
   clearTimer = clearTimeout,
 } = {}) {
   const doc = targetDoc || (typeof document !== 'undefined' ? document : null);
+  const noTranslateSelector = buildEffectiveNoTranslateSelector(extraExcludedSelector, doc);
 
   function translateStaticSync(raw) {
     return catalog && typeof catalog.translateSync === 'function' ? catalog.translateSync(raw) : null;
@@ -28,6 +48,9 @@ function createAntigravityThinkingTranslator({
 
   function tryTranslateBlockElementSync(origEl) {
     if (!origEl) return null;
+    if (isWholeProtectedCodeBlock(origEl)) {
+      return origEl.cloneNode(true);
+    }
     if (origEl.tagName === 'UL' || origEl.tagName === 'OL') {
       const items = Array.from(origEl.querySelectorAll(':scope > li'));
       const syncItems = [];
@@ -41,8 +64,8 @@ function createAntigravityThinkingTranslator({
       return listClone;
     }
 
-    const { tokenizedText, savedNodes } = tokenizeBlockElement(origEl, doc);
-    if (!tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
+    const { tokenizedText, savedNodes, skipTranslation } = tokenizeBlockElement(origEl, doc);
+    if (skipTranslation || !tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
       return origEl.cloneNode(true);
     }
     const cached = translationService ? translationService.getCachedSync(tokenizedText) : null;
@@ -53,8 +76,11 @@ function createAntigravityThinkingTranslator({
   }
 
   async function translateBlockElement(origEl, signal = null) {
-    const { tokenizedText, savedNodes } = tokenizeBlockElement(origEl, doc);
-    if (!tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
+    if (isWholeProtectedCodeBlock(origEl)) {
+      return { node: origEl.cloneNode(true), translated: true };
+    }
+    const { tokenizedText, savedNodes, skipTranslation } = tokenizeBlockElement(origEl, doc);
+    if (skipTranslation || !tokenizedText || isAlreadyKoreanOrNonEnglish(tokenizedText)) {
       return { node: origEl.cloneNode(true), translated: true };
     }
     const translatedText = await translationService.translateText(tokenizedText, { signal });
@@ -105,8 +131,20 @@ function createAntigravityThinkingTranslator({
     });
   }
 
+  function isInsideNoTranslateSubtree(el) {
+    if (!el) return false;
+    if (typeof isHostIgnoredElement === 'function') {
+      try {
+        if (isHostIgnoredElement(el)) return true;
+      } catch (_err) {}
+    }
+    if (typeof el.closest !== 'function') return false;
+    return Boolean(el.closest(noTranslateSelector));
+  }
+
   function processCursorEdit(cursorEdit, triggerBtn = null) {
     if (!cursorEdit || !doc) return;
+    if (isInsideNoTranslateSubtree(cursorEdit)) return;
     if (!getTranslateThinkingEnabled()) {
       if (
         cursorEdit.getAttribute('data-agy-ko-ready') === '1' ||
@@ -139,8 +177,8 @@ function createAntigravityThinkingTranslator({
 
     const hasEnglishBlock =
       blockChildren.length > 0
-        ? blockChildren.some((ch) => !isAlreadyKoreanOrNonEnglish(ch.textContent || ''))
-        : !isAlreadyKoreanOrNonEnglish(rawSnapshot);
+        ? blockChildren.some((ch) => !isWholeProtectedCodeBlock(ch) && !isAlreadyKoreanOrNonEnglish(ch.textContent || ''))
+        : !isWholeProtectedCodeBlock(origContainer) && !isAlreadyKoreanOrNonEnglish(rawSnapshot);
 
     if (!hasEnglishBlock) {
       resetThoughtHost(cursorEdit);
@@ -386,6 +424,7 @@ function createAntigravityThinkingTranslator({
     const browserThoughtSpans = doc.querySelectorAll('[data-testid="browser-subagent-thinking"] span');
     const translateEnabled = Boolean(getTranslateThinkingEnabled());
     for (const el of browserThoughtSpans) {
+      if (isInsideNoTranslateSubtree(el)) continue;
       if (!el.childNodes || el.childNodes.length !== 1 || el.firstChild.nodeType !== 3) continue;
       const tn = el.firstChild;
       if (!translateEnabled) {
@@ -514,6 +553,7 @@ function createAntigravityThinkingTranslator({
     processCursorEdit,
     scanThoughtBlocks,
     retranslateVisibleThoughts,
+    restoreAll: restoreOriginalCursorEdits,
     restoreOriginalCursorEdits,
   };
 }

@@ -1,109 +1,51 @@
-# Antigravity 2.0 Korean Thought & UI Translator (`ko-thought-translator`)
+# Antigravity 2.0 Korean Thought & UI Translator (`v2.1.0`)
 
-> 🌐 **Language**: **English** | [한국어 문서 (README.ko.md)](./README.ko.md)
+[한국어 README](./README.ko.md)
 
-Real-time Korean localization plugin (`v2.0.0`) for the Antigravity 2.0 desktop app and **Remote Control web/mobile browser (`https://antigravity.google.com/r/...`)**. Built on a strict acyclic **Hexagonal CommonJS Architecture** (`src/core`, `src/adapters`, `src/remote`, `src/runtime`, `host/`), it translates streaming **Thinking blocks** (including Side Question reasoning & Browser Subagent live thoughts), **step progress summaries (`Worked for ...`)**, and **static UI menus, settings, and widgets** into natural Korean while keeping source code, diffs, monospace tokens, and user text 100% untouched.
+Clean-slate, **Desktop Native App Only** Korean localization plugin for Antigravity 2.0, hosted via **`antigravity-native-addon-host` (`>= v2.1.0`)** under **`AddonManifest.v2`** (renderer-only, zero `mainHook`, unidirectional read-only `settingsBridge`):
+- **Real-time Thinking translation** with code/identifier/path preservation and Korean particle normalization.
+- **Static English UI localization** with strict exclusions for code viewers, diff lines, terminals, inputs, assistant response bodies, and all sibling plugin UI slots (`[data-addon-host-owner]`, `[data-addon-host-slot]`, `[data-addon-host-no-translate]`, `addonHost.isElementInsideIgnored()`).
+- **Official Antigravity Sidecar (`AUX_PANE`) Settings & Diagnostics Panel** (`sidecars/ko-translator-settings/`) writing `~/.gemini/antigravity/ko_translator_settings.json`, pushed live to World `998` by the host's read-only `settingsBridge` (`addonHost.getSettings()` / `addonHost.onSettingsChange()`).
+- **Hardened Zero-Interference `AddonManifest.v2` Architecture**:
+  - **Zero `app.asar` access & zero `mainHook`**: `app.asar` patching and rollback belong exclusively to [antigravity-native-addon-host](https://github.com/jaeseongs95/antigravity-native-addon-host).
+  - **Cache-only `localStorage` & zero World `998` globals**: Security-sensitive settings (`enabled`, `provider`, `llmConfig`, `customProviders`) are never read from `localStorage` and never exposed on `window.__agyKoTranslator` under `addonHost`, preventing fail-open leaks across dynamic LS port rotations and World `0`/World `998` `localStorage` poisoning.
+  - **Fail-closed missing/corrupted settings**: Missing or malformed host settings snapshots fail closed (`enabled: false`, `provider: null`) with zero external translation requests.
+  - Declarative `addon-manifest.v2.json` (`trustLevel: "trusted"`, `minHostVersion: "2.1.0"`, `capabilities: ["renderer"]`, `settingsBridge`, `slot: "document-transform"`, `scope: "native-host-only"`, `shadow: false`, `respectsNoTranslate: true`, `loadOrder: 200`).
+  - Remote Control web support is intentionally separated into `antigravity-remote-plugin`.
 
----
+## Architecture
 
-## Table of Contents
-
-1. [Enabling Korean Localization on Remote Control Web & Mobile](#1-enabling-korean-localization-on-remote-control-web--mobile)
-   - [Option A. 1-Click Bookmarklet (PC & Mobile Chrome)](#option-a-1-click-bookmarklet-pc--mobile-chrome)
-   - [Option B. Automatic Mount via Tampermonkey UserScript (Recommended for PC Chrome)](#option-b-automatic-mount-via-tampermonkey-userscript-recommended-for-pc-chrome)
-   - [Option C. Automatic Co-Loading with `antigravity-statusbar` / `antigravity-mcp-manager`](#option-c-automatic-co-loading-with-antigravity-statusbar--antigravity-mcp-manager)
-2. [Desktop App Installation, Auto-Healing & Rollback](#2-desktop-app-installation-auto-healing--rollback)
-3. [Translation Settings, Custom Providers & UI Controls](#3-translation-settings-custom-providers--ui-controls)
-4. [CLI Commands](#4-cli-commands)
-5. [Hexagonal Architecture (`v2.0.0`)](#5-hexagonal-architecture-v200)
-6. [License](#6-license)
-
----
-
-## 1. Enabling Korean Localization on Remote Control Web & Mobile
-
-The Remote Control web app (`https://antigravity.google.com/r/...`) enforces strict browser security policies (CSP3 nonce-hiding, `worker-src 'self'`, `require-trusted-types-for 'script'`, and cross-origin sandbox `iframe`). `ko-thought-translator` safely promotes the `<ga-remote-control>` workbench `iframe` to same-origin via a deterministic Finite State Machine (`IDLE -> PREFLIGHT -> PROMOTING_BLANK -> BOOTING_WORKBENCH -> READY | ROLLED_BACK | EXTERNAL_PROMOTED`), `0`-arg `document.open()/close()` URL inheritance, `INITIAL_CONFIG` `MessagePort` replay, and an ECMA-262 live-binding ESM/classic Worker bridge.
-
-### Option A. 1-Click Bookmarklet (PC & Mobile Chrome)
-
-1. Right-click the Chrome bookmarks bar → **`Add page...`**.
-2. **Name**: `한글번역`
-3. **URL**: Copy and paste the single-line bookmarklet below and save:
-
-```javascript
-javascript:(()=>{fetch('https://raw.githubusercontent.com/jaeseongs95/antigravity-ko-translator/main/scripts/ko_thought_autoinject.js?t='+Date.now()).then(r=>r.ok?r.text():'').then(c=>{if(!c)return;try{const s=document.createElement('script'),n=[...document.querySelectorAll('script,style,link')].map(e=>e.nonce||e.getAttribute('nonce')).find(Boolean),t=window.trustedTypes;let u=0,p=null;if(t?.createPolicy){for(const k of['agy-ko-translator-bm','agy-ko-translator'])try{p=t.createPolicy(k,{createScript:x=>{if(u||x!==c)throw new TypeError();u=1;return x}});if(p)break}catch{}if(!p)return}if(n){s.nonce=n;s.setAttribute('nonce',n)}s.text=p?p.createScript(c):c;(document.head||document.documentElement).appendChild(s)}catch{}})})();
+```text
+addon-manifest.v2.json     # Declarative AddonManifest.v2 contract (renderer-only + settingsBridge)
+src/
+├── core/                  # Pure vendor-independent domain (tokenizer, dictionary, cache, registry)
+├── adapters/
+│   ├── translators/       # Google Translate, Local LLM (Ollama/OpenAI), Custom HTTP (secret-guarded)
+│   └── antigravity/       # Pure read-only DOM overlay, trigger controller, cache-only storage-port
+├── runtime/               # createTranslatorRuntime consuming addonHost.getSettings/onSettingsChange/isElementInsideIgnored
+└── index.js               # Single bundle entry -> dist/renderer.js (closure-scoped under addonHost)
+sidecars/
+└── ko-translator-settings/# Official Antigravity AUX_PANE Settings & Diagnostics UI (same-host Origin guard)
+host/
+├── addon-registry.js      # AddonManifest.v2 validator & addons.d registration (0 app.asar access)
+├── config-store.js        # Fail-closed isolated ko_translator_settings.json store
+├── paths.js & profiles/   # Profile-driven path resolution (World 998, ADDON_HOST_LOADER_V2)
+└── cli.js                 # Explicit CLI (--status, --install, --uninstall, --rollback)
 ```
 
-### Option B. Automatic Mount via Tampermonkey UserScript (Recommended for PC Chrome)
+## Installation & Commands
 
-- **Raw UserScript URL**: `https://raw.githubusercontent.com/jaeseongs95/antigravity-ko-translator/main/scripts/ko_thought_autoinject.js`
+Install real copied files (no symlinks) into `~/.gemini/config/plugins/ko-thought-translator/`, upgrade `antigravity-native-addon-host` to `v2.1.0+`, register the manifest, and approve SHA-256 trust pinning:
 
-### Option C. Automatic Co-Loading with `antigravity-statusbar` / `antigravity-mcp-manager`
+```bash
+npm run build            # Build deterministic dist/renderer.js
+npm test                 # Verify bundle determinism and run all unit & integration tests
+npm run status           # Read-only AddonManifest.v2 & settings status report
+npm run install:addon    # Register addon-manifest.v2.json & initialize missing settings file
+npm run uninstall:addon  # Unregister manifest and clean ko_translator_settings.json
 
-When `ko-thought-translator` is installed on the host PC, running `antigravity-statusbar` or `antigravity-mcp-manager` in a remote browser automatically co-loads Korean translation. Conversely, running the `한글번역` bookmarklet conditionally synchronizes installed host companion plugins via authenticated Language Server RPCs.
-
----
-
-## 2. Desktop App Installation, Auto-Healing & Rollback
-
-```powershell
-# 1. Clone into the Antigravity plugins directory
-git clone https://github.com/jaeseongs95/antigravity-ko-translator.git "$HOME\.gemini\config\plugins\ko-thought-translator"
-
-# 2. Apply the V6 patch and start the background watcher daemon
-node "$HOME\.gemini\config\plugins\ko-thought-translator\scripts\ensure_ko_thought_patch.js" --worker
-
-# 3. Check current read-only status
-node "$HOME\.gemini\config\plugins\ko-thought-translator\scripts\ensure_ko_thought_patch.js" --status
+# In antigravity-native-addon-host (>= v2.1.0):
+addon-host --register ~/.gemini/config/plugins/ko-thought-translator/addon-manifest.v2.json
+addon-host trust approve ko-thought-translator
+addon-host --doctor
 ```
-
----
-
-## 3. Translation Settings, Custom Providers & UI Controls
-
-1. **Bottom Status Bar `[ 번역:구글 ]` / `[ 번역:LLM ]` Pill**: Click to open `#agy-ko-translator-modal`; `Shift + Click` to cycle registered translation providers.
-2. **`Settings` (`설정`) → `한글 번역` Tab & Quick Modal (`#agy-ko-translator-modal`)**:
-   - Select between **`google-translate`**, **`local-llm`** (configurable Ollama/OpenAI endpoint, model, timeout, and remote HTTPS toggle), or **Origin-Local Custom HTTP Providers** (`CustomProviderSpec`, with custom auth headers isolated strictly in origin-local `window.localStorage` and never written to disk or shared bundles).
-   - Toggle **Thinking Translation**, **Background Pre-translation**, and **Cache Clear / Immediate Retranslation**.
-3. **Model Selector Dropdown & `Settings > Appearance > Chat`**:
-   - Dedicated **Show Thinking (`Thinking (추론 과정) 표시`)** switch while preserving native `verboseConversationSteps` (`Default` / `Verbose`) read-only.
-
----
-
-## 4. CLI Commands
-
-```powershell
-# Build & check 4-mirror deterministic bundle parity
-npm run build
-npm run build:check
-
-# Run full unit (13 suites) + real Chromium CDP E2E (S0-S5) verification
-npm test
-
-# Host patch, status, provider/pretranslate configuration, uninstall, and atomic ASAR rollback
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --status
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --worker
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --provider google-translate
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --provider local-llm
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --pretranslate off
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --pretranslate on
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --uninstall
-node ~/.gemini/config/plugins/ko-thought-translator/scripts/ensure_ko_thought_patch.js --rollback
-```
-
----
-
-## 5. Hexagonal Architecture (`v2.0.0`)
-
-See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) and [`docs/TEST_CASES.md`](./docs/TEST_CASES.md) for full architectural invariants and verification specifications:
-- **`src/core/`**: Pure domain logic (`disposable-registry`, `dictionary-port`, `text-tokenizer`, `provider-registry`, `translation-service`) — zero DOM/network/vendor globals.
-- **`src/adapters/`**: Vendor-neutral `host-adapter-config` validator, SSRF-hardened `translators/` (`endpoint-validator`, `google-translate`, `local-llm`, `custom-provider`), `statusbar-port`, and `antigravity/` UI/DOM/Storage/Settings/Companion adapters.
-- **`src/remote/`**: Zero-vendor `csp-security-policy`, `asset-url-rewriter`, 3-phase ECMA-262 `js-module-compiler`, `worker-bridge`, `dom-guard-installer`, and `workbench-promoter` FSM.
-- **`src/runtime/` & `scripts/build.js`**: Parameterized `mount(targetWin, targetDoc)` composition root, `observer-scheduler`, and deterministic LF CommonJS bundler.
-- **`host/`**: `cli`, `config-store` (`ko_translator_settings.json` SSOT), cryptographic IPC `process-sentinel`, `local-llm-daemon`, `bundle-injector`, and standalone `AGY_STATUSBAR_AUTOINJECT_V6` `ensure_statusbar_patch`.
-
----
-
-## 6. License
-
-This project is licensed under the [MIT License](./LICENSE).

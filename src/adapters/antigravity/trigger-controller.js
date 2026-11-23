@@ -1,57 +1,18 @@
 'use strict';
 
-const DOCUMENT_POSITION_FOLLOWING = 4;
-
-function getReactFiberFromElement(el) {
-  if (!el || typeof el !== 'object') return null;
-  try {
-    const keys = Object.keys(el);
-    const fk = keys.find((k) => k.startsWith('__reactFiber$'));
-    if (fk) return el[fk];
-    const ck = keys.find((k) => k.startsWith('__reactContainer$'));
-    if (ck) return el[ck];
-  } catch (_err) {}
-  return null;
-}
-
-function extractSettingsStoreFromFiberNode(node) {
-  if (!node) return null;
-  const val = node.memoizedProps && node.memoizedProps.value;
-  if (val && typeof val.getState === 'function' && typeof val.onDidChange === 'function') {
-    const st = val.getState();
-    if (st && typeof st.getPrefValue === 'function' && typeof st.setPrefValue === 'function') {
-      return st;
-    }
-  }
-  return null;
-}
-
-function resolveUserSettingsStoreFromDoc(doc) {
-  if (!doc || typeof doc.querySelector !== 'function') return null;
-  try {
-    const anchor =
-      doc.querySelector(
-        '[data-testid="conversation-view"], [data-testid="worked-for-collapsible"], [data-testid="agent-input-box"]'
-      ) ||
-      (doc.querySelector('#root, #app') && doc.querySelector('#root, #app').firstElementChild) ||
-      (doc.body && doc.body.firstElementChild);
-    if (anchor) {
-      let cur = getReactFiberFromElement(anchor);
-      for (let i = 0; i < 260 && cur; i++) {
-        const st = extractSettingsStoreFromFiberNode(cur);
-        if (st) return st;
-        cur = cur.return;
-      }
-    }
-  } catch (_err) {}
-  return null;
-}
+/**
+ * Pure DOM Trigger Controller for Antigravity Thinking & Tool Collapsible Buttons.
+ *
+ * Strictly read-only with respect to host framework internals:
+ * - ZERO React/Angular internal framework inspection.
+ * - Never overwrites `origSpan.textContent` (preserves host React child text nodes).
+ */
 
 function extractTriggerSpanRawText(origSpan) {
   if (!origSpan) return '';
-  if (origSpan.querySelector && origSpan.querySelector('[data-slot-out]')) {
+  if (typeof origSpan.querySelector === 'function' && origSpan.querySelector('[data-slot-out]')) {
     const clone = origSpan.cloneNode(true);
-    if (clone.querySelectorAll) {
+    if (typeof clone.querySelectorAll === 'function') {
       clone.querySelectorAll('[data-slot-out]').forEach((el) => el.remove());
     }
     return String(clone.textContent || '').trim();
@@ -59,58 +20,91 @@ function extractTriggerSpanRawText(origSpan) {
   return String(origSpan.textContent || '').trim();
 }
 
+function isElementInLatestTurn(btn, doc, NodeCtor) {
+  if (!btn || !doc) return false;
+  if (typeof doc.querySelector === 'function') {
+    const latestTurnEl = doc.querySelector('[data-turn-content="latest"]');
+    if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
+      return Boolean(latestTurnEl.contains(btn));
+    }
+  }
+  if (
+    typeof doc.querySelectorAll === 'function' &&
+    typeof btn.compareDocumentPosition === 'function' &&
+    NodeCtor &&
+    typeof NodeCtor.DOCUMENT_POSITION_FOLLOWING === 'number'
+  ) {
+    const userBubbles = doc.querySelectorAll('[data-testid="user-message-bubble"]');
+    for (const ub of userBubbles) {
+      if (ub && (btn.compareDocumentPosition(ub) & NodeCtor.DOCUMENT_POSITION_FOLLOWING) !== 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+const BASE_TRIGGER_NO_TRANSLATE_SELECTOR =
+  '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
+
+function buildTriggerNoTranslateSelector(extraSelector, doc) {
+  if (typeof extraSelector !== 'string' || !extraSelector.trim()) return BASE_TRIGGER_NO_TRANSLATE_SELECTOR;
+  if (doc && typeof doc.querySelector === 'function') {
+    try {
+      doc.querySelector(extraSelector.trim());
+      return `${BASE_TRIGGER_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+    } catch (_err) {
+      return BASE_TRIGGER_NO_TRANSLATE_SELECTOR;
+    }
+  }
+  return `${BASE_TRIGGER_NO_TRANSLATE_SELECTOR}, ${extraSelector.trim()}`;
+}
+
 function createAntigravityTriggerController({
   targetDoc,
+  targetWin,
   catalog,
-  disposables,
+  extraExcludedSelector = null,
+  isHostIgnoredElement = null,
   getShowThinkingEnabled = () => true,
-  onEnsureStyle = null,
+  isDisposed = () => false,
 } = {}) {
   const doc = targetDoc || (typeof document !== 'undefined' ? document : null);
-  let cachedUserSettingsStore = null;
+  const win = targetWin || (typeof window !== 'undefined' ? window : null);
+  const NodeCtor = (win && win.Node) || (typeof Node !== 'undefined' ? Node : null);
+  const noTranslateSelector = buildTriggerNoTranslateSelector(extraExcludedSelector, doc);
+  let clickListenerAttached = false;
+
+  function isInsideNoTranslateSubtree(el) {
+    if (!el) return false;
+    if (typeof isHostIgnoredElement === 'function') {
+      try {
+        if (isHostIgnoredElement(el)) return true;
+      } catch (_err) {}
+    }
+    if (typeof el.closest !== 'function') return false;
+    return Boolean(el.closest(noTranslateSelector));
+  }
 
   function translateSync(raw) {
     return catalog && typeof catalog.translateSync === 'function' ? catalog.translateSync(raw) : null;
   }
 
-  function isNativeVerboseConversationStepsEnabled() {
-    // D-0012: Read-only check of native verboseConversationSteps; NEVER mutate or overwrite it!
-    try {
-      if (!cachedUserSettingsStore || typeof cachedUserSettingsStore.getPrefValue !== 'function') {
-        cachedUserSettingsStore = resolveUserSettingsStoreFromDoc(doc);
-      }
-      if (cachedUserSettingsStore && typeof cachedUserSettingsStore.getPrefValue === 'function') {
-        const val = cachedUserSettingsStore.getPrefValue('verboseConversationSteps');
-        if (typeof val === 'boolean') return val;
-      }
-    } catch (_err) {}
-    return true;
-  }
-
   function syncShowThinkingDomAttribute() {
-    if (!doc) return;
-    try {
-      const show = Boolean(getShowThinkingEnabled());
-      const rootEl = doc.documentElement;
-      if (rootEl && typeof rootEl.setAttribute === 'function') {
-        if (show) {
-          if (!rootEl.hasAttribute || rootEl.hasAttribute('data-agy-hide-thinking')) {
-            rootEl.removeAttribute('data-agy-hide-thinking');
-          }
-        } else if (!rootEl.getAttribute || rootEl.getAttribute('data-agy-hide-thinking') !== '1') {
-          rootEl.setAttribute('data-agy-hide-thinking', '1');
-        }
-      }
-    } catch (_err) {}
+    if (!doc || !doc.documentElement) return;
+    const show = Boolean(getShowThinkingEnabled());
+    if (show) {
+      doc.documentElement.removeAttribute('data-agy-hide-thinking');
+    } else {
+      doc.documentElement.setAttribute('data-agy-hide-thinking', '1');
+    }
   }
 
   function processTriggerButton(btn) {
-    if (!btn || !doc) return;
-    const spans = btn.children
-      ? Array.from(btn.children).filter((c) => c && c.tagName === 'SPAN')
-      : typeof btn.querySelectorAll === 'function'
-        ? Array.from(btn.querySelectorAll(':scope > span'))
-        : [];
+    if (!btn || !doc || typeof btn.querySelectorAll !== 'function') return;
+    if (isInsideNoTranslateSubtree(btn)) return;
+    const spans = Array.from(btn.querySelectorAll(':scope > span'));
     const origSpan = spans.find((s) => !s.classList || !s.classList.contains('agy-ko-trigger-label'));
     if (!origSpan) return;
 
@@ -126,12 +120,8 @@ function createAntigravityTriggerController({
     if (origSpan.style && origSpan.style.display !== 'none') {
       origSpan.style.display = 'none';
     }
-    // D-0005: NEVER overwrite origSpan.textContent = '' when child fibers exist!
-    if (!liveText && origSpan.__agyOrigLabelText && (!origSpan.childNodes || origSpan.childNodes.length === 0)) {
-      origSpan.textContent = origSpan.__agyOrigLabelText;
-    }
 
-    const expectedKoClass = (origSpan.className ? origSpan.className + ' ' : '') + 'agy-ko-trigger-label';
+    const expectedKoClass = (origSpan.className ? `${origSpan.className} ` : '') + 'agy-ko-trigger-label';
     let koSpan = spans.find((s) => s.classList && s.classList.contains('agy-ko-trigger-label'));
     if (!koSpan) {
       koSpan = doc.createElement('span');
@@ -151,315 +141,98 @@ function createAntigravityTriggerController({
     }
   }
 
-  function expandTriggerButtonIfNeeded(btn) {
+  function expandIfNeeded(btn) {
     if (!btn || btn.getAttribute('aria-expanded') !== 'false' || btn.__agyUserCollapsed) {
       return false;
     }
     btn.__agyAutoExpanded = true;
-    if (typeof btn.setAttribute === 'function') {
-      btn.setAttribute('data-agy-auto-expanded', '1');
-    }
+    btn.setAttribute('data-agy-auto-expanded', '1');
     btn.__agyProgrammaticClick = true;
     try {
       btn.click();
-    } catch (_err) {
     } finally {
       btn.__agyProgrammaticClick = false;
     }
     return true;
   }
 
-  function collapseTriggerButtonIfNeeded(btn) {
+  function collapseIfNeeded(btn) {
     if (!btn || btn.getAttribute('aria-expanded') !== 'true') {
       return false;
     }
     delete btn.__agyAutoExpanded;
-    if (typeof btn.removeAttribute === 'function') {
-      btn.removeAttribute('data-agy-auto-expanded');
-    }
+    btn.removeAttribute('data-agy-auto-expanded');
     btn.__agyProgrammaticClick = true;
     try {
       btn.click();
-    } catch (_err) {
     } finally {
       btn.__agyProgrammaticClick = false;
     }
     return true;
   }
 
-  function onTriggerButtonClickCapture(e) {
-    try {
-      if (!e || !e.target || typeof e.target.closest !== 'function') return;
-      const btn = e.target.closest(
-        'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"]'
-      );
-      if (!btn || btn.__agyProgrammaticClick || e.isTrusted === false) return;
-      const expandedBeforeClick = btn.getAttribute('aria-expanded');
-      if (expandedBeforeClick === 'true') {
-        btn.__agyUserCollapsed = true;
-        if (typeof btn.removeAttribute === 'function') {
-          btn.removeAttribute('data-agy-auto-expanded');
-        }
-      } else if (expandedBeforeClick === 'false') {
-        btn.__agyUserCollapsed = false;
-      }
-    } catch (_err) {}
-  }
-
-  if (doc && disposables && typeof disposables.registerEvent === 'function') {
-    disposables.registerEvent(doc, 'click', onTriggerButtonClickCapture, true);
-  }
-
-  function checkFiberTurnStatus(btn) {
-    let sawLocalActiveFalse = false;
-    try {
-      let cur = getReactFiberFromElement(btn);
-      for (let i = 0; i < 36 && cur; i++) {
-        const mp = cur.memoizedProps;
-        if (mp && typeof mp === 'object') {
-          if (mp.segment && typeof mp.segment === 'object') {
-            if (mp.segment.isLatest === false || mp.segment.isActive === false) {
-              return { decided: true, active: false, sawLocalActiveFalse };
-            }
-            if (mp.isLastContainer === false || mp.isLastTurn === false) {
-              return { decided: true, active: false, sawLocalActiveFalse };
-            }
-            if (mp.segment.isLatest === true || mp.segment.isActive === true) {
-              return { decided: true, active: true, sawLocalActiveFalse };
-            }
-          }
-          if (mp.isLastContainer === true || mp.isLastTurn === true) {
-            return { decided: true, active: true, sawLocalActiveFalse };
-          }
-          if (mp.isLastContainer === false || mp.isLastTurn === false) {
-            return { decided: true, active: false, sawLocalActiveFalse };
-          }
-          if (mp.container && typeof mp.container === 'object') {
-            if (mp.container.isLatest === true || mp.container.isActive === true) {
-              return { decided: true, active: true, sawLocalActiveFalse };
-            }
-            if (mp.container.isLatest === false || mp.container.isActive === false) {
-              return { decided: true, active: false, sawLocalActiveFalse };
-            }
-          }
-          if (i <= 6) {
-            if (mp.isActive === true) {
-              return { decided: true, active: true, sawLocalActiveFalse };
-            }
-            if (mp.isActive === false || mp.isRunning === false) {
-              sawLocalActiveFalse = true;
-            }
-          }
-        }
-        cur = cur.return;
-      }
-    } catch (_err) {}
-    return { decided: false, active: false, sawLocalActiveFalse };
-  }
-
-  function checkDomTurnFallbacks(btn) {
-    if (!doc) return null;
-    if (typeof doc.querySelector === 'function') {
-      const latestTurnEl = doc.querySelector('[data-turn-content="latest"]');
-      if (latestTurnEl && typeof latestTurnEl.contains === 'function') {
-        return Boolean(latestTurnEl.contains(btn));
-      }
+  function onTriggerClickCapture(e) {
+    if (isDisposed() || !e || !e.target || typeof e.target.closest !== 'function') return;
+    const btn = e.target.closest(
+      'button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"]'
+    );
+    if (!btn || btn.__agyProgrammaticClick || e.isTrusted === false) return;
+    const expandedBefore = btn.getAttribute('aria-expanded');
+    if (expandedBefore === 'true') {
+      btn.__agyUserCollapsed = true;
+      btn.removeAttribute('data-agy-auto-expanded');
+    } else if (expandedBefore === 'false') {
+      btn.__agyUserCollapsed = false;
     }
-    if (typeof doc.querySelectorAll === 'function' && typeof btn.compareDocumentPosition === 'function') {
-      const userBubbles = doc.querySelectorAll('[data-testid="user-message-bubble"]');
-      for (const ub of userBubbles) {
-        if (ub && (btn.compareDocumentPosition(ub) & DOCUMENT_POSITION_FOLLOWING) !== 0) {
-          return false;
-        }
-      }
-    }
-    return null;
   }
 
-  function isHiddenActiveWorkedForButton(btn) {
-    if (!btn) return false;
-    if (btn.classList && btn.classList.contains('hidden')) return true;
-    try {
-      let cur = getReactFiberFromElement(btn);
-      for (let i = 0; i < 8 && cur; i++) {
-        if (cur.memoizedProps && cur.memoizedProps.triggerVisible === false) {
-          return true;
-        }
-        cur = cur.return;
-      }
-    } catch (_err) {}
-    return false;
+  function attachListeners() {
+    if (!doc || clickListenerAttached || typeof doc.addEventListener !== 'function') return;
+    doc.addEventListener('click', onTriggerClickCapture, true);
+    clickListenerAttached = true;
   }
 
-  function doesWorkedForButtonContainThinking(btn) {
-    if (!btn) return false;
-    if (btn.__agyHasThinking) return true;
-    try {
-      let cur = getReactFiberFromElement(btn);
-      for (let i = 0; i < 12 && cur; i++) {
-        const segSteps = cur.memoizedProps && cur.memoizedProps.segment && cur.memoizedProps.segment.steps;
-        if (Array.isArray(segSteps)) {
-          const found = segSteps.some((s) => {
-            const val = s && s.step && s.step.value;
-            return Boolean(val && (val.thinking || val.rawThinking));
-          });
-          if (found) {
-            btn.__agyHasThinking = true;
-            return true;
-          }
-          return false;
-        }
-        cur = cur.return;
-      }
-    } catch (_err) {}
-    return false;
+  function detachListeners() {
+    if (!doc || !clickListenerAttached || typeof doc.removeEventListener !== 'function') return;
+    doc.removeEventListener('click', onTriggerClickCapture, true);
+    clickListenerAttached = false;
   }
 
-  function isWorkedForInActiveOrLatestTurn(btn, isLastInDomList) {
-    if (!btn) return false;
-    const fiberCheck = checkFiberTurnStatus(btn);
-    if (fiberCheck.decided) return fiberCheck.active;
-    const domCheck = checkDomTurnFallbacks(btn);
-    if (domCheck !== null) return domCheck;
-    if (fiberCheck.sawLocalActiveFalse) return false;
-    return Boolean(isLastInDomList);
-  }
-
-  function isToolGroupInActiveOrLatestTurn(btn, workedBtns) {
-    if (!btn) return false;
-    const fiberCheck = checkFiberTurnStatus(btn);
-    if (fiberCheck.decided) return fiberCheck.active;
-    const domCheck = checkDomTurnFallbacks(btn);
-    if (domCheck !== null) return domCheck;
-
-    if (Array.isArray(workedBtns) && workedBtns.length > 0) {
-      const lastWorked = workedBtns[workedBtns.length - 1];
-      const lastContainer =
-        lastWorked && typeof lastWorked.closest === 'function' ? lastWorked.closest('.relative') : null;
-      if (lastContainer && typeof lastContainer.contains === 'function' && lastContainer.contains(btn)) {
-        return true;
-      }
-      const anyHistoricalContains = workedBtns.slice(0, -1).some((wb) => {
-        const c = wb && typeof wb.closest === 'function' ? wb.closest('.relative') : null;
-        return Boolean(c && typeof c.contains === 'function' && c.contains(btn));
-      });
-      if (anyHistoricalContains || fiberCheck.sawLocalActiveFalse) {
-        return false;
-      }
-      if (
-        lastWorked &&
-        typeof lastWorked.compareDocumentPosition === 'function' &&
-        (lastWorked.compareDocumentPosition(btn) & DOCUMENT_POSITION_FOLLOWING) !== 0
-      ) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  function isThinkingTriggerInActiveOrLatestTurn(btn, workedBtns, thinkingBtns) {
-    if (!btn) return false;
-    const fiberCheck = checkFiberTurnStatus(btn);
-    if (fiberCheck.decided) return fiberCheck.active;
-    const domCheck = checkDomTurnFallbacks(btn);
-    if (domCheck !== null) return domCheck;
-
-    if (Array.isArray(workedBtns) && workedBtns.length > 0) {
-      const lastWorked = workedBtns[workedBtns.length - 1];
-      const lastContainer =
-        lastWorked && typeof lastWorked.closest === 'function' ? lastWorked.closest('.relative') : null;
-      if (lastContainer && typeof lastContainer.contains === 'function' && lastContainer.contains(btn)) {
-        return true;
-      }
-      const anyHistoricalContains = workedBtns.slice(0, -1).some((wb) => {
-        const c = wb && typeof wb.closest === 'function' ? wb.closest('.relative') : null;
-        return Boolean(c && typeof c.contains === 'function' && c.contains(btn));
-      });
-      if (anyHistoricalContains || fiberCheck.sawLocalActiveFalse) {
-        return false;
-      }
-      if (
-        lastWorked &&
-        typeof lastWorked.compareDocumentPosition === 'function' &&
-        (lastWorked.compareDocumentPosition(btn) & DOCUMENT_POSITION_FOLLOWING) !== 0
-      ) {
-        return true;
-      }
-      return false;
-    }
-    if (fiberCheck.sawLocalActiveFalse) return false;
-    if (Array.isArray(thinkingBtns) && thinkingBtns.length > 0) {
-      return btn === thinkingBtns[thinkingBtns.length - 1];
-    }
-    return false;
-  }
-
-  function scanTriggerButtonsSync(forceCollapseAll = false) {
-    if (!doc || typeof doc.querySelectorAll !== 'function') return;
-    if (typeof onEnsureStyle === 'function') {
-      onEnsureStyle();
-    }
+  function scanTriggerButtonsSync(forceCollapse = false) {
+    if (isDisposed() || !doc || typeof doc.querySelectorAll !== 'function') return;
     syncShowThinkingDomAttribute();
-    const autoExpand = Boolean(getShowThinkingEnabled());
-    const nativeVerboseSteps = isNativeVerboseConversationStepsEnabled();
+    const showThinking = Boolean(getShowThinkingEnabled());
 
     const workedBtns = Array.from(doc.querySelectorAll('button[data-testid="worked-for-collapsible"]'));
-    for (let i = 0; i < workedBtns.length; i++) {
-      const btn = workedBtns[i];
-      const isLastWorked = isWorkedForInActiveOrLatestTurn(btn, i === workedBtns.length - 1);
+    for (const btn of workedBtns) {
       processTriggerButton(btn);
-      if (!nativeVerboseSteps) continue;
-      if (isHiddenActiveWorkedForButton(btn)) {
-        if (btn.getAttribute('aria-expanded') === 'false') {
-          btn.__agyUserCollapsed = false;
-          expandTriggerButtonIfNeeded(btn);
-        }
-        continue;
-      }
-      if (isLastWorked) {
-        if (btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
-          expandTriggerButtonIfNeeded(btn);
-        }
-      } else if (
-        forceCollapseAll &&
-        btn.getAttribute('aria-expanded') === 'true' &&
-        (btn.__agyAutoExpanded || btn.getAttribute('data-agy-auto-expanded') === '1') &&
-        doesWorkedForButtonContainThinking(btn)
-      ) {
-        collapseTriggerButtonIfNeeded(btn);
-      }
     }
 
-    const toolGroupBtns = doc.querySelectorAll('button[data-testid="tool-group-collapsible"]');
+    const toolGroupBtns = Array.from(doc.querySelectorAll('button[data-testid="tool-group-collapsible"]'));
     for (const btn of toolGroupBtns) {
       processTriggerButton(btn);
-      if (
-        nativeVerboseSteps &&
-        btn.getAttribute('aria-expanded') === 'false' &&
-        !btn.__agyUserCollapsed &&
-        isToolGroupInActiveOrLatestTurn(btn, workedBtns)
-      ) {
-        expandTriggerButtonIfNeeded(btn);
-      }
     }
 
     const thinkingBtns = Array.from(doc.querySelectorAll('button[data-testid="thinking-collapsible-trigger"]'));
-    for (const btn of thinkingBtns) {
+    const latestTurnThinkingBtns = thinkingBtns.filter((b) => isElementInLatestTurn(b, doc, NodeCtor));
+    const activeLatestThinkingBtn =
+      latestTurnThinkingBtns.length > 0 ? latestTurnThinkingBtns[latestTurnThinkingBtns.length - 1] : null;
+    for (let i = 0; i < thinkingBtns.length; i++) {
+      const btn = thinkingBtns[i];
       processTriggerButton(btn);
-      if (autoExpand) {
-        if (
-          btn.getAttribute('aria-expanded') === 'false' &&
-          !btn.__agyUserCollapsed &&
-          isThinkingTriggerInActiveOrLatestTurn(btn, workedBtns, thinkingBtns)
-        ) {
-          expandTriggerButtonIfNeeded(btn);
+      const isActiveLatestSegment = btn === activeLatestThinkingBtn;
+      if (showThinking && !forceCollapse) {
+        if (isActiveLatestSegment && btn.getAttribute('aria-expanded') === 'false' && !btn.__agyUserCollapsed) {
+          expandIfNeeded(btn);
         }
-      } else if (btn.getAttribute('aria-expanded') === 'true') {
-        collapseTriggerButtonIfNeeded(btn);
+      } else if (!showThinking && btn.getAttribute('aria-expanded') === 'true') {
+        collapseIfNeeded(btn);
       }
     }
 
-    const sideQuestionBtns = doc.querySelectorAll('[data-testid="side-question-answer"] button[aria-expanded]');
+    const sideQuestionBtns = Array.from(
+      doc.querySelectorAll('[data-testid="side-question-answer"] button[aria-expanded]')
+    );
     for (const btn of sideQuestionBtns) {
       processTriggerButton(btn);
     }
@@ -467,30 +240,33 @@ function createAntigravityTriggerController({
 
   function restoreTriggerButtons() {
     if (!doc || typeof doc.querySelectorAll !== 'function') return;
-    try {
-      if (doc.documentElement && typeof doc.documentElement.removeAttribute === 'function') {
-        doc.documentElement.removeAttribute('data-agy-hide-thinking');
-      }
-      doc.querySelectorAll('.agy-ko-trigger-label').forEach((el) => el.remove());
-      doc.querySelectorAll('[data-agy-orig-label="1"]').forEach((origSpan) => {
-        origSpan.removeAttribute('data-agy-orig-label');
-        if (origSpan.style) origSpan.style.display = '';
-        delete origSpan.__agyOrigLabelText;
-      });
-    } catch (_err) {}
+    doc.querySelectorAll('.agy-ko-trigger-label').forEach((el) => el.remove());
+    doc.querySelectorAll('[data-agy-orig-label]').forEach((el) => {
+      el.removeAttribute('data-agy-orig-label');
+      if (el.style) el.style.display = '';
+      delete el.__agyOrigLabelText;
+    });
+    doc.querySelectorAll('[data-agy-auto-expanded]').forEach((el) => {
+      el.removeAttribute('data-agy-auto-expanded');
+      delete el.__agyAutoExpanded;
+    });
+    if (doc.documentElement) {
+      doc.documentElement.removeAttribute('data-agy-hide-thinking');
+    }
   }
 
   return {
-    isNativeVerboseConversationStepsEnabled,
+    extractTriggerSpanRawText,
     syncShowThinkingDomAttribute,
     processTriggerButton,
     scanTriggerButtonsSync,
+    attachListeners,
+    detachListeners,
     restoreTriggerButtons,
   };
 }
 
 module.exports = {
-  getReactFiberFromElement,
   extractTriggerSpanRawText,
   createAntigravityTriggerController,
 };

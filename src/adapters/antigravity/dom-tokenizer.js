@@ -6,13 +6,45 @@ const {
 } = require('../../core/text-tokenizer');
 
 const INLINE_PROTECTED_DOM_SELECTOR = 'code, pre, kbd, a, span.font-mono';
+const WHOLE_CODE_BLOCK_SELECTOR =
+  'pre, code, .code-block, .shiki, .cm-editor, .monaco-editor, .xterm, [class*="language-"], [data-code-block], [data-diff-line]';
 const CODE_PLACEHOLDER_RESTORE_REGEX = /(?:⟦|\[|【)\s*C(\d+)\s*(?:⟧|\]|】)/gi;
 const LEADING_PARTICLE_AFTER_CODE_REGEX =
   /^(\(으\)로|\(을\)를|\(이\)가|\(은\)는|\(과\)와|으로|로|와|과|를|을|가|이|는|은)(?=$|[\s.,;:!?)])/;
 
+function isWholeProtectedCodeBlock(el) {
+  if (!el || el.nodeType !== 1) return false;
+  const tag = String(el.tagName || '').toUpperCase();
+  if (tag === 'PRE' || tag === 'CODE' || tag === 'STYLE' || tag === 'SCRIPT') return true;
+  if (typeof el.matches === 'function') {
+    try {
+      if (el.matches(WHOLE_CODE_BLOCK_SELECTOR)) return true;
+    } catch (_err) {}
+  }
+  if (typeof el.querySelector === 'function') {
+    try {
+      // Wrapper div whose sole substantive element is a <pre> or code-viewer container
+      const children = Array.from(el.children || []).filter(
+        (ch) => ch && ch.tagName !== 'STYLE' && ch.tagName !== 'SCRIPT'
+      );
+      if (children.length === 1 && children[0] !== el && isWholeProtectedCodeBlock(children[0])) {
+        const directText = Array.from(el.childNodes || [])
+          .filter((n) => n && n.nodeType === 3)
+          .map((n) => String(n.nodeValue || '').trim())
+          .join('');
+        if (!directText) return true;
+      }
+    } catch (_err) {}
+  }
+  return false;
+}
+
 function tokenizeBlockElement(blockEl, targetDoc = null) {
   if (!blockEl || typeof blockEl.cloneNode !== 'function') {
-    return { tokenizedText: '', savedNodes: [] };
+    return { tokenizedText: '', savedNodes: [], skipTranslation: false };
+  }
+  if (isWholeProtectedCodeBlock(blockEl)) {
+    return { tokenizedText: '', savedNodes: [], skipTranslation: true };
   }
   const doc = targetDoc || blockEl.ownerDocument;
   const clone = blockEl.cloneNode(true);
@@ -21,7 +53,7 @@ function tokenizeBlockElement(blockEl, targetDoc = null) {
       ? Array.from(clone.querySelectorAll(INLINE_PROTECTED_DOM_SELECTOR))
       : [];
 
-  // Rev6-F4 #2: Select ONLY outermost protected elements within `clone` so nested
+  // Select ONLY outermost protected elements strictly inside `clone` (`anc !== clone`) so nested
   // `<a href="..."><code>...</code></a>` or `<pre><code>...</code></pre>` subtrees
   // are preserved as a single atomic `⟦Ck⟧` node without detaching inner children.
   const outermostNodes = allMatches.filter((el) => {
@@ -29,7 +61,7 @@ function tokenizeBlockElement(blockEl, targetDoc = null) {
       el.parentElement && typeof el.parentElement.closest === 'function'
         ? el.parentElement.closest(INLINE_PROTECTED_DOM_SELECTOR)
         : null;
-    return !anc || !clone.contains(anc);
+    return !anc || anc === clone || !clone.contains(anc);
   });
 
   const savedNodes = [];
@@ -45,7 +77,7 @@ function tokenizeBlockElement(blockEl, targetDoc = null) {
   }
 
   const tokenizedText = String(clone.textContent || '').trim();
-  return { tokenizedText, savedNodes };
+  return { tokenizedText, savedNodes, skipTranslation: false };
 }
 
 function buildTranslatedBlockElement(origEl, savedNodes, translatedText, targetDoc = null) {
@@ -103,6 +135,8 @@ function buildTranslatedBlockElement(origEl, savedNodes, translatedText, targetD
 
 module.exports = {
   INLINE_PROTECTED_DOM_SELECTOR,
+  WHOLE_CODE_BLOCK_SELECTOR,
+  isWholeProtectedCodeBlock,
   tokenizeBlockElement,
   buildTranslatedBlockElement,
 };

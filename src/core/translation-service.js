@@ -19,6 +19,8 @@ function createTranslationService({
   setTimer = setTimeout,
   clearTimer = clearTimeout,
   sharedMemCache = null,
+  getProviderCacheVariant = null,
+  onTranslationError = null,
 } = {}) {
   if (!registry || typeof registry.getProvider !== 'function' || typeof registry.normalizeId !== 'function') {
     throw new TypeError('registry implementing ProviderRegistry is required');
@@ -39,14 +41,17 @@ function createTranslationService({
   let desiredProviderId = normalizedDefaultId;
   let pendingSavedCustomProviderId = null;
 
-  const savedRaw = storage && typeof storage.getItem === 'function' ? storage.getItem(providerStorageKey) : null;
+  const hasProviderStorage =
+    Boolean(providerStorageKey && typeof providerStorageKey === 'string') &&
+    Boolean(storage && typeof storage.getItem === 'function');
+  const savedRaw = hasProviderStorage ? storage.getItem(providerStorageKey) : null;
   const savedNorm = savedRaw ? registry.normalizeId(savedRaw) : null;
   if (savedNorm) {
     desiredProviderId = savedNorm;
     if (!registry.hasProvider(savedNorm)) {
       pendingSavedCustomProviderId = savedNorm;
     }
-  } else if (storage && typeof storage.setItem === 'function') {
+  } else if (hasProviderStorage && typeof storage.setItem === 'function') {
     storage.setItem(providerStorageKey, desiredProviderId);
   }
 
@@ -70,7 +75,7 @@ function createTranslationService({
           if (type === 'register' && pendingSavedCustomProviderId && id === pendingSavedCustomProviderId) {
             desiredProviderId = id;
             pendingSavedCustomProviderId = null;
-            if (storage && typeof storage.setItem === 'function') {
+            if (hasProviderStorage && typeof storage.setItem === 'function') {
               storage.setItem(providerStorageKey, id);
             }
           }
@@ -83,11 +88,15 @@ function createTranslationService({
     const desired = registry.getProvider(desiredProviderId);
     if (desired) {
       if (isRemoteEnv && !desired.supportsRemote) {
-        return registry.getProvider(normalizedDefaultId) || desired;
+        return registry.getProvider(normalizedDefaultId) || null;
       }
       return desired;
     }
-    return registry.getProvider(normalizedDefaultId) || registry.listProviders()[0] || null;
+    if (desiredProviderId === normalizedDefaultId) {
+      return registry.getProvider(normalizedDefaultId) || null;
+    }
+    // Fail-closed: NEVER silently fall back to google-translate when a non-default provider is missing/unregistered.
+    return null;
   }
 
   function getDesiredProviderId() {
@@ -96,7 +105,19 @@ function createTranslationService({
 
   function getEffectiveProviderId() {
     const prov = resolveEffectiveProvider();
-    return prov ? prov.id : normalizedDefaultId;
+    return prov ? prov.id : null;
+  }
+
+  function makeCacheKey(providerId, cleanText) {
+    let variant = '';
+    if (typeof getProviderCacheVariant === 'function') {
+      try {
+        variant = String(getProviderCacheVariant(providerId) || '');
+      } catch (_err) {
+        variant = '';
+      }
+    }
+    return variant ? `${providerId}\u0001${variant}\u0000${cleanText}` : `${providerId}\u0000${cleanText}`;
   }
 
   function getEffectiveProvider() {
@@ -209,7 +230,7 @@ function createTranslationService({
     const prevEffective = resolveEffectiveProvider();
     desiredProviderId = normId;
     pendingSavedCustomProviderId = null;
-    if (persist && storage && typeof storage.setItem === 'function') {
+    if (persist && hasProviderStorage && typeof storage.setItem === 'function') {
       storage.setItem(providerStorageKey, desiredProviderId);
     }
     const nextEffective = resolveEffectiveProvider();
@@ -253,7 +274,7 @@ function createTranslationService({
       if (desiredProviderId !== normId) {
         const prevEff = resolveEffectiveProvider();
         desiredProviderId = normId;
-        if (storage && typeof storage.setItem === 'function') {
+        if (hasProviderStorage && typeof storage.setItem === 'function') {
           storage.setItem(providerStorageKey, normId);
         }
         const nextEff = resolveEffectiveProvider();
@@ -271,7 +292,7 @@ function createTranslationService({
     }
     pendingSavedCustomProviderId = normId;
     desiredProviderId = normId;
-    if (storage && typeof storage.getItem === 'function' && !storage.getItem(providerStorageKey)) {
+    if (hasProviderStorage && typeof storage.setItem === 'function' && !storage.getItem(providerStorageKey)) {
       storage.setItem(providerStorageKey, normId);
     }
     notifySubscribers();
@@ -335,10 +356,13 @@ function createTranslationService({
     if (typeof rawText !== 'string') return null;
     const clean = rawText.trim();
     if (!clean) return null;
-    if (!memCache.has(clean)) return null;
-    const cached = memCache.get(clean);
+    const effId = getEffectiveProviderId();
+    if (!effId) return null;
+    const key = makeCacheKey(effId, clean);
+    if (!memCache.has(key)) return null;
+    const cached = memCache.get(key);
     if (isInvalidCachedOrTranslatedText(cached, clean)) {
-      memCache.delete(clean);
+      memCache.delete(key);
       return null;
     }
     return cached;
@@ -366,13 +390,15 @@ function createTranslationService({
     const cachedHit = getCachedSync(clean);
     if (cachedHit !== null) return cachedHit;
 
-    const signal = options && options.signal ? options.signal : null;
-    if (!signal && inflightMap.has(clean)) {
-      return inflightMap.get(clean);
-    }
-
     const reqEpoch = epoch;
     const reqEffectiveId = getEffectiveProviderId();
+    if (!reqEffectiveId) return text;
+    const cacheKey = makeCacheKey(reqEffectiveId, clean);
+
+    const signal = options && options.signal ? options.signal : null;
+    if (!signal && inflightMap.has(cacheKey)) {
+      return inflightMap.get(cacheKey);
+    }
 
     const runTask = () =>
       enqueue(async () => {
@@ -390,45 +416,49 @@ function createTranslationService({
         let candidate = null;
         try {
           candidate = await invokeProviderWithFallback(provider, clean, protectedText, savedTokens, signal);
-        } catch (_err) {
+        } catch (err) {
           candidate = null;
-        }
-
-        if (signal && signal.aborted) return text;
-
-        if ((!candidate || isInvalidCachedOrTranslatedText(candidate, clean)) && provider.id !== normalizedDefaultId) {
-          const fallbackProv = registry.getProvider(normalizedDefaultId);
-          if (fallbackProv && fallbackProv.id !== provider.id) {
+          if (typeof onTranslationError === 'function') {
             try {
-              candidate = await invokeProviderWithFallback(fallbackProv, clean, protectedText, savedTokens, signal);
-            } catch (_err) {
-              candidate = null;
-            }
+              onTranslationError(err, provider.id);
+            } catch (_ignored) {}
           }
         }
 
         if (signal && signal.aborted) return text;
         if (candidate && candidate !== clean && !isInvalidCachedOrTranslatedText(candidate, clean)) {
           if (!disposed && epoch === reqEpoch && getEffectiveProviderId() === reqEffectiveId) {
-            memCache.set(clean, candidate);
+            memCache.set(cacheKey, candidate);
             scheduleSaveCache(reqEpoch);
           }
           return candidate;
         }
         return text;
-      }, signal).catch(() => text);
+      }, signal).catch((err) => {
+        if (
+          err &&
+          err.message !== 'ABORTED' &&
+          err.message !== 'DISPOSED' &&
+          typeof onTranslationError === 'function'
+        ) {
+          try {
+            onTranslationError(err, reqEffectiveId);
+          } catch (_ignored) {}
+        }
+        return text;
+      });
 
     if (signal) {
       return runTask();
     }
 
     const p = runTask();
-    inflightMap.set(clean, p);
+    inflightMap.set(cacheKey, p);
     try {
       return await p;
     } finally {
-      if (inflightMap.get(clean) === p) {
-        inflightMap.delete(clean);
+      if (inflightMap.get(cacheKey) === p) {
+        inflightMap.delete(cacheKey);
       }
     }
   }
@@ -442,6 +472,13 @@ function createTranslationService({
   }
 
   function dispose() {
+    if (disposed) return;
+    const activeProv = resolveEffectiveProvider();
+    if (activeProv && typeof activeProv.onDeactivate === 'function') {
+      try {
+        activeProv.onDeactivate();
+      } catch (_err) {}
+    }
     disposed = true;
     offRegistry();
     abortAllPending('DISPOSED');

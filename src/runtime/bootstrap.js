@@ -1,598 +1,695 @@
 'use strict';
 
+/**
+ * Vendor-Neutral Pure Read-Only DOM Overlay Runtime Bootstrap (v2.1.0).
+ *
+ * Exports `createTranslatorRuntime({ win, doc, hostAdapter, providerBundle, hostCapability, settings, version, fetchFn, onStatus })`
+ * -> `{ start(), updateSettings(next), registerCustomProvider(spec), unregisterCustomProvider(id), dispose(), getStatus(), scanAll() }`.
+ *
+ * Security & DIP Invariants:
+ * - Zero concrete host/vendor or translator-provider imports.
+ * - Zero `localStorage` authority over security-sensitive settings (`enabled`, toggles,
+ *   `provider`, `llmConfig`, `customProviders`): `storage` is used strictly for the translation text cache.
+ * - Under `hostCapability` with `settingsBridge` (`getSettings` / `onSettingsChange`), missing or
+ *   corrupted host snapshots fail CLOSED (`enabled: false`, `provider: null`).
+ * - Respects `hostCapability.isElementInsideIgnored(el)` across Shadow DOM boundaries.
+ */
+
 const { createDisposableRegistry } = require('../core/disposable-registry');
 const { createProviderRegistry } = require('../core/provider-registry');
 const { createTranslationService } = require('../core/translation-service');
-
-const { createStatusbarAdapterPort } = require('../adapters/statusbar-port');
-const { createGoogleTranslateAdapter } = require('../adapters/translators/google-translate');
-const { createLocalLlmAdapter } = require('../adapters/translators/local-llm');
-
-const {
-  ANTIGRAVITY_PROVIDER_ALIASES,
-  DEFAULT_ANTIGRAVITY_LLM_CONFIG,
-  resolveAntigravityHostConfig,
-} = require('../adapters/antigravity/host-config-preset');
-const {
-  STORAGE_KEYS,
-  createAntigravityStorageAdapter,
-  createNativeStorageBridge,
-  createAntigravityLlmConfigAdapter,
-  createOriginLocalCustomProviderStore,
-} = require('../adapters/antigravity/storage-port');
-const { createAntigravityDictionaryCatalog } = require('../adapters/antigravity/dictionaries/index');
-const { createAntigravityUiLocalizer } = require('../adapters/antigravity/ui-localizer');
-const { createAntigravityTriggerController } = require('../adapters/antigravity/trigger-controller');
-const { createAntigravityThinkingTranslator } = require('../adapters/antigravity/thinking-translator');
-const { createAntigravityPretranslator } = require('../adapters/antigravity/pretranslator');
-const { createAntigravitySettingsUi } = require('../adapters/antigravity/settings-ui');
-const { createAntigravityRemoteCompanionSync } = require('../adapters/antigravity/remote-companion-sync');
-
-const { createCspSecurityPort } = require('../remote/csp-security-policy');
-const { createWorkbenchPromoter } = require('../remote/workbench-promoter');
 const { createObserverScheduler } = require('./observer-scheduler');
 
-function normalizeAntigravityProviderAlias(rawId, registry) {
-  const trimmed = String(rawId || '')
-    .trim()
-    .toLowerCase();
-  if (!trimmed) return '';
-  if (Object.prototype.hasOwnProperty.call(ANTIGRAVITY_PROVIDER_ALIASES, trimmed)) {
-    return ANTIGRAVITY_PROVIDER_ALIASES[trimmed];
+function resolveBooleanOption(overrideVal, fallback) {
+  if (typeof overrideVal === 'boolean') return overrideVal;
+  return Boolean(fallback);
+}
+
+function canonicalizeProviderId(rawId, aliasMap = {}) {
+  if (typeof rawId !== 'string') return null;
+  const trimmed = rawId.trim().toLowerCase();
+  if (!trimmed || trimmed === '__proto__' || trimmed === 'constructor' || trimmed === 'prototype') return null;
+  const mapped =
+    aliasMap && Object.prototype.hasOwnProperty.call(aliasMap, trimmed)
+      ? aliasMap[trimmed]
+      : trimmed;
+  return /^[a-z0-9][a-z0-9._:-]{0,63}$/.test(mapped) ? mapped : null;
+}
+
+function unwrapHostSettingsSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return {
+      ok: false,
+      enabled: false,
+      settingsMissing: true,
+      settingsCorrupted: false,
+      reason: 'ERR_SETTINGS_FILE_MISSING',
+      data: null,
+    };
   }
-  return registry ? registry.normalizeId(trimmed) : trimmed;
-}
-
-function isUnsupportedDocumentEnvironment(targetWin, targetDoc) {
-  if (!targetWin || !targetDoc) return true;
-  // D-0034: Skip data:, devtools:, chrome-extension:, blob:, file:, and non-HTML (XML/SVG) documents!
-  try {
-    const proto = String((targetWin.location && targetWin.location.protocol) || '').toLowerCase();
-    if (
-      proto &&
-      proto !== 'https:' &&
-      proto !== 'http:' &&
-      proto !== 'about:'
-    ) {
-      return true;
-    }
-  } catch (_err) {
-    return true;
+  if (snapshot.status === 'ok' && snapshot.data && typeof snapshot.data === 'object' && !Array.isArray(snapshot.data)) {
+    return {
+      ok: true,
+      enabled: snapshot.data.enabled !== false,
+      settingsMissing: false,
+      settingsCorrupted: false,
+      reason: null,
+      data: snapshot.data,
+    };
   }
-  try {
-    const contentType = String(targetDoc.contentType || '').toLowerCase();
-    if (contentType && !contentType.includes('html')) {
-      return true;
-    }
-    const rootTag = String((targetDoc.documentElement && targetDoc.documentElement.tagName) || '').toUpperCase();
-    if (rootTag && rootTag !== 'HTML') {
-      return true;
-    }
-  } catch (_err) {}
-  return false;
+  if (snapshot.status === 'missing') {
+    return {
+      ok: false,
+      enabled: false,
+      settingsMissing: true,
+      settingsCorrupted: false,
+      reason: snapshot.reason || 'ERR_SETTINGS_FILE_MISSING',
+      data: null,
+    };
+  }
+  return {
+    ok: false,
+    enabled: false,
+    settingsMissing: false,
+    settingsCorrupted: true,
+    reason: snapshot.reason || 'SETTINGS_FILE_CORRUPTED',
+    data: null,
+  };
 }
 
-function isRemoteControlRuntimeEnvironment(targetWin, targetDoc, hostCfg) {
-  try {
-    if (targetWin && targetWin.__APP_CONFIG__ && targetWin.__APP_CONFIG__.isRemoteControl === true) {
-      return true;
-    }
-  } catch (_err) {}
-  try {
-    const sel = (hostCfg && hostCfg.remoteControlSelector) || 'ga-remote-control';
-    if (targetDoc && typeof targetDoc.querySelector === 'function' && targetDoc.querySelector(sel)) {
-      return true;
-    }
-  } catch (_err) {}
-  try {
-    const pathname = String((targetWin && targetWin.location && targetWin.location.pathname) || '');
-    if (pathname.startsWith('/r/') || pathname.startsWith('/web/')) {
-      return true;
-    }
-  } catch (_err) {}
-  return false;
-}
+function createTranslatorRuntime({
+  win = typeof window !== 'undefined' ? window : null,
+  doc = null,
+  hostAdapter = null,
+  providerBundle = null,
+  hostCapability = null,
+  settings = null,
+  version = '2.1.0',
+  fetchFn = null,
+  onStatus = null,
+} = {}) {
+  const targetWin = win;
+  const targetDoc = doc || (targetWin && targetWin.document) || null;
+  if (!targetWin || !targetDoc) {
+    throw new Error('createTranslatorRuntime requires valid window and document objects');
+  }
+  if (!hostAdapter || typeof hostAdapter !== 'object') {
+    throw new Error('createTranslatorRuntime requires a hostAdapter port');
+  }
+  if (!providerBundle || typeof providerBundle !== 'object') {
+    throw new Error('createTranslatorRuntime requires a providerBundle port');
+  }
 
-function propagateToAccessibleSameOriginFrames(targetWin, targetDoc, fn) {
-  // D-0017: Cross-frame propagation wrapped in try/catch per frame!
-  if (!targetDoc || typeof targetDoc.querySelectorAll !== 'function') return;
-  try {
-    const iframes = targetDoc.querySelectorAll('iframe');
-    for (let i = 0; i < iframes.length; i++) {
-      try {
-        const cw = iframes[i] && iframes[i].contentWindow;
-        if (cw && cw !== targetWin) {
-          fn(cw);
-        }
-      } catch (_err) {}
-    }
-  } catch (_err) {}
-}
-
-function createRuntimeBootstrapper(defaults = {}) {
-  const version = String(defaults.version || 'v2.0.0');
-  const defaultPretranslateEnabled = Boolean(defaults.defaultPretranslateEnabled);
-  const defaultProviderRaw = String(defaults.defaultTranslationProvider || 'google-translate');
-  const defaultLlmConfig = defaults.defaultLlmConfig || DEFAULT_ANTIGRAVITY_LLM_CONFIG;
-
-  // Rev7-F3: Parameterized `mount(targetWin, targetDoc)` wiring ALL adapters against `(targetWin, targetDoc)`!
-  function mount(rawWin, rawDoc) {
-    const targetWin = rawWin || (typeof window !== 'undefined' ? window : null);
-    const targetDoc = rawDoc || (targetWin && targetWin.document) || (typeof document !== 'undefined' ? document : null);
-    if (isUnsupportedDocumentEnvironment(targetWin, targetDoc)) {
-      return { mounted: false, reason: 'UNSUPPORTED_DOCUMENT' };
-    }
-
-    // If same version is already mounted, sync host defaults if changed and force rescan
-    if (targetWin.__agyKoLocalizerActive === version && typeof targetWin.__agyForceRescanAll === 'function') {
-      if (targetWin.__agyLastDefaultProvider !== defaultProviderRaw && typeof targetWin.__agySetTranslationProvider === 'function') {
-        targetWin.__agyLastDefaultProvider = defaultProviderRaw;
-        try {
-          targetWin.__agySetTranslationProvider(defaultProviderRaw);
-        } catch (_err) {}
-      }
-      if (targetWin.__agyLastDefaultPretranslate !== defaultPretranslateEnabled && typeof targetWin.__agySetPretranslate === 'function') {
-        targetWin.__agyLastDefaultPretranslate = defaultPretranslateEnabled;
-        try {
-          targetWin.__agySetPretranslate(defaultPretranslateEnabled);
-        } catch (_err) {}
-      }
-      if (typeof targetWin.__agySyncPersistentSettings === 'function') {
-        Promise.resolve(targetWin.__agySyncPersistentSettings()).catch(() => {});
-      }
-      targetWin.__agyForceRescanAll();
-      return { mounted: true, reused: true, version };
-    }
-
-    // Hot-swap cleanup of any prior version in this window
-    if (typeof targetWin.__agyKoThoughtCleanup === 'function') {
-      try {
-        targetWin.__agyKoThoughtCleanup(false);
-      } catch (_err) {}
-    }
-
-    let disposed = false;
-    const isDisposed = () => disposed;
-    const disposables = createDisposableRegistry();
-    const hostCfg = resolveAntigravityHostConfig(targetWin);
-    const allowLoopbackForTest = Boolean(
-      targetWin.__AGY_HOST_ADAPTER_CONFIG__ && targetWin.__AGY_HOST_ADAPTER_CONFIG__.__allowLoopbackForTest
-    );
-
-    const setTimer =
-      targetWin && typeof targetWin.setTimeout === 'function'
-        ? targetWin.setTimeout.bind(targetWin)
-        : setTimeout;
-    const clearTimer =
-      targetWin && typeof targetWin.clearTimeout === 'function'
-        ? targetWin.clearTimeout.bind(targetWin)
-        : clearTimeout;
-    const fetchFn =
-      targetWin && typeof targetWin.fetch === 'function'
+  const effectiveFetch =
+    typeof fetchFn === 'function'
+      ? fetchFn
+      : typeof targetWin.fetch === 'function'
         ? targetWin.fetch.bind(targetWin)
         : typeof fetch === 'function'
           ? fetch.bind(globalThis)
           : null;
 
-    const storage = createAntigravityStorageAdapter(targetWin);
-    const nativeBridge = createNativeStorageBridge(targetWin);
-    const llmConfigPort = createAntigravityLlmConfigAdapter({
-      storage,
-      nativeBridge,
-      defaultConfig: defaultLlmConfig,
-    });
+  const storageKeys = hostAdapter.storageKeys || {};
+  const defaultProviderId = providerBundle.defaultProviderId || 'default';
+  const defaultLlmConfig = providerBundle.defaultLlmConfig || {};
+  const aliasMap = providerBundle.aliasMap || {};
+  const builtinProviderIds = new Set(
+    Array.isArray(providerBundle.builtinProviderIds) ? providerBundle.builtinProviderIds : [defaultProviderId]
+  );
 
-    const registry = createProviderRegistry();
-    if (typeof fetchFn === 'function') {
-      registry.registerProvider(
-        createGoogleTranslateAdapter({
-          fetchFn,
-          setTimer,
-          clearTimer,
-        })
-      );
-      registry.registerProvider(
-        createLocalLlmAdapter({
-          llmConfigPort,
-          fetchFn,
-          setTimer,
-          clearTimer,
-        })
-      );
+  const hasHostSettingsBridge = Boolean(
+    hostCapability && typeof hostCapability.getSettings === 'function'
+  );
+
+  let effectiveInitialSettings = settings;
+  let initialBridgeError = null;
+  let initialSettingsFailClosed = false;
+
+  if (effectiveInitialSettings === null && hasHostSettingsBridge) {
+    let rawSnap = null;
+    try {
+      rawSnap = hostCapability.getSettings();
+    } catch (_err) {
+      rawSnap = { status: 'error', reason: 'ERR_SETTINGS_BRIDGE_READ_FAILED', data: null };
     }
+    const unwrapped = unwrapHostSettingsSnapshot(rawSnap);
+    if (unwrapped.ok) {
+      effectiveInitialSettings = unwrapped.data;
+    } else {
+      effectiveInitialSettings = {
+        enabled: false,
+        settingsCorrupted: unwrapped.settingsCorrupted,
+        settingsMissing: unwrapped.settingsMissing,
+      };
+      initialSettingsFailClosed = true;
+      initialBridgeError = unwrapped.reason;
+    }
+  }
 
-    const customProviderStore = createOriginLocalCustomProviderStore({
-      storage,
-      registry,
-      fetchFn,
-      setTimer,
-      clearTimer,
-    });
-    customProviderStore.hydrateIntoRegistry();
+  const storage = hostAdapter.createStoragePort({ targetWin, initialSettings: effectiveInitialSettings });
+  const initCfg = storage.getInitialSettings() || {};
+  const settingsCorrupted = initCfg.settingsCorrupted === true;
+  const settingsMissing = initCfg.settingsMissing === true;
+  const rawInitialProvider =
+    initCfg.provider !== undefined && initCfg.provider !== null ? initCfg.provider : null;
+  const resolvedInitialProvider =
+    rawInitialProvider !== null && String(rawInitialProvider).trim() !== ''
+      ? canonicalizeProviderId(String(rawInitialProvider), aliasMap)
+      : defaultProviderId;
+  const invalidInitialProvider =
+    !settingsCorrupted &&
+    !settingsMissing &&
+    !initialSettingsFailClosed &&
+    rawInitialProvider !== null &&
+    String(rawInitialProvider).trim() !== '' &&
+    !resolvedInitialProvider;
+  const failClosed = settingsCorrupted || settingsMissing || initialSettingsFailClosed || invalidInitialProvider;
 
-    const sharedMemCache = (() => {
+  let state = {
+    enabled: failClosed ? false : initCfg.enabled !== false,
+    translateThinking: resolveBooleanOption(initCfg.translateThinking, true),
+    showThinking: resolveBooleanOption(initCfg.showThinking, true),
+    translateStaticUi: resolveBooleanOption(initCfg.translateStaticUi, true),
+    provider: failClosed ? null : resolvedInitialProvider,
+    llmConfig: {
+      ...defaultLlmConfig,
+      ...(initCfg.llmConfig && typeof initCfg.llmConfig === 'object' ? initCfg.llmConfig : {}),
+    },
+    customProviders: Array.isArray(initCfg.customProviders) ? initCfg.customProviders.slice() : [],
+  };
+
+  let started = false;
+  let runtimeActive = false;
+  let disposed = false;
+  let scanError = null;
+  let customProviderError = null;
+  let translationError = initialBridgeError
+    ? initialBridgeError
+    : settingsCorrupted
+      ? 'SETTINGS_FILE_CORRUPTED'
+      : settingsMissing
+        ? 'ERR_SETTINGS_FILE_MISSING'
+        : invalidInitialProvider
+          ? `INVALID_PROVIDER_ID:${String(rawInitialProvider)}`
+          : null;
+
+  const disposables = createDisposableRegistry();
+  const catalog = hostAdapter.createDictionaryCatalog();
+  const providerRegistry = createProviderRegistry({ aliasMap });
+  const customProviderSpecFingerprints = new Map();
+  const imperativeCustomProviders = new Map();
+  const llmConfigSubscribers = new Set();
+
+  function notifyLlmConfigSubscribers() {
+    for (const fn of Array.from(llmConfigSubscribers)) {
       try {
-        if (targetWin.parent && targetWin.parent !== targetWin && targetWin.parent.__agySharedKoMemCache instanceof Map) {
-          return targetWin.parent.__agySharedKoMemCache;
-        }
+        fn(state.llmConfig);
       } catch (_err) {}
-      if (!(targetWin.__agySharedKoMemCache instanceof Map)) {
-        targetWin.__agySharedKoMemCache = new Map();
-      }
-      return targetWin.__agySharedKoMemCache;
-    })();
+    }
+  }
 
-    const defaultProviderId =
-      normalizeAntigravityProviderAlias(defaultProviderRaw, registry) || 'google-translate';
-    const isRemoteEnv = isRemoteControlRuntimeEnvironment(targetWin, targetDoc, hostCfg);
+  const llmConfigPort = {
+    getLlmConfig: () => state.llmConfig,
+    subscribe(fn) {
+      if (typeof fn !== 'function') return () => {};
+      llmConfigSubscribers.add(fn);
+      return () => llmConfigSubscribers.delete(fn);
+    },
+  };
 
-    // Normalize any legacy stored alias ('google', 'local', 'ollama') before creating TranslationService
-    const existingRawProv = storage.getItem(STORAGE_KEYS.PROVIDER);
-    if (existingRawProv) {
-      const normalizedStored = normalizeAntigravityProviderAlias(existingRawProv, registry);
-      if (normalizedStored && normalizedStored !== existingRawProv) {
-        storage.setItem(STORAGE_KEYS.PROVIDER, normalizedStored);
+  const builtinProviders =
+    typeof providerBundle.createBuiltinProviders === 'function'
+      ? providerBundle.createBuiltinProviders({ fetchFn: effectiveFetch, llmConfigPort })
+      : [];
+  for (const provider of builtinProviders) {
+    providerRegistry.registerProvider(provider);
+  }
+
+  const registeredDeclarativeIds = new Set();
+
+  function buildCustomProviderFingerprint(spec) {
+    if (!spec || typeof spec !== 'object') return '';
+    return `${spec.endpointUrl || ''}|${spec.responsePath || ''}|${spec.timeoutMs || ''}|${JSON.stringify(spec.headers || null)}|${JSON.stringify(spec.bodyTemplate || null)}`;
+  }
+
+  function syncDeclarativeCustomProviders(hostList) {
+    customProviderError = null;
+    if (typeof providerBundle.createCustomProvider !== 'function') return;
+    const nextIds = new Set();
+    const mergedById = new Map();
+    for (const [id, spec] of imperativeCustomProviders.entries()) {
+      mergedById.set(id, spec);
+    }
+    for (const spec of Array.isArray(hostList) ? hostList : []) {
+      if (spec && typeof spec === 'object' && spec.id) {
+        mergedById.set(String(spec.id).trim().toLowerCase(), spec);
       }
     }
-
-    const translationService = createTranslationService({
-      registry,
-      storage,
-      defaultProviderId,
-      isRemoteEnv,
-      providerStorageKey: STORAGE_KEYS.PROVIDER,
-      cacheStorageKey: STORAGE_KEYS.CACHE,
-      setTimer,
-      clearTimer,
-      sharedMemCache,
-    });
-
-    let showThinkingEnabled = true;
-    const savedShow = storage.getItem(STORAGE_KEYS.SHOW_THINKING);
-    if (savedShow === '0' || savedShow === 'false') showThinkingEnabled = false;
-
-    let translateThinkingEnabled = true;
-    const savedTrans = storage.getItem(STORAGE_KEYS.TRANSLATE_THINKING);
-    if (savedTrans === '0' || savedTrans === 'false') translateThinkingEnabled = false;
-
-    const catalog = createAntigravityDictionaryCatalog();
-    const cspSecurityPort = createCspSecurityPort(hostCfg, targetWin, disposables, {
-      allowLoopbackForTest,
-    });
-
-    let settingsUi = null;
-    let statusbarPort = null;
-    let scheduler = null;
-
-    const uiLocalizer = createAntigravityUiLocalizer({
-      targetDoc,
-      catalog,
-      translationService,
-      isDisposed,
-    });
-
-    const triggerController = createAntigravityTriggerController({
-      targetDoc,
-      catalog,
-      disposables,
-      getShowThinkingEnabled: () => showThinkingEnabled,
-      onEnsureStyle: () => {
-        if (settingsUi) settingsUi.ensureStyle();
-      },
-    });
-
-    const pretranslator = createAntigravityPretranslator({
-      targetWin,
-      targetDoc,
-      storage,
-      nativeBridge,
-      translationService,
-      defaultPretranslateEnabled,
-      getTranslateThinkingEnabled: () => translateThinkingEnabled,
-      isDisposed,
-      onRefreshUi: () => {
-        if (settingsUi) settingsUi.refreshUi();
-      },
-      onBroadcastPretranslate: (nextVal) => {
-        propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-          if (typeof cw.__agySetPretranslate === 'function') {
-            cw.__agySetPretranslate(nextVal, { persistHost: false, broadcast: false });
-          }
-        });
-      },
-    });
-
-    const thinkingTranslator = createAntigravityThinkingTranslator({
-      targetDoc,
-      catalog,
-      translationService,
-      triggerController,
-      getTranslateThinkingEnabled: () => translateThinkingEnabled,
-      onTriggerPretranslate: () => {
-        if (scheduler) scheduler.schedulePretranslateDebounce();
-      },
-      isDisposed,
-      setTimer,
-      clearTimer,
-    });
-
-    function setShowThinkingEnabled(enabled, { broadcast = true } = {}) {
-      showThinkingEnabled = Boolean(enabled);
-      storage.setItem(STORAGE_KEYS.SHOW_THINKING, showThinkingEnabled ? '1' : '0');
-      triggerController.syncShowThinkingDomAttribute();
-      triggerController.scanTriggerButtonsSync(!showThinkingEnabled);
-      if (settingsUi) settingsUi.refreshUi();
-      if (broadcast) {
-        propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-          if (typeof cw.__agySetShowThinking === 'function') {
-            cw.__agySetShowThinking(showThinkingEnabled, { broadcast: false });
-          }
-        });
+    for (const spec of mergedById.values()) {
+      try {
+        const provider = providerBundle.createCustomProvider(spec, { fetchFn: effectiveFetch });
+        providerRegistry.registerProvider(provider);
+        customProviderSpecFingerprints.set(provider.id, buildCustomProviderFingerprint(provider.spec || spec));
+        nextIds.add(provider.id);
+      } catch (err) {
+        customProviderError = `custom-provider(${spec.id}): ${err && err.message ? err.message : String(err)}`;
       }
-      return { showThinkingEnabled };
     }
-
-    function setTranslateThinkingEnabled(enabled, { broadcast = true } = {}) {
-      translateThinkingEnabled = Boolean(enabled);
-      storage.setItem(STORAGE_KEYS.TRANSLATE_THINKING, translateThinkingEnabled ? '1' : '0');
-      if (!translateThinkingEnabled) {
-        thinkingTranslator.restoreOriginalCursorEdits();
-      } else {
-        thinkingTranslator.scanThoughtBlocks();
+    for (const oldId of Array.from(registeredDeclarativeIds)) {
+      if (!nextIds.has(oldId)) {
+        providerRegistry.unregisterProvider(oldId);
+        customProviderSpecFingerprints.delete(oldId);
+        registeredDeclarativeIds.delete(oldId);
       }
-      if (settingsUi) settingsUi.refreshUi();
-      if (broadcast) {
-        propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-          if (typeof cw.__agySetTranslateThinking === 'function') {
-            cw.__agySetTranslateThinking(translateThinkingEnabled, { broadcast: false });
-          }
-        });
-      }
-      return { translateThinkingEnabled };
     }
-
-    function selectTranslationProvider(rawId, { persistHost = true, broadcast = true } = {}) {
-      const normalized = normalizeAntigravityProviderAlias(rawId, registry);
-      const res = translationService.setProvider(normalized, { persist: true });
-      if (persistHost && nativeBridge && typeof nativeBridge.writeItems === 'function') {
-        nativeBridge.writeItems({ [STORAGE_KEYS.PROVIDER]: res.desiredProviderId });
-      }
-      if (statusbarPort) statusbarPort.refresh();
-      if (settingsUi) settingsUi.refreshUi();
-      if (broadcast) {
-        propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-          if (typeof cw.__agySetTranslationProvider === 'function') {
-            try {
-              cw.__agySetTranslationProvider(res.desiredProviderId, {
-                persistHost: false,
-                broadcast: false,
-              });
-            } catch (_err) {}
-          }
-        });
-      }
-      return {
-        provider: res.effectiveProviderId,
-        desiredProvider: res.desiredProviderId,
-        availableProviders: res.availableProviders,
-      };
+    for (const id of nextIds) {
+      registeredDeclarativeIds.add(id);
     }
+  }
+  syncDeclarativeCustomProviders(state.customProviders);
 
-    settingsUi = createAntigravitySettingsUi({
-      targetWin,
-      targetDoc,
-      version,
-      registry,
-      translationService,
-      llmConfigPort,
-      customProviderStore,
-      resolveCspNonce: () => cspSecurityPort.resolveHostCspNonce(targetDoc),
-      getShowThinkingEnabled: () => showThinkingEnabled,
-      onToggleShowThinking: (val) => setShowThinkingEnabled(val),
-      getTranslateThinkingEnabled: () => translateThinkingEnabled,
-      onToggleTranslateThinking: (val) => setTranslateThinkingEnabled(val),
-      getPretranslateEnabled: () => pretranslator.getRawFlag(),
-      onTogglePretranslate: (val) => pretranslator.setPretranslateEnabled(val),
-      onSelectProvider: (id) => selectTranslationProvider(id),
-      onRetranslate: (clearCache) =>
-        thinkingTranslator.retranslateVisibleThoughts(clearCache, () => pretranslator.resetHistory()),
-      onRefreshStatusbar: () => {
-        if (statusbarPort) statusbarPort.refresh();
-      },
-      setTimer,
-      clearTimer,
-    });
-
-    statusbarPort = createStatusbarAdapterPort({
-      targetWin,
-      version,
-      translationService,
-      registry,
-      getCompactTag: (effId) => settingsUi.getProviderDisplayMeta(effId).compactTag,
-      getProviderTitle: (effId) => settingsUi.getProviderDisplayMeta(effId).title,
-      onToggleSettings: () => settingsUi.openOrToggleModal(),
-      onCloseSettings: () => settingsUi.closeModal(),
-      onCycleProvider: () => {
-        const ids = registry.listProviderIds();
-        if (ids.length > 0) {
-          const cur = translationService.getDesiredProviderId();
-          const idx = ids.indexOf(cur);
-          const next = ids[(idx + 1) % ids.length];
-          selectTranslationProvider(next);
-          thinkingTranslator.retranslateVisibleThoughts(false);
-        }
-      },
-    });
-
-    translationService.subscribe(() => {
-      if (statusbarPort) statusbarPort.refresh();
-    });
-    llmConfigPort.subscribe((cfg) => {
-      if (statusbarPort) statusbarPort.refresh();
-      if (settingsUi) settingsUi.refreshUi();
-      propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-        if (typeof cw.__agySyncLlmConfigFromParent === 'function') {
-          cw.__agySyncLlmConfigFromParent(cfg);
-        }
-      });
-    });
-
-    const remoteHostPort = createAntigravityRemoteCompanionSync({
-      targetWin,
-      targetDoc,
-      hostCfg,
-      version,
-      disposables,
-      onRefreshStatusbar: () => {
-        if (statusbarPort) statusbarPort.refresh();
-      },
-      onMountChildLocalizer: (cw, cd) => {
-        mount(cw, cd);
-      },
-      fetchFn,
-    });
-
-    const workbenchPromoter = createWorkbenchPromoter({
-      hostCfg,
-      cspSecurityPort,
-      remoteHostPort,
-      rootWin: targetWin,
-      rootDoc: targetDoc,
-      disposables,
-    });
-
-    async function syncPersistentTranslatorSettings() {
-      await llmConfigPort.syncFromNativeStorage();
-      if (nativeBridge && typeof nativeBridge.readItems === 'function') {
-        const items = await nativeBridge.readItems();
-        if (items && typeof items === 'object') {
-          if (items[STORAGE_KEYS.PROVIDER]) {
-            const normP = normalizeAntigravityProviderAlias(items[STORAGE_KEYS.PROVIDER], registry);
-            if (normP) {
-              translationService.syncDesiredProviderFromExternal(normP);
-            }
-          }
-          if (items[STORAGE_KEYS.PRETRANSLATE] !== undefined) {
-            const rawPre = String(items[STORAGE_KEYS.PRETRANSLATE]);
-            const nextPre = rawPre === '1' || rawPre === 'true';
-            if (nextPre !== pretranslator.getRawFlag()) {
-              pretranslator.setPretranslateEnabled(nextPre, { persistHost: false, broadcast: true });
-            }
-          }
-        }
+  const translationService = createTranslationService({
+    registry: providerRegistry,
+    storage,
+    defaultProviderId,
+    providerStorageKey: null, // Strictly forbid localStorage authority over provider selection
+    cacheStorageKey: storageKeys.cache,
+    setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
+    clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
+    getProviderCacheVariant: (pid) => {
+      if (typeof providerBundle.getProviderCacheVariant === 'function') {
+        const builtinVariant = providerBundle.getProviderCacheVariant(pid, state.llmConfig);
+        if (builtinVariant) return builtinVariant;
       }
-      if (statusbarPort) statusbarPort.refresh();
-      if (settingsUi) settingsUi.refreshUi();
-      return {
-        provider: translationService.getEffectiveProviderId(),
-        desiredProvider: translationService.getDesiredProviderId(),
-        pretranslateEnabled: pretranslator.getRawFlag(),
-        llmConfig: llmConfigPort.getLlmConfig(),
-      };
-    }
+      return customProviderSpecFingerprints.get(pid) || '';
+    },
+    onTranslationError: (err, pid) => {
+      translationError = `${pid}: ${err && err.message ? err.message : String(err)}`;
+      emitStatus();
+    },
+  });
+  if (state.provider) {
+    translationService.syncDesiredProviderFromExternal(state.provider);
+  }
+  disposables.register(() => translationService.dispose());
 
-    scheduler = createObserverScheduler({
-      targetWin,
-      targetDoc,
-      disposables,
-      uiLocalizer,
-      triggerController,
-      thinkingTranslator,
-      pretranslator,
-      settingsUi,
-      statusbarPort,
-      workbenchPromoter,
-      onSyncPersistentSettings: syncPersistentTranslatorSettings,
-    });
+  const hostNoTranslateSelector =
+    hostCapability && typeof hostCapability.getNoTranslateSelector === 'function'
+      ? hostCapability.getNoTranslateSelector()
+      : null;
 
-    // Expose public & diagnostic globals on `targetWin` via `disposables.registerPropertyValue` for clean fullRestore!
-    const registerGlobal = (key, value) => {
-      disposables.registerPropertyValue(targetWin, key, value);
-    };
-
-    registerGlobal('__agyMountKoThoughtLocalizer', mount);
-    registerGlobal('__agyKoLocalizerActive', version);
-    registerGlobal('__agyLastDefaultPretranslate', defaultPretranslateEnabled);
-    registerGlobal('__agyLastDefaultProvider', defaultProviderRaw);
-    registerGlobal('__agyTranslateStaticUiSync', (raw) => catalog.translateSync(raw));
-    registerGlobal('__agyGetTranslationProvider', () => translationService.getEffectiveProviderId());
-    registerGlobal('__agyGetDesiredTranslationProvider', () => translationService.getDesiredProviderId());
-    registerGlobal('__agyListTranslationProviders', () => registry.listProviderIds());
-    registerGlobal('__agyRegisterTranslationAdapter', (adapter) => registry.registerProvider(adapter));
-    registerGlobal('__agySetTranslationProvider', selectTranslationProvider);
-    registerGlobal('__agySyncPersistentSettings', syncPersistentTranslatorSettings);
-    registerGlobal('__agySyncLlmConfigFromParent', (cfg) =>
-      llmConfigPort.setLlmConfig(cfg, { persistHost: false })
-    );
-    registerGlobal('__agyGetLlmConfig', () => llmConfigPort.getLlmConfig());
-    registerGlobal('__agySetLlmConfig', (partial, opts) => llmConfigPort.setLlmConfig(partial, opts));
-    registerGlobal('__agyUpsertCustomProvider', (spec) => customProviderStore.upsertSpec(spec));
-    registerGlobal('__agyRemoveCustomProvider', (id) => customProviderStore.removeSpec(id));
-    registerGlobal('__agyListCustomProviders', () => customProviderStore.listSpecs());
-    registerGlobal('__agyGetShowThinking', () => showThinkingEnabled);
-    registerGlobal('__agySetShowThinking', setShowThinkingEnabled);
-    registerGlobal('__agyGetTranslateThinking', () => translateThinkingEnabled);
-    registerGlobal('__agySetTranslateThinking', setTranslateThinkingEnabled);
-    registerGlobal('__agyGetPretranslate', () => pretranslator.getRawFlag());
-    registerGlobal('__agySetPretranslate', (val, opts) => pretranslator.setPretranslateEnabled(val, opts));
-    registerGlobal('__agyOpenTranslatorSettingsModal', () => settingsUi.openOrToggleModal());
-    registerGlobal('__agyRetranslateVisibleThoughts', (clearCache) =>
-      thinkingTranslator.retranslateVisibleThoughts(clearCache, () => pretranslator.resetHistory())
-    );
-    registerGlobal('__agyForceRescanAll', () => scheduler.scanAll());
-
-    const cleanup = (fullRestore = false) => {
-      if (disposed) return;
-      disposed = true;
-      propagateToAccessibleSameOriginFrames(targetWin, targetDoc, (cw) => {
-        if (typeof cw.__agyKoThoughtCleanup === 'function') {
+  const isHostIgnoredElement =
+    hostCapability && typeof hostCapability.isElementInsideIgnored === 'function'
+      ? (el) => {
           try {
-            cw.__agyKoThoughtCleanup(fullRestore);
-          } catch (_err) {}
+            return Boolean(hostCapability.isElementInsideIgnored(el));
+          } catch (_err) {
+            return false;
+          }
+        }
+      : null;
+
+  const uiLocalizer = hostAdapter.createUiLocalizer({
+    targetDoc,
+    catalog,
+    translationService,
+    extraExcludedSelector: hostNoTranslateSelector,
+    isHostIgnoredElement,
+    isDisposed: () => disposed,
+  });
+
+  const triggerController = hostAdapter.createTriggerController({
+    targetDoc,
+    targetWin,
+    catalog,
+    extraExcludedSelector: hostNoTranslateSelector,
+    isHostIgnoredElement,
+    getShowThinkingEnabled: () => state.showThinking,
+    isDisposed: () => disposed,
+  });
+
+  const thinkingTranslator = hostAdapter.createThinkingTranslator({
+    targetDoc,
+    catalog,
+    translationService,
+    triggerController,
+    extraExcludedSelector: hostNoTranslateSelector,
+    isHostIgnoredElement,
+    getTranslateThinkingEnabled: () => state.enabled && state.translateThinking,
+    isDisposed: () => disposed,
+    setTimer: targetWin.setTimeout ? targetWin.setTimeout.bind(targetWin) : setTimeout,
+    clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
+  });
+
+  let scheduler = null;
+
+  function emitStatus() {
+    if (typeof onStatus !== 'function') return;
+    try {
+      onStatus(getStatus());
+    } catch (_err) {}
+  }
+
+  function ensureStyleElement() {
+    if (disposed || !targetDoc || !hostAdapter.styleId) return;
+    const cssText = typeof hostAdapter.buildOverlayCss === 'function' ? hostAdapter.buildOverlayCss() : '';
+    if (!cssText) return;
+    if (hostCapability && typeof hostCapability.injectStyle === 'function') {
+      hostCapability.injectStyle(hostAdapter.styleId, cssText);
+      return;
+    }
+    const existing = targetDoc.getElementById && targetDoc.getElementById(hostAdapter.styleId);
+    if (existing) return;
+    const parent = targetDoc.head || targetDoc.documentElement;
+    if (!parent || typeof targetDoc.createElement !== 'function') return;
+    const styleEl = targetDoc.createElement('style');
+    styleEl.id = hostAdapter.styleId;
+    styleEl.textContent = cssText;
+    parent.appendChild(styleEl);
+  }
+
+  function restoreThoughtBlocks() {
+    if (typeof thinkingTranslator.restoreAll === 'function') {
+      thinkingTranslator.restoreAll();
+    } else if (typeof thinkingTranslator.restoreOriginalBlocks === 'function') {
+      thinkingTranslator.restoreOriginalBlocks();
+    }
+  }
+
+  function scanAll(activeObserver = null) {
+    if (disposed || !state.enabled) return;
+    try {
+      ensureStyleElement();
+      triggerController.scanTriggerButtonsSync(false);
+      if (state.translateThinking) {
+        thinkingTranslator.scanThoughtBlocks();
+      } else {
+        restoreThoughtBlocks();
+      }
+      if (state.translateStaticUi) {
+        const root = targetDoc.body || targetDoc.documentElement;
+        if (root) {
+          uiLocalizer.localizeStaticUiInRoot(root, activeObserver || (scheduler ? scheduler.getObserver() : null));
+        }
+      } else {
+        uiLocalizer.restoreAllMutatedNodes();
+      }
+      if (scheduler && typeof scheduler.takeRecords === 'function') {
+        scheduler.takeRecords();
+      }
+      scanError = null;
+    } catch (err) {
+      scanError = err && err.message ? err.message : String(err);
+      emitStatus();
+    }
+  }
+
+  function activateRuntime() {
+    if (disposed || runtimeActive || !state.enabled) return;
+    runtimeActive = true;
+    ensureStyleElement();
+    triggerController.attachListeners();
+    if (!scheduler) {
+      scheduler = createObserverScheduler({
+        targetWin,
+        targetDoc,
+        disposables,
+        uiLocalizer,
+        triggerController,
+        thinkingTranslator,
+        selectors: hostAdapter.selectors || null,
+        isHostIgnoredElement,
+        isEnabled: () => !disposed && state.enabled,
+        isTranslateThinkingEnabled: () => state.translateThinking,
+        isTranslateStaticUiEnabled: () => state.translateStaticUi,
+        onEnsureStyle: ensureStyleElement,
+        onScanAll: scanAll,
+        onError: (err) => {
+          scanError = err && err.message ? err.message : String(err);
+          emitStatus();
+        },
+        periodicIntervalMs: 2500,
+      });
+      disposables.register(() => {
+        if (scheduler) {
+          scheduler.dispose();
+          scheduler = null;
         }
       });
-      scheduler.stop();
-      translationService.dispose();
-      statusbarPort.dispose();
-      settingsUi.dispose(fullRestore);
-      if (fullRestore) {
-        thinkingTranslator.restoreOriginalCursorEdits();
-        triggerController.restoreTriggerButtons();
-        uiLocalizer.restoreAllMutatedNodes();
-        try {
-          delete targetWin.__agyPretranslateStats;
-          if (!targetWin.agyStatusBar && !targetWin.__agyMountMcpManager) {
-            delete targetWin.__agyCapturedLsClient;
-          }
-          delete targetWin.__agySharedKoMemCache;
-        } catch (_err) {}
-      }
-      try {
-        delete targetWin.__agyKoLocalizerActive;
-      } catch (_err) {}
-      disposables.disposeAll(fullRestore);
-    };
-
-    registerGlobal('__agyKoThoughtCleanup', cleanup);
-
+    }
     scheduler.start();
+  }
 
+  function deactivateRuntime() {
+    if (!runtimeActive) return;
+    runtimeActive = false;
+    if (scheduler) {
+      scheduler.stop();
+    }
+    triggerController.detachListeners();
+    restoreThoughtBlocks();
+    uiLocalizer.restoreAllMutatedNodes();
+    triggerController.restoreTriggerButtons();
+  }
+
+  function applyFailClosed(reason) {
+    state.enabled = false;
+    state.provider = null;
+    translationError = reason || 'SETTINGS_FILE_CORRUPTED';
+    deactivateRuntime();
+    emitStatus();
+  }
+
+  function applyHostSettingsSnapshot(snapshot) {
+    if (disposed) return;
+    const unwrapped = unwrapHostSettingsSnapshot(snapshot);
+    if (!unwrapped.ok) {
+      applyFailClosed(unwrapped.reason);
+      return;
+    }
+    const data = unwrapped.data;
+    const rawProv = data.provider !== undefined && data.provider !== null ? String(data.provider).trim() : '';
+    if (rawProv && !canonicalizeProviderId(rawProv, aliasMap)) {
+      applyFailClosed(`INVALID_PROVIDER_ID:${rawProv}`);
+      return;
+    }
+    translationError = null;
+    updateSettings({
+      enabled: data.enabled !== false,
+      translateThinking: resolveBooleanOption(data.translateThinking, true),
+      showThinking: resolveBooleanOption(data.showThinking, true),
+      translateStaticUi: resolveBooleanOption(data.translateStaticUi, true),
+      llmConfig: {
+        ...defaultLlmConfig,
+        ...(data.llmConfig && typeof data.llmConfig === 'object' ? data.llmConfig : {}),
+      },
+      customProviders: Array.isArray(data.customProviders) ? data.customProviders : [],
+      provider: rawProv || defaultProviderId,
+    });
+  }
+
+  if (hostCapability && typeof hostCapability.onSettingsChange === 'function') {
+    try {
+      const unsubscribeSettings = hostCapability.onSettingsChange((snap) => {
+        applyHostSettingsSnapshot(snap);
+      });
+      if (typeof unsubscribeSettings === 'function') {
+        disposables.register(unsubscribeSettings);
+      }
+    } catch (_err) {}
+  }
+
+  function start() {
+    if (disposed) {
+      throw new Error('Cannot start a disposed translator runtime instance');
+    }
+    if (started) return getStatus();
+    started = true;
+    disposables.register(() => triggerController.detachListeners());
+
+    if (state.enabled) {
+      activateRuntime();
+    }
+    emitStatus();
+    return getStatus();
+  }
+
+  function updateSettings(next = {}) {
+    if (disposed || !next || typeof next !== 'object') return getStatus();
+
+    if (next.settingsCorrupted === true || next.settingsMissing === true) {
+      applyFailClosed(next.settingsCorrupted ? 'SETTINGS_FILE_CORRUPTED' : 'ERR_SETTINGS_FILE_MISSING');
+      return getStatus();
+    }
+
+    const prevProvider = state.provider;
+    const prevEnabled = state.enabled;
+    const prevTranslateThinking = state.translateThinking;
+    const prevTranslateStaticUi = state.translateStaticUi;
+    const getConfigSig = (cfg) =>
+      typeof providerBundle.getRuntimeConfigSignature === 'function'
+        ? providerBundle.getRuntimeConfigSignature(cfg)
+        : JSON.stringify(cfg || null);
+    const prevLlmSig = getConfigSig(state.llmConfig);
+
+    if (typeof next.enabled === 'boolean') state.enabled = next.enabled;
+    if (typeof next.translateThinking === 'boolean') {
+      state.translateThinking = next.translateThinking;
+    }
+    if (typeof next.showThinking === 'boolean') {
+      state.showThinking = next.showThinking;
+    }
+    if (typeof next.translateStaticUi === 'boolean') {
+      state.translateStaticUi = next.translateStaticUi;
+    }
+    if (next.llmConfig && typeof next.llmConfig === 'object') {
+      state.llmConfig = { ...state.llmConfig, ...next.llmConfig };
+    }
+    const nextLlmSig = getConfigSig(state.llmConfig);
+    const llmConfigChanged = nextLlmSig !== prevLlmSig;
+    if (llmConfigChanged) {
+      notifyLlmConfigSubscribers();
+    }
+    let customProvidersChanged = false;
+    if (Array.isArray(next.customProviders)) {
+      customProvidersChanged = true;
+      state.customProviders = next.customProviders;
+      syncDeclarativeCustomProviders(state.customProviders);
+      if (state.provider && !providerRegistry.hasProvider(state.provider)) {
+        translationService.syncDesiredProviderFromExternal(state.provider);
+      }
+    }
+    if (typeof next.provider === 'string' && next.provider.trim()) {
+      const candidate = canonicalizeProviderId(next.provider, aliasMap);
+      if (candidate) {
+        state.provider = candidate;
+        translationError = null;
+        if (providerRegistry.hasProvider(candidate)) {
+          translationService.setProvider(candidate, { persist: false });
+        } else {
+          translationService.syncDesiredProviderFromExternal(candidate);
+        }
+      } else {
+        applyFailClosed(`INVALID_PROVIDER_ID:${next.provider}`);
+        return getStatus();
+      }
+    }
+
+    if (next.clearCache === true) {
+      translationService.clearCache();
+    }
+
+    if (!state.enabled && prevEnabled) {
+      deactivateRuntime();
+    } else if (state.enabled && started) {
+      if (!runtimeActive) {
+        activateRuntime();
+      } else if (
+        state.provider !== prevProvider ||
+        next.clearCache === true ||
+        customProvidersChanged ||
+        (llmConfigChanged &&
+          (typeof providerBundle.shouldRetranslateOnConfigChange === 'function'
+            ? providerBundle.shouldRetranslateOnConfigChange(state.provider)
+            : true))
+      ) {
+        translationService.bumpEpoch();
+        thinkingTranslator.retranslateVisibleThoughts(false);
+      } else if (state.translateThinking !== prevTranslateThinking || state.translateStaticUi !== prevTranslateStaticUi) {
+        scanAll();
+      } else {
+        triggerController.scanTriggerButtonsSync(false);
+      }
+    }
+
+    emitStatus();
+    return getStatus();
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    started = false;
+    disposables.disposeAll(true);
+    restoreThoughtBlocks();
+    uiLocalizer.restoreAllMutatedNodes();
+    triggerController.restoreTriggerButtons();
+    if (hostAdapter.styleId && hostCapability && typeof hostCapability.removeStyle === 'function') {
+      try {
+        hostCapability.removeStyle(hostAdapter.styleId);
+      } catch (_err) {}
+    }
+    const styleEl = hostAdapter.styleId && targetDoc.getElementById && targetDoc.getElementById(hostAdapter.styleId);
+    if (styleEl && typeof styleEl.remove === 'function') {
+      styleEl.remove();
+    }
+    emitStatus();
+  }
+
+  function getStatus() {
     return {
-      mounted: true,
-      reused: false,
       version,
-      cleanup,
+      hostId: hostAdapter.id || 'unknown',
+      started,
+      disposed,
+      enabled: state.enabled,
+      translateThinking: state.translateThinking,
+      showThinking: state.showThinking,
+      translateStaticUi: state.translateStaticUi,
+      provider: state.provider,
+      availableProviders: providerRegistry.listProviderIds(),
+      cacheSize: translationService.getCacheSize(),
+      lastError: scanError || customProviderError || translationError,
     };
   }
 
+  function registerCustomProvider(spec) {
+    if (disposed) throw new Error('Cannot register custom provider on disposed instance');
+    if (typeof providerBundle.createCustomProvider !== 'function') {
+      throw new Error('Active providerBundle does not support custom providers');
+    }
+    const provider = providerBundle.createCustomProvider(spec, { fetchFn: effectiveFetch });
+    const normalizedSpec = provider.spec ? { ...provider.spec } : { ...spec, id: provider.id };
+    imperativeCustomProviders.set(provider.id, normalizedSpec);
+    providerRegistry.registerProvider(provider);
+    customProviderSpecFingerprints.set(provider.id, buildCustomProviderFingerprint(normalizedSpec));
+    translationService.bumpEpoch();
+    if (started && runtimeActive && state.enabled && state.provider === provider.id) {
+      thinkingTranslator.retranslateVisibleThoughts(false);
+    }
+    emitStatus();
+    return provider.id;
+  }
+
+  function unregisterCustomProvider(rawId) {
+    const normId = providerRegistry.normalizeId(rawId);
+    if (!normId || builtinProviderIds.has(normId)) return false;
+    const removed = providerRegistry.unregisterProvider(normId);
+    imperativeCustomProviders.delete(normId);
+    registeredDeclarativeIds.delete(normId);
+    customProviderSpecFingerprints.delete(normId);
+    if (removed) {
+      translationService.bumpEpoch();
+      if (state.provider === normId && started && runtimeActive && state.enabled) {
+        restoreThoughtBlocks();
+      }
+    }
+    emitStatus();
+    return removed;
+  }
+
   return {
-    mount,
+    start,
+    updateSettings,
+    registerCustomProvider,
+    unregisterCustomProvider,
+    dispose,
+    getStatus,
+    scanAll,
   };
 }
 
 module.exports = {
-  normalizeAntigravityProviderAlias,
-  isUnsupportedDocumentEnvironment,
-  isRemoteControlRuntimeEnvironment,
-  createRuntimeBootstrapper,
+  canonicalizeProviderId,
+  createTranslatorRuntime,
 };
