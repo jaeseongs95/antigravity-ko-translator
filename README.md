@@ -1,8 +1,15 @@
-# Antigravity 2.0 Korean Thought & UI Translator (`v2.1.0`)
+# Antigravity 2.0 Korean Thought & UI Translator (`v2.1.1`)
 
 [한국어 README](./README.ko.md)
 
-Clean-slate, **Desktop Native App Only** Korean localization plugin for Antigravity 2.0, hosted via **`antigravity-native-addon-host` (`>= v2.1.0`)** under **`AddonManifest.v2`** (renderer-only, zero `mainHook`, unidirectional read-only `settingsBridge`):
+Clean-slate, **Desktop Native App Only** Korean localization plugin for Antigravity 2.0, hosted via **`antigravity-native-addon-host` (`>= v2.1.0`)** under **`AddonManifest.v2`** (renderer-only, zero `mainHook`, unidirectional read-only `settingsBridge`).
+
+### Highlights in v2.1.1
+- **Corrupted Settings GUI Recovery & Atomic Storage Hardening (`I3`)**: Sidecar GUI can recover corrupted `ko_translator_settings.json` via explicit `resetCorrupted: true` overwrite while keeping programmatic partial writes fail-closed; adds `parseSafeJson`, bounded lock/Windows `renameSync` retries, and HTTP `409` on lock contention.
+- **Sidecar Read Auth, CSP Nonce & Unified Standalone Gate (`I5`)**: Enforces header-only `x-sidecar-token` on `GET /api/settings` & `POST /api/settings`, header or `?token=` on `GET /`, per-response CSPRNG `Content-Security-Policy` script `nonce`, unified security gate + error handlers on standalone HTTP fallback, and fail-closed SDK startup routes.
+- **Host Version & DOS Filename Parity (`I7`) + Strict Provider Fail-Closed (`Q3`)**: Enforces `compatibility.minHostVersion` SemVer comparison, Windows DOS device name blocking, installed `addon-host-loader.js` version checks, and strict non-empty string `provider` validation (`MISSING_PROVIDER_ID` / `INVALID_PROVIDER_ID`).
+
+### Core Features
 - **Real-time Thinking translation** with code/identifier/path preservation and Korean particle normalization.
 - **Static English UI localization** with strict exclusions for code viewers, diff lines, terminals, inputs, assistant response bodies, and all sibling plugin UI slots (`[data-addon-host-owner]`, `[data-addon-host-slot]`, `[data-addon-host-no-translate]`, `addonHost.isElementInsideIgnored()`).
 - **Official Antigravity Sidecar (`AUX_PANE`) Settings & Diagnostics Panel** (`sidecars/ko-translator-settings/`) writing `~/.gemini/antigravity/ko_translator_settings.json`, pushed live to World `998` by the host's read-only `settingsBridge` (`addonHost.getSettings()` / `addonHost.onSettingsChange()`).

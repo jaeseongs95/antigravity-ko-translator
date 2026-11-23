@@ -32,36 +32,87 @@ const DEFAULT_SETTINGS = Object.freeze({
   customProviders: Object.freeze([]),
 });
 
-function acquireExclusiveLock(lockPath, staleMs = 15000) {
+const TRANSIENT_FS_ERROR_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+const RENAME_RETRY_DELAYS_MS = Object.freeze([30, 60, 120, 240]);
+const DANGEROUS_JSON_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function syncSleepMs(delayMs) {
+  const ms = Math.max(0, Math.floor(Number(delayMs) || 0));
+  if (ms <= 0) return;
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  } catch (_err) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {}
+  }
+}
+
+function hasDangerousJsonKey(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((item) => hasDangerousJsonKey(item));
+  for (const key of Object.keys(value)) {
+    if (DANGEROUS_JSON_KEYS.has(key)) return true;
+    if (hasDangerousJsonKey(value[key])) return true;
+  }
+  return false;
+}
+
+function parseSafeJson(rawText) {
+  let dangerous = false;
+  const parsed = JSON.parse(rawText, (key, value) => {
+    if (DANGEROUS_JSON_KEYS.has(key)) {
+      dangerous = true;
+    }
+    return value;
+  });
+  if (dangerous || hasDangerousJsonKey(parsed)) {
+    throw new Error('ERR_UNSAFE_JSON_PROTO_KEY');
+  }
+  return parsed;
+}
+
+function acquireExclusiveLock(lockPath, staleMs = 15000, { maxRetries = 4, retryDelayMs = 40 } = {}) {
   if (!lockPath) return null;
   const effectiveStaleMs = Math.max(Number(staleMs) || 15000, 2000);
-  try {
-    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-    // NB1: Guard against legacy regular-file locks colliding with proper-lockfile's directory lock (ENOTDIR/EEXIST).
-    if (fs.existsSync(lockPath)) {
-      const st = fs.lstatSync(lockPath);
-      if (st.isFile()) {
-        if (Date.now() - st.mtimeMs <= effectiveStaleMs) {
-          return null;
+  const attempts = Math.max(1, Number.isInteger(maxRetries) ? maxRetries + 1 : 5);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+      // NB1: Guard against legacy regular-file locks colliding with proper-lockfile's directory lock (ENOTDIR/EEXIST).
+      if (fs.existsSync(lockPath)) {
+        const st = fs.lstatSync(lockPath);
+        if (st.isFile()) {
+          if (Date.now() - st.mtimeMs <= effectiveStaleMs) {
+            if (attempt + 1 < attempts) {
+              syncSleepMs(retryDelayMs * (attempt + 1));
+              continue;
+            }
+            return null;
+          }
+          fs.unlinkSync(lockPath);
         }
-        fs.unlinkSync(lockPath);
       }
+      const sentinelPath = `${lockPath}.target`;
+      if (!fs.existsSync(sentinelPath)) {
+        fs.writeFileSync(sentinelPath, '', { encoding: 'utf8', mode: 0o600 });
+      }
+      const release = lockfile.lockSync(sentinelPath, {
+        lockfilePath: lockPath,
+        stale: effectiveStaleMs,
+        realpath: false,
+      });
+      const token = crypto.randomBytes(12).toString('hex');
+      activeLockReleases.set(token, { lockPath, release });
+      return token;
+    } catch (_err) {
+      if (attempt + 1 < attempts) {
+        syncSleepMs(retryDelayMs * (attempt + 1));
+        continue;
+      }
+      return null;
     }
-    const sentinelPath = `${lockPath}.target`;
-    if (!fs.existsSync(sentinelPath)) {
-      fs.writeFileSync(sentinelPath, '', { encoding: 'utf8', mode: 0o600 });
-    }
-    const release = lockfile.lockSync(sentinelPath, {
-      lockfilePath: lockPath,
-      stale: effectiveStaleMs,
-      realpath: false,
-    });
-    const token = crypto.randomBytes(12).toString('hex');
-    activeLockReleases.set(token, { lockPath, release });
-    return token;
-  } catch (_err) {
-    return null;
   }
+  return null;
 }
 
 function releaseExclusiveLock(lockPath, token) {
@@ -80,7 +131,27 @@ function writeFileAtomicSync(targetPath, content) {
   const tmpPath = `${targetPath}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`;
   try {
     fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmpPath, targetPath);
+    let lastRenameErr = null;
+    for (let attempt = 0; attempt <= RENAME_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        fs.renameSync(tmpPath, targetPath);
+        lastRenameErr = null;
+        break;
+      } catch (err) {
+        lastRenameErr = err;
+        if (
+          err &&
+          typeof err.code === 'string' &&
+          TRANSIENT_FS_ERROR_CODES.has(err.code) &&
+          attempt < RENAME_RETRY_DELAYS_MS.length
+        ) {
+          syncSleepMs(RENAME_RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+        throw err;
+      }
+    }
+    if (lastRenameErr) throw lastRenameErr;
   } finally {
     if (fs.existsSync(tmpPath)) {
       try {
@@ -254,7 +325,7 @@ function readTranslatorSettings(pathOverrides = null, { strict = false } = {}) {
         customProviders: [],
       };
     }
-    const parsed = JSON.parse(fs.readFileSync(p.SETTINGS_PATH, 'utf8'));
+    const parsed = parseSafeJson(fs.readFileSync(p.SETTINGS_PATH, 'utf8'));
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('SETTINGS_FILE_CORRUPTED');
     }
@@ -293,14 +364,30 @@ function readTranslatorSettings(pathOverrides = null, { strict = false } = {}) {
   }
 }
 
-function saveTranslatorSettings(patch, pathOverrides = null) {
+function saveTranslatorSettings(patch, pathOverrides = null, { allowCorruptedRecovery = false } = {}) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+    throw new Error('INVALID_SETTINGS_PATCH');
+  }
   const p = { ...resolveHostPaths(process.env), ...(pathOverrides || {}) };
   const lockToken = acquireExclusiveLock(p.SETTINGS_LOCK_PATH);
   if (!lockToken) {
     throw new Error('SETTINGS_LOCK_BUSY');
   }
   try {
-    const current = readTranslatorSettings(p, { strict: true });
+    let current;
+    try {
+      current = readTranslatorSettings(p, { strict: true });
+    } catch (readErr) {
+      if (allowCorruptedRecovery && readErr && String(readErr.message || '').startsWith('SETTINGS_FILE_CORRUPTED')) {
+        current = {
+          ...DEFAULT_SETTINGS,
+          llmConfig: { ...DEFAULT_LLM_CONFIG },
+          customProviders: [],
+        };
+      } else {
+        throw readErr;
+      }
+    }
     for (const boolKey of ['enabled', 'translateThinking', 'showThinking', 'translateStaticUi']) {
       if (patch[boolKey] !== undefined && typeof patch[boolKey] !== 'boolean') {
         throw new Error(`INVALID_BOOLEAN_SETTING:${boolKey}`);

@@ -1,6 +1,6 @@
 {
   "name": "antigravity-ko-translator",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Antigravity Desktop Native App Korean Thinking & Static UI Translator (AddonManifest.v2 Renderer-Only Plugin + Host settingsBridge + Pure Read-Only DOM Overlay + Official Sidecar Settings).",
   "private": true,
   "scripts": {

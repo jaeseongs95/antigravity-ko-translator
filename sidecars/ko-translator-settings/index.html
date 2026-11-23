@@ -156,7 +156,7 @@
         <strong id="diag-plugin-val">확인 중…</strong>
       </div>
       <div class="badge" id="diag-manifest">
-        <span>AddonManifest.v1</span>
+        <span>AddonManifest.v2</span>
         <strong id="diag-manifest-val">확인 중…</strong>
       </div>
       <div class="badge" id="diag-asar">
@@ -248,7 +248,7 @@
     <div id="feedback" class="feedback" role="status" aria-live="polite"></div>
   </form>
 
-  <script>
+  <script nonce="__KO_CSP_NONCE__">
     (function () {
       const form = document.getElementById('settings-form');
       const elTranslateThinking = document.getElementById('opt-translate-thinking');
@@ -265,6 +265,7 @@
       const elFeedback = document.getElementById('feedback');
       const csrfMeta = document.querySelector('meta[name="ko-csrf-token"]');
       let csrfToken = csrfMeta ? csrfMeta.getAttribute('content') || '' : '';
+      let isSettingsCorrupted = false;
       const sidecarToken = new URLSearchParams(window.location.search).get('token') || '';
 
       function setBadge(boxId, valId, ok, okText, warnText) {
@@ -303,13 +304,15 @@
           setBadge('diag-asar', 'diag-asar-val', data.diagnostics.asarLoaderInstalled, '설치됨', '미설치');
         }
         if (data.settingsCorrupted || !data.settings) {
+          isSettingsCorrupted = true;
           elFeedback.className = 'feedback err';
           elFeedback.textContent =
-            '설정 파일이 손상되어 안전을 위해 번역이 중지되었습니다: ' +
+            '설정 파일이 손상되어 안전을 위해 번역이 중지되었습니다(아래 설정을 저장하면 정상 파일로 복구됩니다): ' +
             (data.settingsError || 'SETTINGS_FILE_CORRUPTED');
           syncLlmVisibility();
           return;
         }
+        isSettingsCorrupted = false;
         const s = data.settings;
         elTranslateThinking.checked = s.translateThinking !== false;
         elShowThinking.checked = s.showThinking !== false;
@@ -339,7 +342,11 @@
 
       async function loadSettings() {
         try {
-          const res = await fetch('/api/settings', { cache: 'no-store' });
+          const getHeaders = {};
+          if (sidecarToken) {
+            getHeaders['x-sidecar-token'] = sidecarToken;
+          }
+          const res = await fetch('/api/settings', { cache: 'no-store', headers: getHeaders });
           const data = await res.json();
           if (!res.ok || !data.ok) {
             throw new Error((data && data.error) || ('HTTP ' + res.status));
@@ -360,6 +367,7 @@
           const rawTimeoutStr = String(elLlmTimeout.value || '').trim();
           const parsedTimeout = rawTimeoutStr === '' ? 15000 : Number(rawTimeoutStr);
           const payload = {
+            ...(isSettingsCorrupted ? { resetCorrupted: true } : {}),
             translateThinking: elTranslateThinking.checked,
             showThinking: elShowThinking.checked,
             translateStaticUi: elTranslateStaticUi.checked,

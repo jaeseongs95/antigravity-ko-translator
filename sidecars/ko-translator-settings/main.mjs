@@ -157,7 +157,7 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
     const addonHostInstalled = isAddonHostLoaderPresent(paths.LOADER_SCRIPT_PATH);
     return {
       ok: true,
-      version: '2.1.0',
+      version: '2.1.1',
       csrfToken,
       settings,
       settingsCorrupted,
@@ -217,15 +217,19 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
     if (method === 'GET' && (cleanPath === '/' || cleanPath === '/index.html')) {
       const hostErr = validateLoopbackRequest(normHeaders, { requireHost });
       if (hostErr) return hostErr;
+      const cspNonce = crypto.randomBytes(16).toString('base64');
       const html = fs
         .readFileSync(INDEX_HTML_PATH, 'utf8')
-        .replace('__KO_CSRF_TOKEN__', csrfToken);
+        .replace('__KO_CSRF_TOKEN__', csrfToken)
+        .replaceAll('__KO_CSP_NONCE__', cspNonce);
       return {
         status: 200,
         headers: {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'no-store',
           'x-content-type-options': 'nosniff',
+          'content-security-policy':
+            `default-src 'self'; script-src 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'self' http://127.0.0.1:* http://localhost:* https://127.0.0.1:* https://localhost:*`,
         },
         body: html,
       };
@@ -258,17 +262,22 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
         return jsonResponse(400, { ok: false, error: 'INVALID_PAYLOAD' });
       }
       try {
-        const updated = saveTranslatorSettings(parsed, paths);
+        const allowCorruptedRecovery = parsed.resetCorrupted === true;
+        const updated = saveTranslatorSettings(parsed, paths, { allowCorruptedRecovery });
         return jsonResponse(200, {
           ok: true,
           csrfToken,
           settings: updated,
+          settingsCorrupted: false,
+          settingsError: null,
           diagnostics: buildStatusPayload().diagnostics,
         });
       } catch (err) {
-        return jsonResponse(400, {
+        const msg = err && err.message ? err.message : 'SETTINGS_SAVE_FAILED';
+        const statusCode = msg === 'SETTINGS_LOCK_BUSY' ? 409 : 400;
+        return jsonResponse(statusCode, {
           ok: false,
-          error: err && err.message ? err.message : 'SETTINGS_SAVE_FAILED',
+          error: msg,
         });
       }
     }
@@ -280,49 +289,11 @@ export function createSettingsRequestHandler(pathOverrides = null, options = nul
   return handler;
 }
 
-export function createStandaloneHttpServer(handleRequest) {
-  return http.createServer((req, res) => {
-    const chunks = [];
-    let totalBytes = 0;
-    let tooLarge = false;
-
-    req.on('data', (chunk) => {
-      if (tooLarge) return;
-      totalBytes += chunk.length;
-      if (totalBytes > MAX_BODY_BYTES) {
-        tooLarge = true;
-        chunks.length = 0;
-        const body = JSON.stringify({ ok: false, error: 'PAYLOAD_TOO_LARGE' });
-        res.writeHead(413, {
-          'content-type': 'application/json; charset=utf-8',
-          'cache-control': 'no-store',
-          'x-content-type-options': 'nosniff',
-          'connection': 'close',
-        });
-        res.end(body, () => {
-          try {
-            req.destroy();
-          } catch (_err) {}
-        });
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on('end', () => {
-      if (tooLarge || res.writableEnded) return;
-      const rawBody = Buffer.concat(chunks).toString('utf8');
-      const out = handleRequest({
-        method: req.method,
-        urlPath: req.url,
-        rawBody,
-        headers: req.headers,
-        requireHost: true,
-      });
-      res.writeHead(out.status, out.headers);
-      res.end(out.body);
-    });
+export function createStandaloneHttpServer(handleRequest, options = {}) {
+  const server = http.createServer((_req, res) => {
+    writeJsonError(res, 404, 'NOT_FOUND');
   });
+  return attachSidecarSecurityGate(server, handleRequest, options);
 }
 
 function writeJsonError(res, status, error, { closeConnection = false, onFlushed = null } = {}) {
@@ -414,7 +385,20 @@ export function attachSidecarSecurityGate(
   const downstreamListeners = server.rawListeners('request');
   server.removeAllListeners('request');
 
+  if (typeof server.on === 'function' && server.listenerCount('error') === 0) {
+    server.on('error', (err) => {
+      process.stderr.write(`[ko-translator-settings] server error: ${err && err.message ? err.message : String(err)}\n`);
+    });
+  }
+
   server.on('request', (req, res) => {
+    req.on('error', () => {
+      try {
+        if (!res.writableEnded) res.destroy();
+      } catch (_err) {}
+    });
+    res.on('error', () => {});
+
     const normHeaders = normalizeHeaders(req.headers);
     const host = String(normHeaders.host || '').trim();
     if (!host) {
@@ -434,35 +418,67 @@ export function attachSidecarSecurityGate(
 
     const method = String(req.method || 'GET').toUpperCase();
     const isReadMethod = method === 'GET' || method === 'HEAD';
-    if (!isReadMethod) {
+    const rawUrl = String(req.url || '/');
+    const cleanPath = rawUrl.split('?')[0];
+
+    // I5: Enforce ANTIGRAVITY_SIDECAR_UI_TOKEN across both mutations and managed read endpoints
+    if (expectedSidecarToken) {
+      const providedHeaderToken = String(normHeaders['x-sidecar-token'] || '').trim();
+      if (!isReadMethod) {
+        const fetchSite = String(normHeaders['sec-fetch-site'] || '').toLowerCase().trim();
+        if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
+          writeJsonError(res, 403, 'FORBIDDEN_CROSS_SITE');
+          return;
+        }
+        // Mutations MUST present header-only x-sidecar-token (query ?token= bypass is forbidden)
+        if (!timingSafeMatch(expectedSidecarToken, providedHeaderToken)) {
+          writeJsonError(res, 401, 'UNAUTHORIZED');
+          return;
+        }
+      } else if (cleanPath === '/api/settings') {
+        // Read API requires header-only x-sidecar-token (prevents unauthenticated local snooping & ?token= leakage)
+        if (!timingSafeMatch(expectedSidecarToken, providedHeaderToken)) {
+          writeJsonError(res, 401, 'UNAUTHORIZED');
+          return;
+        }
+      } else if (cleanPath === '/' || cleanPath === '/index.html') {
+        // Initial webview page load accepts either x-sidecar-token header OR sidecar_sdk's ?token= query
+        let queryToken = '';
+        try {
+          queryToken = new URL(rawUrl, 'http://127.0.0.1').searchParams.get('token') || '';
+        } catch (_err) {}
+        if (
+          !timingSafeMatch(expectedSidecarToken, providedHeaderToken) &&
+          !timingSafeMatch(expectedSidecarToken, queryToken)
+        ) {
+          writeJsonError(res, 401, 'UNAUTHORIZED');
+          return;
+        }
+      }
+    } else if (!isReadMethod) {
       const fetchSite = String(normHeaders['sec-fetch-site'] || '').toLowerCase().trim();
       if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
         writeJsonError(res, 403, 'FORBIDDEN_CROSS_SITE');
         return;
       }
-      if (expectedSidecarToken) {
-        const providedHeaderToken = String(normHeaders['x-sidecar-token'] || '').trim();
-        if (!timingSafeMatch(expectedSidecarToken, providedHeaderToken)) {
-          writeJsonError(res, 401, 'UNAUTHORIZED');
-          return;
-        }
-      }
     }
-
-    const cleanPath = String(req.url || '/').split('?')[0];
 
     if (isManagedSettingsRoute(method, cleanPath)) {
       readBoundedHttpBody(req, res, (bodyBuf) => {
-        const out = handleRequest({
-          method,
-          urlPath: req.url,
-          rawBody: bodyBuf.toString('utf8'),
-          headers: req.headers,
-          requireHost: true,
-        });
-        if (!res.writableEnded && !res.headersSent) {
-          res.writeHead(out.status, out.headers);
-          res.end(out.body);
+        try {
+          const out = handleRequest({
+            method,
+            urlPath: req.url,
+            rawBody: bodyBuf.toString('utf8'),
+            headers: req.headers,
+            requireHost: true,
+          });
+          if (!res.writableEnded && !res.headersSent) {
+            res.writeHead(out.status, out.headers);
+            res.end(out.body);
+          }
+        } catch (_err) {
+          writeJsonError(res, 500, 'INTERNAL_ERROR');
         }
       });
       return;
@@ -508,59 +524,62 @@ function toSdkResponse(sdk, out) {
   });
 }
 
-export function createSidecarAppRoutes(sdk, handleRequest) {
+export function createSidecarAppRoutes(sdk, handleRequest, { sidecarToken = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN || '' } = {}) {
   const app = new sdk.SidecarApp();
   if (typeof app.page !== 'function' || typeof app.api !== 'function' || typeof app.run !== 'function') {
     throw new Error('UNSUPPORTED_SIDECAR_SDK_CONTRACT');
   }
+  const hasToken = typeof sidecarToken === 'string' && sidecarToken.trim().length > 0;
 
   // Register official routes on SidecarApp so SDK introspection and `/preload.js` + `/_sidecar/*` remain intact.
   // Live HTTP traffic to `/`, `/index.html`, and `/api/settings` is handled by `attachSidecarSecurityGate`
   // with full `req.headers`, strict 64 KiB caps, and prototype-safe JSON enforcement.
+  const failClosedFallback = () =>
+    toSdkResponse(sdk, {
+      status: 403,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        ...SECURITY_HEADERS,
+      },
+      body: JSON.stringify({ ok: false, error: 'MISSING_SECURITY_GATE' }),
+    });
+
   const servePage = () =>
-    toSdkResponse(
-      sdk,
-      handleRequest({
-        method: 'GET',
-        urlPath: '/',
-        headers: {},
-        requireHost: false,
-      })
-    );
+    hasToken
+      ? failClosedFallback()
+      : toSdkResponse(
+          sdk,
+          handleRequest({
+            method: 'GET',
+            urlPath: '/',
+            headers: {},
+            requireHost: false,
+          })
+        );
   app.page('/', servePage);
   app.page('/index.html', servePage);
   app.api(
     '/api/settings',
     () =>
-      toSdkResponse(
-        sdk,
-        handleRequest({
-          method: 'GET',
-          urlPath: '/api/settings',
-          headers: {},
-          requireHost: false,
-        })
-      ),
+      hasToken
+        ? failClosedFallback()
+        : toSdkResponse(
+            sdk,
+            handleRequest({
+              method: 'GET',
+              urlPath: '/api/settings',
+              headers: {},
+              requireHost: false,
+            })
+          ),
     'GET'
   );
-  app.api(
-    '/api/settings',
-    () =>
-      toSdkResponse(sdk, {
-        status: 403,
-        headers: {
-          'content-type': 'application/json; charset=utf-8',
-          ...SECURITY_HEADERS,
-        },
-        body: JSON.stringify({ ok: false, error: 'MISSING_SECURITY_GATE' }),
-      }),
-    'POST'
-  );
+  app.api('/api/settings', failClosedFallback, 'POST');
   return app;
 }
 
 export async function startSidecarWithSdk(sdk, handleRequest, options = {}) {
-  const app = createSidecarAppRoutes(sdk, handleRequest);
+  const app = createSidecarAppRoutes(sdk, handleRequest, options);
   const server = await app.run();
   attachSidecarSecurityGate(server, handleRequest, options);
   return { app, server };

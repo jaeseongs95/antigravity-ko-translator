@@ -188,11 +188,14 @@ test(
       const testHandle = (reqOpts) => {
         const res = handle(reqOpts);
         if (reqOpts.method === 'GET' && reqOpts.urlPath === '/' && res.status === 200) {
+          const csp = String((res.headers && res.headers['content-security-policy']) || '');
+          const nonceMatch = csp.match(/'nonce-([^']+)'/);
+          const nonceAttr = nonceMatch ? ` nonce="${nonceMatch[1]}"` : '';
           return {
             ...res,
             body: res.body.replace(
               '</body>',
-              `<script>setTimeout(() => { document.getElementById('opt-show-thinking').checked = false; document.getElementById('btn-save').click(); }, 400);</script></body>`
+              `<script${nonceAttr}>setTimeout(() => { document.getElementById('opt-show-thinking').checked = false; document.getElementById('btn-save').click(); }, 400);</script></body>`
             ),
           };
         }

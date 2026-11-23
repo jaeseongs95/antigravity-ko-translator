@@ -1,4 +1,4 @@
-// === Antigravity Korean Thought & UI Translator v2.1.0 (AddonManifest.v2 World 998 Renderer-Only — Generated Bundle) ===
+// === Antigravity Korean Thought & UI Translator v2.1.1 (AddonManifest.v2 World 998 Renderer-Only — Generated Bundle) ===
 "use strict";
 var __agyKoTranslatorBundleExports = (() => {
   var __defProp = Object.defineProperty;
@@ -1721,7 +1721,7 @@ var __agyKoTranslatorBundleExports = (() => {
         providerBundle = null,
         hostCapability = null,
         settings = null,
-        version = "2.1.0",
+        version = "2.1.1",
         fetchFn = null,
         onStatus = null
       } = {}) {
@@ -1775,9 +1775,12 @@ var __agyKoTranslatorBundleExports = (() => {
         const settingsCorrupted = initCfg.settingsCorrupted === true;
         const settingsMissing = initCfg.settingsMissing === true;
         const rawInitialProvider = initCfg.provider !== void 0 && initCfg.provider !== null ? initCfg.provider : null;
-        const resolvedInitialProvider = rawInitialProvider !== null && String(rawInitialProvider).trim() !== "" ? canonicalizeProviderId(String(rawInitialProvider), aliasMap) : defaultProviderId;
-        const invalidInitialProvider = !settingsCorrupted && !settingsMissing && !initialSettingsFailClosed && rawInitialProvider !== null && String(rawInitialProvider).trim() !== "" && !resolvedInitialProvider;
-        const failClosed = settingsCorrupted || settingsMissing || initialSettingsFailClosed || invalidInitialProvider;
+        const nonStringInitialProvider = rawInitialProvider !== null && typeof rawInitialProvider !== "string";
+        const trimmedInitialProvider = typeof rawInitialProvider === "string" ? rawInitialProvider.trim() : "";
+        const missingBridgeProvider = hasHostSettingsBridge && settings === null && !settingsCorrupted && !settingsMissing && !initialSettingsFailClosed && !nonStringInitialProvider && trimmedInitialProvider === "";
+        const resolvedInitialProvider = !nonStringInitialProvider && trimmedInitialProvider !== "" ? canonicalizeProviderId(trimmedInitialProvider, aliasMap) : defaultProviderId;
+        const invalidInitialProvider = !settingsCorrupted && !settingsMissing && !initialSettingsFailClosed && !missingBridgeProvider && (nonStringInitialProvider || trimmedInitialProvider !== "" && !resolvedInitialProvider);
+        const failClosed = settingsCorrupted || settingsMissing || initialSettingsFailClosed || missingBridgeProvider || invalidInitialProvider;
         let state = {
           enabled: failClosed ? false : initCfg.enabled !== false,
           translateThinking: resolveBooleanOption(initCfg.translateThinking, true),
@@ -1795,7 +1798,7 @@ var __agyKoTranslatorBundleExports = (() => {
         let disposed = false;
         let scanError = null;
         let customProviderError = null;
-        let translationError = initialBridgeError ? initialBridgeError : settingsCorrupted ? "SETTINGS_FILE_CORRUPTED" : settingsMissing ? "ERR_SETTINGS_FILE_MISSING" : invalidInitialProvider ? `INVALID_PROVIDER_ID:${String(rawInitialProvider)}` : null;
+        let translationError = initialBridgeError ? initialBridgeError : settingsCorrupted ? "SETTINGS_FILE_CORRUPTED" : settingsMissing ? "ERR_SETTINGS_FILE_MISSING" : missingBridgeProvider ? "MISSING_PROVIDER_ID" : invalidInitialProvider ? `INVALID_PROVIDER_ID:${String(rawInitialProvider)}` : null;
         const disposables = createDisposableRegistry();
         const catalog = hostAdapter.createDictionaryCatalog();
         const providerRegistry = createProviderRegistry({ aliasMap });
@@ -2055,8 +2058,20 @@ var __agyKoTranslatorBundleExports = (() => {
             return;
           }
           const data = unwrapped.data;
-          const rawProv = data.provider !== void 0 && data.provider !== null ? String(data.provider).trim() : "";
-          if (rawProv && !canonicalizeProviderId(rawProv, aliasMap)) {
+          if (data.provider === void 0 || data.provider === null) {
+            applyFailClosed("MISSING_PROVIDER_ID");
+            return;
+          }
+          if (typeof data.provider !== "string") {
+            applyFailClosed(`INVALID_PROVIDER_ID:${String(data.provider)}`);
+            return;
+          }
+          const rawProv = data.provider.trim();
+          if (!rawProv) {
+            applyFailClosed("MISSING_PROVIDER_ID");
+            return;
+          }
+          if (!canonicalizeProviderId(rawProv, aliasMap)) {
             applyFailClosed(`INVALID_PROVIDER_ID:${rawProv}`);
             return;
           }
@@ -2071,7 +2086,7 @@ var __agyKoTranslatorBundleExports = (() => {
               ...data.llmConfig && typeof data.llmConfig === "object" ? data.llmConfig : {}
             },
             customProviders: Array.isArray(data.customProviders) ? data.customProviders : [],
-            provider: rawProv || defaultProviderId
+            provider: rawProv
           });
         }
         __name(applyHostSettingsSnapshot, "applyHostSettingsSnapshot");
@@ -7219,7 +7234,7 @@ var __agyKoTranslatorBundleExports = (() => {
         const win = globalScope || (typeof window !== "undefined" ? window : null);
         const doc = win && win.document ? win.document : typeof document !== "undefined" ? document : null;
         if (!win || !doc) return null;
-        const resolvedHostCap = (hostCapabilityArg && typeof hostCapabilityArg === "object" ? hostCapabilityArg : null) || (win && win.__ADDON_HOST_API__ && typeof win.__ADDON_HOST_API__ === "object" ? win.__ADDON_HOST_API__ : null);
+        const resolvedHostCap = hostCapabilityArg && typeof hostCapabilityArg === "object" ? hostCapabilityArg : null;
         const isHostManaged = Boolean(resolvedHostCap);
         if (win.__AGY_KO_TRANSLATOR_AUTO_MOUNT__ === false) {
           if (!isHostManaged) {
@@ -7249,7 +7264,7 @@ var __agyKoTranslatorBundleExports = (() => {
           doc,
           settings: initialSettings,
           hostCapability: resolvedHostCap,
-          version: "2.1.0"
+          version: "2.1.1"
         });
         if (!isHostManaged) {
           win.__agyCreateKoTranslator = createKoTranslator;

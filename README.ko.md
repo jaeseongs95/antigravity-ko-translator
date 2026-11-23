@@ -1,8 +1,15 @@
-# Antigravity 2.0 한국어 번역기 (`v2.1.0` · 데스크톱 전용)
+# Antigravity 2.0 한국어 번역기 (`v2.1.1` · 데스크톱 전용)
 
 [English README](./README.md)
 
 공용 네이티브 애드온 호스트([antigravity-native-addon-host](https://github.com/jaeseongs95/antigravity-native-addon-host) `>= v2.1.0`, `AddonManifest.v2`) 위에서 동작하는 Antigravity 2.0 **데스크톱 네이티브 앱 전용** 렌더러 전용 한국어 번역 플러그인입니다.
+
+### v2.1.1 주요 보완 사항
+- **손상 설정 Sidecar GUI 복구 및 저장 원자성 보강 (`I3`)**: 손상된 `ko_translator_settings.json`에 대해 일반 부분 저장은 Fail-Closed로 유지하면서 Sidecar GUI의 명시적 복구 저장(`resetCorrupted: true`)을 지원하고, `parseSafeJson`·락/Windows `renameSync` 제한 재시도·락 경합 HTTP `409`를 적용했습니다.
+- **Sidecar `GET` 토큰 인증·CSP Nonce·Standalone 게이트 통합 (`I5`)**: `ANTIGRAVITY_SIDECAR_UI_TOKEN` 활성 시 `GET /api/settings` 및 `POST /api/settings` 헤더 전용 검증, `GET /` 헤더/`?token=` 검증, 응답별 CSPRNG CSP `nonce` 헤더, Standalone 서버 통합 보안 게이트·예외 처리를 적용했습니다.
+- **호스트 버전·DOS 예약명 계약 정합 (`I7`) 및 엄격한 `provider` Fail-Closed (`Q3`)**: `compatibility.minHostVersion` SemVer 비교, Windows DOS 예약명 차단, 설치된 `addon-host-loader.js` 버전 호환성 검사, `provider` 누락/비문자열 시 Fail-Closed(`MISSING_PROVIDER_ID` / `INVALID_PROVIDER_ID`)를 강제합니다.
+
+### 주요 기능
 
 - **실시간 Thinking(추론 과정) 한국어 번역**: 백틱 코드·식별자·파일 경로를 원형 보존하고 한국어 조사를 자연스럽게 보정합니다.
 - **영문 고정 UI 한글화**: 코드 뷰어·diff·터미널·입력창·에이전트 본문 응답뿐 아니라 타 플러그인 UI 슬롯(`[data-addon-host-owner]`, `[data-addon-host-slot]`, `[data-addon-host-no-translate]`, `addonHost.isElementInsideIgnored()`)을 Shadow DOM 경계까지 영구 제외하고 메뉴·버튼·설정 안내만 한글화합니다.
