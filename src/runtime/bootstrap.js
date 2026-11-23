@@ -84,7 +84,7 @@ function createTranslatorRuntime({
   providerBundle = null,
   hostCapability = null,
   settings = null,
-  version = '2.1.1',
+  version = '2.2.0',
   fetchFn = null,
   onStatus = null,
 } = {}) {
@@ -196,6 +196,9 @@ function createTranslatorRuntime({
   let started = false;
   let runtimeActive = false;
   let disposed = false;
+  let failClosedFlag = failClosed;
+  let settingsCorruptedFlag = settingsCorrupted;
+  let settingsMissingFlag = settingsMissing;
   let scanError = null;
   let customProviderError = null;
   let translationError = initialBridgeError
@@ -211,6 +214,7 @@ function createTranslatorRuntime({
             : null;
 
   const disposables = createDisposableRegistry();
+  const statusListeners = new Set();
   const catalog = hostAdapter.createDictionaryCatalog();
   const providerRegistry = createProviderRegistry({ aliasMap });
   const customProviderSpecFingerprints = new Map();
@@ -361,10 +365,26 @@ function createTranslatorRuntime({
   let scheduler = null;
 
   function emitStatus() {
-    if (typeof onStatus !== 'function') return;
-    try {
-      onStatus(getStatus());
-    } catch (_err) {}
+    if (typeof onStatus !== 'function' && statusListeners.size === 0) return;
+    const snap = getStatus();
+    if (typeof onStatus === 'function') {
+      try {
+        onStatus(snap);
+      } catch (_err) {}
+    }
+    for (const fn of Array.from(statusListeners)) {
+      try {
+        fn(snap);
+      } catch (_err) {}
+    }
+  }
+
+  function subscribeStatus(fn) {
+    if (typeof fn !== 'function') return () => {};
+    statusListeners.add(fn);
+    return () => {
+      statusListeners.delete(fn);
+    };
   }
 
   function ensureStyleElement() {
@@ -469,7 +489,10 @@ function createTranslatorRuntime({
     triggerController.restoreTriggerButtons();
   }
 
-  function applyFailClosed(reason) {
+  function applyFailClosed(reason, { corrupted = false, missing = false } = {}) {
+    failClosedFlag = true;
+    settingsCorruptedFlag = Boolean(corrupted);
+    settingsMissingFlag = Boolean(missing);
     state.enabled = false;
     state.provider = null;
     translationError = reason || 'SETTINGS_FILE_CORRUPTED';
@@ -481,27 +504,33 @@ function createTranslatorRuntime({
     if (disposed) return;
     const unwrapped = unwrapHostSettingsSnapshot(snapshot);
     if (!unwrapped.ok) {
-      applyFailClosed(unwrapped.reason);
+      applyFailClosed(unwrapped.reason, {
+        corrupted: unwrapped.settingsCorrupted,
+        missing: unwrapped.settingsMissing,
+      });
       return;
     }
     const data = unwrapped.data;
     if (data.provider === undefined || data.provider === null) {
-      applyFailClosed('MISSING_PROVIDER_ID');
+      applyFailClosed('MISSING_PROVIDER_ID', { corrupted: true });
       return;
     }
     if (typeof data.provider !== 'string') {
-      applyFailClosed(`INVALID_PROVIDER_ID:${String(data.provider)}`);
+      applyFailClosed(`INVALID_PROVIDER_ID:${String(data.provider)}`, { corrupted: true });
       return;
     }
     const rawProv = data.provider.trim();
     if (!rawProv) {
-      applyFailClosed('MISSING_PROVIDER_ID');
+      applyFailClosed('MISSING_PROVIDER_ID', { corrupted: true });
       return;
     }
     if (!canonicalizeProviderId(rawProv, aliasMap)) {
-      applyFailClosed(`INVALID_PROVIDER_ID:${rawProv}`);
+      applyFailClosed(`INVALID_PROVIDER_ID:${rawProv}`, { corrupted: true });
       return;
     }
+    failClosedFlag = false;
+    settingsCorruptedFlag = false;
+    settingsMissingFlag = false;
     translationError = null;
     updateSettings({
       enabled: data.enabled !== false,
@@ -547,7 +576,10 @@ function createTranslatorRuntime({
     if (disposed || !next || typeof next !== 'object') return getStatus();
 
     if (next.settingsCorrupted === true || next.settingsMissing === true) {
-      applyFailClosed(next.settingsCorrupted ? 'SETTINGS_FILE_CORRUPTED' : 'ERR_SETTINGS_FILE_MISSING');
+      applyFailClosed(next.settingsCorrupted ? 'SETTINGS_FILE_CORRUPTED' : 'ERR_SETTINGS_FILE_MISSING', {
+        corrupted: next.settingsCorrupted === true,
+        missing: next.settingsMissing === true,
+      });
       return getStatus();
     }
 
@@ -592,6 +624,9 @@ function createTranslatorRuntime({
       const candidate = canonicalizeProviderId(next.provider, aliasMap);
       if (candidate) {
         state.provider = candidate;
+        failClosedFlag = false;
+        settingsCorruptedFlag = false;
+        settingsMissingFlag = false;
         translationError = null;
         if (providerRegistry.hasProvider(candidate)) {
           translationService.setProvider(candidate, { persist: false });
@@ -599,7 +634,7 @@ function createTranslatorRuntime({
           translationService.syncDesiredProviderFromExternal(candidate);
         }
       } else {
-        applyFailClosed(`INVALID_PROVIDER_ID:${next.provider}`);
+        applyFailClosed(`INVALID_PROVIDER_ID:${next.provider}`, { corrupted: true });
         return getStatus();
       }
     }
@@ -653,6 +688,7 @@ function createTranslatorRuntime({
       styleEl.remove();
     }
     emitStatus();
+    statusListeners.clear();
   }
 
   function getStatus() {
@@ -670,6 +706,130 @@ function createTranslatorRuntime({
       cacheSize: translationService.getCacheSize(),
       lastError: scanError || customProviderError || translationError,
     };
+  }
+
+  function getConfigSnapshot() {
+    return {
+      schemaVersion: 1,
+      enabled: state.enabled,
+      translateThinking: state.translateThinking,
+      showThinking: state.showThinking,
+      translateStaticUi: state.translateStaticUi,
+      provider: state.provider,
+      defaultProviderId,
+      builtinProviderIds: Array.from(builtinProviderIds),
+      availableProviders: providerRegistry.listProviderIds(),
+      llmConfig: { ...defaultLlmConfig, ...state.llmConfig },
+      customProviders: state.customProviders.map((cp) => (cp && typeof cp === 'object' ? { ...cp } : cp)),
+      cacheSize: translationService.getCacheSize(),
+      failClosed: failClosedFlag,
+      settingsCorrupted: settingsCorruptedFlag,
+      settingsMissing: settingsMissingFlag,
+      lastError: scanError || customProviderError || translationError,
+      hasHostSettingsBridge,
+      canSaveSettings: Boolean(
+        !hasHostSettingsBridge || (hostCapability && typeof hostCapability.saveSettings === 'function')
+      ),
+    };
+  }
+
+  function retranslateNow(clearCache = false) {
+    if (disposed) return getStatus();
+    if (clearCache) {
+      translationService.clearCache();
+    }
+    if (state.enabled && started) {
+      if (!runtimeActive) {
+        activateRuntime();
+      } else {
+        translationService.bumpEpoch();
+        thinkingTranslator.retranslateVisibleThoughts(false);
+        scanAll();
+      }
+    }
+    emitStatus();
+    return getStatus();
+  }
+
+  async function saveSettings(patch = {}) {
+    if (disposed) {
+      return { ok: false, persisted: false, reason: 'ERR_INSTANCE_DISPOSED', status: getStatus() };
+    }
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+      return { ok: false, persisted: false, reason: 'INVALID_SETTINGS_PATCH', status: getStatus() };
+    }
+    const candidateProviderRaw =
+      patch.provider !== undefined ? patch.provider : state.provider || defaultProviderId;
+    const resolvedProvider =
+      typeof candidateProviderRaw === 'string' && candidateProviderRaw.trim()
+        ? canonicalizeProviderId(candidateProviderRaw, aliasMap)
+        : null;
+    if (!resolvedProvider) {
+      return {
+        ok: false,
+        persisted: false,
+        reason: `INVALID_PROVIDER_ID:${String(candidateProviderRaw)}`,
+        status: getStatus(),
+      };
+    }
+
+    const nextLlmConfig =
+      patch.llmConfig && typeof patch.llmConfig === 'object' && !Array.isArray(patch.llmConfig)
+        ? { ...defaultLlmConfig, ...state.llmConfig, ...patch.llmConfig }
+        : { ...defaultLlmConfig, ...state.llmConfig };
+
+    const nextSettings = {
+      schemaVersion: 1,
+      enabled: typeof patch.enabled === 'boolean' ? patch.enabled : failClosedFlag ? true : state.enabled,
+      translateThinking:
+        typeof patch.translateThinking === 'boolean' ? patch.translateThinking : state.translateThinking,
+      showThinking: typeof patch.showThinking === 'boolean' ? patch.showThinking : state.showThinking,
+      translateStaticUi:
+        typeof patch.translateStaticUi === 'boolean' ? patch.translateStaticUi : state.translateStaticUi,
+      provider: resolvedProvider,
+      llmConfig: nextLlmConfig,
+      customProviders: Array.isArray(patch.customProviders)
+        ? patch.customProviders.slice()
+        : state.customProviders.slice(),
+    };
+
+    if (hasHostSettingsBridge) {
+      if (!hostCapability || typeof hostCapability.saveSettings !== 'function') {
+        return { ok: false, persisted: false, reason: 'ERR_HOST_SAVE_UNSUPPORTED', status: getStatus() };
+      }
+      let res;
+      try {
+        res = await hostCapability.saveSettings(nextSettings);
+      } catch (err) {
+        return {
+          ok: false,
+          persisted: false,
+          reason: err && err.message ? err.message : 'ERR_SETTINGS_SAVE_FAILED',
+          status: getStatus(),
+        };
+      }
+      if (!res || res.ok !== true) {
+        return {
+          ok: false,
+          persisted: false,
+          reason: (res && res.reason) || 'ERR_SETTINGS_SAVE_FAILED',
+          status: getStatus(),
+        };
+      }
+      if (res.snapshot && typeof res.snapshot === 'object') {
+        applyHostSettingsSnapshot(res.snapshot);
+      } else {
+        applyHostSettingsSnapshot({ status: 'ok', data: nextSettings });
+      }
+      return { ok: true, persisted: true, reason: null, status: getStatus() };
+    }
+
+    failClosedFlag = false;
+    settingsCorruptedFlag = false;
+    settingsMissingFlag = false;
+    translationError = null;
+    updateSettings(nextSettings);
+    return { ok: true, persisted: false, reason: null, status: getStatus() };
   }
 
   function registerCustomProvider(spec) {
@@ -710,6 +870,10 @@ function createTranslatorRuntime({
   return {
     start,
     updateSettings,
+    saveSettings,
+    retranslateNow,
+    subscribeStatus,
+    getConfigSnapshot,
     registerCustomProvider,
     unregisterCustomProvider,
     dispose,

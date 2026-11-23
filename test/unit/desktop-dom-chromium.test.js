@@ -8,9 +8,10 @@
  *    - Translates a real `.cursor-edit` Thinking block into `.agy-ko-thought-wrap` (`data-agy-ko-ready="1"`).
  *    - Localizes static UI (`Settings` -> `설정`, `Thinking` -> `생각하는 중`, `Thought for 5s` -> `5초 동안 생각함`).
  *    - Strictly EXCLUDES ALL 11 D-0042 code/diff/syntax/monospace selectors under Blink's real CSS engine.
- * 2. Official Sidecar `index.html` served by `createStandaloneHttpServer` loads in Chromium,
- *    renders live diagnostics + CSRF meta tag, submits `POST /api/settings` via real form submit,
- *    and persists updated settings to `ko_translator_settings.json` on disk.
+ * 2. Built `dist/renderer.js` under simulated `addonHost` + `window.statusbarAddons`:
+ *    - Registers statusbar button (`번역:구글`), opens Shadow DOM Quick Settings Modal via `addonHost.openModal`,
+ *      switches to `local-llm`, persists via `addonHost.saveSettings`, updates button label to `번역:LLM`,
+ *      and toggles back to `google-translate` via `Shift+click`.
  */
 
 const test = require('node:test');
@@ -18,9 +19,7 @@ const assert = require('node:assert/strict');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
-const os = require('node:os');
 const path = require('node:path');
-const { pathToFileURL } = require('node:url');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const BUNDLE_PATH = path.join(REPO_ROOT, 'dist', 'renderer.js');
@@ -159,70 +158,164 @@ test(
   });
 
   test(
-    'Defect-1+F2 (Real Chromium): Official Sidecar index.html loads diagnostics, submits POST /api/settings with CSRF, and persists to disk',
+    'Defect-1+F2 (Real Chromium): Built dist/renderer.js statusbar button, Shadow DOM quick modal saveSettings, and Shift+click instant toggle',
     { skip: CHROME_SKIP_REASON },
     async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ko-chrome-sidecar-'));
-    try {
-      const mainUrl = pathToFileURL(path.join(REPO_ROOT, 'sidecars', 'ko-translator-settings', 'main.mjs')).href;
-      const { createSettingsRequestHandler, createStandaloneHttpServer } = await import(mainUrl);
-      const agyDir = path.join(dir, '.gemini', 'antigravity');
-      const cfgDir = path.join(dir, '.gemini', 'config');
-      const settingsPath = path.join(agyDir, 'ko_translator_settings.json');
-      fs.mkdirSync(agyDir, { recursive: true });
-      fs.mkdirSync(cfgDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(cfgDir, 'config.json'),
-        JSON.stringify({ plugins: { 'ko-thought-translator': { enabled: true } } }),
-        'utf8'
-      );
-
-      const handle = createSettingsRequestHandler({
-        SETTINGS_PATH: settingsPath,
-        SETTINGS_LOCK_PATH: path.join(agyDir, 'ko_translator_settings.lock'),
-        CONFIG_JSON_PATH: path.join(cfgDir, 'config.json'),
-        MANIFEST_PATH: path.join(agyDir, 'addons.d', 'ko-thought-translator.json'),
-        LOADER_SCRIPT_PATH: path.join(agyDir, 'addon-host-loader.js'),
-      });
-      // Wrap GET / solely to trigger a real user form submit click inside headless Chrome after initial load
-      const testHandle = (reqOpts) => {
-        const res = handle(reqOpts);
-        if (reqOpts.method === 'GET' && reqOpts.urlPath === '/' && res.status === 200) {
-          const csp = String((res.headers && res.headers['content-security-policy']) || '');
-          const nonceMatch = csp.match(/'nonce-([^']+)'/);
-          const nonceAttr = nonceMatch ? ` nonce="${nonceMatch[1]}"` : '';
-          return {
-            ...res,
-            body: res.body.replace(
-              '</body>',
-              `<script${nonceAttr}>setTimeout(() => { document.getElementById('opt-show-thinking').checked = false; document.getElementById('btn-save').click(); }, 400);</script></body>`
-            ),
-          };
-        }
-        return res;
-      };
-      const server = createStandaloneHttpServer(testHandle);
-      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-      try {
-        const { port } = server.address();
-        const dumped = await runChromeDumpDom(CHROME_BIN, `http://127.0.0.1:${port}/`);
-        assert.ok(dumped.includes(`content="${handle.csrfToken}"`), 'Real Chromium DOM must contain live CSRF meta tag');
-        assert.match(dumped, /id="diag-plugin-val">활성<\/strong>/);
-        assert.equal(fs.existsSync(settingsPath), true, 'Sidecar POST /api/settings from Chromium must persist settings file');
-        const persisted = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        assert.equal(persisted.showThinking, false);
-        console.log(
-          JSON.stringify({
-            chromiumSidecarVerified: true,
-            chromeBin: path.basename(CHROME_BIN),
-            sidecarPostPersisted: true,
-          })
-        );
-      } finally {
-        if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
-        server.close();
+    const bundleSrc = fs.readFileSync(BUNDLE_PATH, 'utf8');
+    const html = `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Quick Settings E2E</title><style>*, ::before, ::after { box-sizing: border-box; margin: 0; padding: 0; }</style></head>
+<body>
+  <pre id="e2e-result">PENDING</pre>
+  <script>
+    const saved = [];
+    const listeners = new Set();
+    let currentSnap = {
+      status: 'ok',
+      revision: 1,
+      data: {
+        schemaVersion: 1,
+        enabled: true,
+        translateThinking: true,
+        showThinking: true,
+        translateStaticUi: true,
+        provider: 'google-translate',
+        llmConfig: { baseUrl: 'http://127.0.0.1:11434', model: 'gemma3:4b', apiFormat: 'ollama', timeoutMs: 15000 }
       }
+    };
+    const sbMap = new Map();
+    window.statusbarAddons = {
+      register(def) { sbMap.set(def.id, def); },
+      unregister(id) { sbMap.delete(id); }
+    };
+    window.__mockAddonHost = {
+      pluginId: 'ko-thought-translator',
+      trustLevel: 'trusted',
+      hasSettingsBridge: true,
+      getSettings: () => currentSnap,
+      onSettingsChange(cb) { listeners.add(cb); return () => listeners.delete(cb); },
+      async saveSettings(nextData) {
+        saved.push(nextData);
+        currentSnap = { status: 'ok', revision: saved.length + 1, data: JSON.parse(JSON.stringify(nextData)) };
+        for (const cb of listeners) cb(currentSnap);
+        return { ok: true, reason: null, snapshot: currentSnap };
+      },
+      openModal(slotId, opts = {}) {
+        const dlg = document.createElement('dialog');
+        dlg.setAttribute('data-addon-host-modal-dialog', '1');
+        dlg.setAttribute('data-addon-host-slot', slotId);
+        // Simulate Tailwind Preflight + legacy host marginTop so the test verifies self-centering resilience
+        dlg.style.marginTop = 'max(env(titlebar-area-height, 36px), 36px)';
+        const host = document.createElement('div');
+        dlg.appendChild(host);
+        const sr = host.attachShadow({ mode: 'open' });
+        const bodyEl = document.createElement('div');
+        sr.appendChild(bodyEl);
+        document.body.appendChild(dlg);
+        dlg.showModal();
+        return {
+          id: 'e2e-modal',
+          element: dlg,
+          bodyEl,
+          close() {
+            if (dlg.open) dlg.close();
+            dlg.remove();
+            if (opts.onClose) opts.onClose();
+          }
+        };
+      },
+      injectStyle() {},
+      removeStyle() {},
+      onDispose() {}
+    };
+  </script>
+  <script src="/renderer-wrapped.js"></script>
+  <script>
+    (async () => {
+      const btn0 = sbMap.get('ko-translator');
+      const initialLabel = btn0 ? btn0.label : null;
+      btn0.onClick({ sessionId: 's1' });
+      const dlg = document.querySelector('dialog[data-addon-host-slot="ko-translator.quick-settings-modal"]');
+      const sr = dlg && dlg.firstElementChild && dlg.firstElementChild.shadowRoot;
+      const cardEl = sr && sr.querySelector('[data-testid="ko-qs-card"]');
+      const modalOpened = Boolean(cardEl);
+      const cardRect = cardEl ? cardEl.getBoundingClientRect() : null;
+      const modalCenterOffsetX = cardRect ? Math.abs((cardRect.left + cardRect.width / 2) - window.innerWidth / 2) : 9999;
+      const modalCenterOffsetY = cardRect
+        ? Math.abs((cardRect.top + cardRect.height / 2) - (36 + (window.innerHeight - 36) / 2))
+        : 9999;
+      const modalLeft = cardRect ? Math.round(cardRect.left) : -1;
+      const modalTop = cardRect ? Math.round(cardRect.top) : -1;
+      sr.querySelector('[data-testid="ko-qs-engine-local-llm"]').click();
+      sr.querySelector('[data-testid="ko-qs-llm-model"]').value = 'gemma3:12b';
+      sr.querySelector('[data-testid="ko-qs-save"]').click();
+      await new Promise((r) => setTimeout(r, 80));
+      const labelAfterModalSave = sbMap.get('ko-translator').label;
+
+      // Shift+click instant toggle without passing MouseEvent to onClick
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true }));
+      sbMap.get('ko-translator').onClick({ sessionId: 's1' });
+      await new Promise((r) => setTimeout(r, 80));
+      window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift', shiftKey: false }));
+      const labelAfterShiftToggle = sbMap.get('ko-translator').label;
+
+      document.getElementById('e2e-result').textContent = JSON.stringify({
+        initialLabel,
+        modalOpened,
+        modalLeft,
+        modalTop,
+        modalCenterOffsetX: Math.round(modalCenterOffsetX * 10) / 10,
+        modalCenterOffsetY: Math.round(modalCenterOffsetY * 10) / 10,
+        savedCount: saved.length,
+        firstSavedProvider: saved[0] && saved[0].provider,
+        firstSavedModel: saved[0] && saved[0].llmConfig && saved[0].llmConfig.model,
+        labelAfterModalSave,
+        secondSavedProvider: saved[1] && saved[1].provider,
+        labelAfterShiftToggle,
+      });
+    })();
+  </script>
+</body>
+</html>`;
+
+    const wrappedBundle = `(function(addonHost){\n${bundleSrc}\n})(window.__mockAddonHost);\n`;
+    const server = http.createServer((req, res) => {
+      if (req.url === '/renderer-wrapped.js') {
+        res.writeHead(200, { 'content-type': 'application/javascript; charset=utf-8' });
+        res.end(wrappedBundle);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(html);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = server.address();
+      const dumped = await runChromeDumpDom(CHROME_BIN, `http://127.0.0.1:${port}/`);
+      const m = dumped.match(/<pre id="e2e-result">([\s\S]*?)<\/pre>/);
+      assert.ok(m, 'Chromium output must contain #e2e-result');
+      const result = JSON.parse(m[1].replace(/&quot;/g, '"'));
+      assert.equal(result.initialLabel, '번역:구글');
+      assert.equal(result.modalOpened, true);
+      assert.ok(result.modalLeft > 100, `modal must be horizontally centered, got left=${result.modalLeft}`);
+      assert.ok(result.modalTop >= 36, `modal must stay below 36px titlebar, got top=${result.modalTop}`);
+      assert.ok(result.modalCenterOffsetX <= 2, `horizontal center offset too large: ${result.modalCenterOffsetX}`);
+      assert.ok(result.modalCenterOffsetY <= 2, `vertical center offset too large: ${result.modalCenterOffsetY}`);
+      assert.equal(result.savedCount, 2);
+      assert.equal(result.firstSavedProvider, 'local-llm');
+      assert.equal(result.firstSavedModel, 'gemma3:12b');
+      assert.equal(result.labelAfterModalSave, '번역:LLM');
+      assert.equal(result.secondSavedProvider, 'google-translate');
+      assert.equal(result.labelAfterShiftToggle, '번역:구글');
+      console.log(
+        JSON.stringify({
+          chromiumQuickSettingsVerified: true,
+          chromeBin: path.basename(CHROME_BIN),
+          ...result,
+        })
+      );
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+      server.close();
     }
   });

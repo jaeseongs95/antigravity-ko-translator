@@ -15,8 +15,11 @@
 const { createTranslatorRuntime } = require('./runtime/bootstrap');
 const {
   STYLE_ID,
+  STATUSBAR_ADDON_ID,
+  QUICK_SETTINGS_MODAL_SLOT_ID,
   buildMinimalOverlayCss,
   createAntigravityHostAdapter,
+  createQuickSettingsUi,
 } = require('./adapters/antigravity/host-adapter');
 const { createDefaultProviderBundle } = require('./adapters/translators/default-providers');
 
@@ -79,6 +82,23 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
     version: '2.1.1',
   });
 
+  const quickSettingsUi = createQuickSettingsUi({
+    win,
+    doc,
+    translator: instance,
+    hostCapability: resolvedHostCap,
+  });
+
+  const origDispose = instance.dispose.bind(instance);
+  instance.dispose = function disposeWithQuickSettingsUi() {
+    try {
+      quickSettingsUi.dispose();
+    } catch (_err) {}
+    return origDispose();
+  };
+  instance.openQuickSettings = () => quickSettingsUi.openModal();
+  instance.closeQuickSettings = () => quickSettingsUi.closeModal();
+
   if (!isHostManaged) {
     win.__agyCreateKoTranslator = createKoTranslator;
     win.__agyKoTranslator = instance;
@@ -93,6 +113,7 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
   }
 
   instance.start();
+  quickSettingsUi.start();
   return instance;
 }
 
@@ -106,8 +127,11 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 
 module.exports = {
   STYLE_ID,
+  STATUSBAR_ADDON_ID,
+  QUICK_SETTINGS_MODAL_SLOT_ID,
   buildMinimalOverlayCss,
   createTranslatorRuntime,
   createKoTranslator,
+  createQuickSettingsUi,
   mountIfBrowser,
 };

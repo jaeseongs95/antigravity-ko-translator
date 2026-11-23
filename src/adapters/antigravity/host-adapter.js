@@ -13,6 +13,11 @@ const { createStoragePort, STORAGE_KEYS } = require('./storage-port');
 const { createAntigravityUiLocalizer } = require('./ui-localizer');
 const { createAntigravityTriggerController } = require('./trigger-controller');
 const { createAntigravityThinkingTranslator } = require('./thinking-translator');
+const {
+  STATUSBAR_ADDON_ID,
+  QUICK_SETTINGS_MODAL_SLOT_ID,
+  createQuickSettingsUi,
+} = require('./quick-settings-ui');
 
 const STYLE_ID = 'agy-ko-thought-localizer-style';
 
@@ -76,7 +81,10 @@ function createAntigravityHostAdapter() {
 
 module.exports = {
   STYLE_ID,
+  STATUSBAR_ADDON_ID,
+  QUICK_SETTINGS_MODAL_SLOT_ID,
   ANTIGRAVITY_SELECTORS,
   buildMinimalOverlayCss,
   createAntigravityHostAdapter,
+  createQuickSettingsUi,
 };

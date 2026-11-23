@@ -33,6 +33,13 @@ test('addon-manifest.v2.json satisfies AddonManifest.v2 renderer-only + settings
   assert.equal(manifest.uiSlots[0].slot, 'document-transform');
   assert.equal(manifest.uiSlots[0].scope, 'native-host-only');
   assert.equal(manifest.uiSlots[0].shadow, false);
+  assert.deepEqual(manifest.uiSlots[1], {
+    slot: 'modal',
+    slotId: 'ko-translator.quick-settings-modal',
+    exclusive: false,
+    scope: 'addon-owned-slot',
+    shadow: true,
+  });
   assert.equal(manifest.isolation.respectsNoTranslate, true);
   assert.equal(manifest.isolation.storageNamespace, 'ko-thought-translator');
   assert.equal(manifest.isolation.ipcChannelPrefix, 'ko-translator:');

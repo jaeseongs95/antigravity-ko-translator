@@ -44,7 +44,6 @@ test('Clean-Slate Zero-Interference & AddonManifest.v1: zero legacy patch, app.a
   const files = [
     ...walkJsFiles(path.join(REPO_ROOT, 'src')),
     ...walkJsFiles(path.join(REPO_ROOT, 'host')),
-    ...walkJsFiles(path.join(REPO_ROOT, 'sidecars')),
   ];
   assert.ok(files.length > 0);
 
@@ -57,12 +56,15 @@ test('Clean-Slate Zero-Interference & AddonManifest.v1: zero legacy patch, app.a
   }
 });
 
-test('AddonManifest.v2 invariant: legacy host/dropin-loader.js, host/main-hook.js, dist/main-hook.js, and addon-manifest.v1.json are removed', () => {
+test('AddonManifest.v2 invariant: legacy host/dropin-loader.js, host/main-hook.js, dist/main-hook.js, addon-manifest.v1.json, and Sidecar AUX_PANE are removed', () => {
   assert.equal(fs.existsSync(path.join(REPO_ROOT, 'host', 'dropin-loader.js')), false);
   assert.equal(fs.existsSync(path.join(REPO_ROOT, 'host', 'main-hook.js')), false);
   assert.equal(fs.existsSync(path.join(REPO_ROOT, 'dist', 'main-hook.js')), false);
   assert.equal(fs.existsSync(path.join(REPO_ROOT, 'addon-manifest.v1.json')), false);
+  assert.equal(fs.existsSync(path.join(REPO_ROOT, 'sidecars')), false);
   assert.equal(fs.existsSync(path.join(REPO_ROOT, 'addon-manifest.v2.json')), true);
+  const pluginJson = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'plugin.json'), 'utf8'));
+  assert.equal(pluginJson.sidecars, undefined, 'plugin.json must not declare legacy Sidecar AUX_PANE');
   const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
   assert.equal(Boolean(pkg.dependencies && pkg.dependencies['@electron/asar']), false);
 });
