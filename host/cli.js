@@ -24,29 +24,44 @@ const {
   removeTranslatorSettings,
 } = require('./config-store');
 const {
+  compareSemver,
   readRegisteredManifest,
   validateAddonManifestContract,
   isAddonHostLoaderPresent,
+  readInstalledAddonHostVersion,
   registerAddonManifest,
   unregisterAddonManifest,
 } = require('./addon-registry');
 
+const MIN_REQUIRED_HOST_VERSION = '2.1.0';
 const HOST_INSTALL_HINT =
   'Install/upgrade antigravity-native-addon-host (>= v2.1.0) via `addon-host --upgrade` and approve trust via `addon-host trust approve ko-thought-translator` (using real copied plugin files, zero symlinks).';
 const TRUST_APPROVE_HINT =
   'Run `addon-host trust approve ko-thought-translator` after installing/updating real copied files in `~/.gemini/config/plugins/ko-thought-translator/`.';
 
+function evaluateHostCompatibility(loaderScriptPath, minVersion = MIN_REQUIRED_HOST_VERSION) {
+  const addonHostInstalled = isAddonHostLoaderPresent(loaderScriptPath);
+  const addonHostVersion = addonHostInstalled ? readInstalledAddonHostVersion(loaderScriptPath) : null;
+  const cmp = addonHostVersion ? compareSemver(addonHostVersion, minVersion) : null;
+  const addonHostCompatible = Boolean(addonHostInstalled && cmp !== null && cmp >= 0);
+  return { addonHostInstalled, addonHostVersion, addonHostCompatible };
+}
+
 function buildStatusReport(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROFILE) {
   const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
   const p = { ...resolveHostPaths(process.env, activeProfile), ...(pathOverrides || {}) };
   const manifest = readRegisteredManifest(p.MANIFEST_PATH);
+  const { addonHostInstalled, addonHostVersion, addonHostCompatible } = evaluateHostCompatibility(
+    p.LOADER_SCRIPT_PATH,
+    (manifest && manifest.compatibility && manifest.compatibility.minHostVersion) || MIN_REQUIRED_HOST_VERSION
+  );
   const manifestValidation = manifest
     ? validateAddonManifestContract(manifest, p.PLUGINS_ROOT_DIR, {
         expectedHostProfileId: activeProfile.id,
+        hostVersion: addonHostVersion,
         checkFilesExist: true,
       })
     : { ok: false, reason: 'MANIFEST_NOT_FOUND' };
-  const addonHostInstalled = isAddonHostLoaderPresent(p.LOADER_SCRIPT_PATH);
 
   let settings = null;
   let settingsCorrupted = false;
@@ -58,13 +73,15 @@ function buildStatusReport(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROF
     settingsError = err && err.message ? err.message : 'SETTINGS_FILE_CORRUPTED';
   }
   return {
-    version: '2.1.0',
+    version: '2.1.1',
     manifestSchema: 'AddonManifest.v2',
     patchMarker: activeProfile.patchMarker,
     pluginEnabled: isPluginEnabled(p.CONFIG_JSON_PATH, activeProfile.pluginId),
     manifestRegistered: Boolean(manifestValidation.ok),
     manifestValidation,
     addonHostInstalled,
+    addonHostVersion,
+    addonHostCompatible,
     asarLoaderInstalled: addonHostInstalled,
     settings,
     settingsCorrupted,
@@ -100,7 +117,11 @@ async function runCli(argv = process.argv.slice(2), pathOverrides = null, profil
       saveTranslatorSettings({}, p);
       settingsInitialized = true;
     }
-    const addonHostInstalled = isAddonHostLoaderPresent(p.LOADER_SCRIPT_PATH);
+    const { addonHostInstalled, addonHostVersion, addonHostCompatible } = evaluateHostCompatibility(
+      p.LOADER_SCRIPT_PATH,
+      (reg.manifest && reg.manifest.compatibility && reg.manifest.compatibility.minHostVersion) ||
+        MIN_REQUIRED_HOST_VERSION
+    );
     const out = {
       status: 'INSTALLED',
       manifestPath: reg.manifestPath,
@@ -108,8 +129,10 @@ async function runCli(argv = process.argv.slice(2), pathOverrides = null, profil
       manifestValidation: reg.manifestValidation,
       settingsInitialized,
       addonHostInstalled,
+      addonHostVersion,
+      addonHostCompatible,
       trustApproveHint: TRUST_APPROVE_HINT,
-      ...(addonHostInstalled ? {} : { hostInstallHint: HOST_INSTALL_HINT }),
+      ...(addonHostCompatible ? {} : { hostInstallHint: HOST_INSTALL_HINT }),
     };
     process.stdout.write(JSON.stringify(out, null, 2) + '\n');
     return out;

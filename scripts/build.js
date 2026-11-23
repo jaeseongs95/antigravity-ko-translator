@@ -32,7 +32,7 @@ function generateBundleSource(entryAbs = ENTRY_FILE) {
     legalComments: 'none',
     logLevel: 'silent',
     banner: {
-      js: '// === Antigravity Korean Thought & UI Translator v2.1.0 (AddonManifest.v2 World 998 Renderer-Only — Generated Bundle) ===',
+      js: '// === Antigravity Korean Thought & UI Translator v2.1.1 (AddonManifest.v2 World 998 Renderer-Only — Generated Bundle) ===',
     },
     footer: {
       js: 'if (typeof module !== "undefined" && module && module.exports) { module.exports = __agyKoTranslatorBundleExports; }',

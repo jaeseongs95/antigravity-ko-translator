@@ -21,6 +21,7 @@ const {
 
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/;
 const SETTINGS_FILE_RE = /^[a-z0-9][a-z0-9._-]{1,63}\.json$/;
+const WINDOWS_DOS_DEVICE_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 const FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 const RESERVED_SETTINGS_FILES = new Set([
   'trust-policy.json',
@@ -31,6 +32,45 @@ const RESERVED_SETTINGS_FILES = new Set([
 ]);
 const SEMVER_RE =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+function parseSemver(ver) {
+  if (typeof ver !== 'string') return null;
+  const trimmed = ver.trim();
+  const m = trimmed.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
+  if (!m) return null;
+  const prerelease = m[4] ? m[4].split('.') : null;
+  if (prerelease && prerelease.some((id) => /^\d+$/.test(id) && id.length > 1 && id.startsWith('0'))) {
+    return null;
+  }
+  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]), prerelease };
+}
+
+function compareSemver(a, b) {
+  const pa = parseSemver(a);
+  const pb = parseSemver(b);
+  if (!pa || !pb) return null;
+  if (pa.major !== pb.major) return pa.major - pb.major;
+  if (pa.minor !== pb.minor) return pa.minor - pb.minor;
+  if (pa.patch !== pb.patch) return pa.patch - pb.patch;
+  if (!pa.prerelease && !pb.prerelease) return 0;
+  if (!pa.prerelease) return 1;
+  if (!pb.prerelease) return -1;
+  const len = Math.max(pa.prerelease.length, pb.prerelease.length);
+  for (let i = 0; i < len; i += 1) {
+    const ia = pa.prerelease[i];
+    const ib = pb.prerelease[i];
+    if (ia === undefined) return -1;
+    if (ib === undefined) return 1;
+    if (ia === ib) continue;
+    const na = /^\d+$/.test(ia);
+    const nb = /^\d+$/.test(ib);
+    if (na && nb) return Number(ia) - Number(ib);
+    if (na) return -1;
+    if (nb) return 1;
+    return ia < ib ? -1 : 1;
+  }
+  return 0;
+}
 
 function isPathStrictlyInside(parentDir, candidatePath) {
   const rel = path.relative(parentDir, candidatePath);
@@ -88,7 +128,7 @@ function resolveConfinedScript(relScript, pluginDir, pluginsRootDir, { checkFile
 function validateAddonManifestContract(
   manifest,
   pluginsRootDir,
-  { expectedHostProfileId = null, checkFilesExist = true } = {}
+  { expectedHostProfileId = null, hostVersion = null, checkFilesExist = true } = {}
 ) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return { ok: false, reason: 'INVALID_MANIFEST_OBJECT' };
@@ -115,6 +155,18 @@ function validateAddonManifestContract(
     manifest.compatibility.hostProfile !== expectedHostProfileId
   ) {
     return { ok: false, reason: 'ERR_INCOMPATIBLE_HOST_PROFILE' };
+  }
+  if (manifest.compatibility && manifest.compatibility.minHostVersion !== undefined) {
+    const minVer = manifest.compatibility.minHostVersion;
+    if (typeof minVer !== 'string' || !parseSemver(minVer)) {
+      return { ok: false, reason: 'ERR_INVALID_MIN_HOST_VERSION' };
+    }
+    if (hostVersion !== null && hostVersion !== undefined) {
+      const cmp = compareSemver(hostVersion, minVer);
+      if (cmp === null || cmp < 0) {
+        return { ok: false, reason: 'ERR_HOST_VERSION_TOO_OLD' };
+      }
+    }
   }
 
   const caps = Array.isArray(manifest.capabilities) ? manifest.capabilities : [];
@@ -146,7 +198,8 @@ function validateAddonManifestContract(
       !SETTINGS_FILE_RE.test(sb.fileName) ||
       sb.fileName.includes('..') ||
       RESERVED_SETTINGS_FILES.has(sb.fileName.toLowerCase()) ||
-      sb.fileName.toLowerCase().endsWith('.orig.json')
+      sb.fileName.toLowerCase().endsWith('.orig.json') ||
+      WINDOWS_DOS_DEVICE_RE.test(sb.fileName.toLowerCase())
     ) {
       return { ok: false, reason: 'ERR_INVALID_SETTINGS_BRIDGE' };
     }
@@ -235,6 +288,25 @@ function isAddonHostLoaderPresent(loaderScriptPath) {
   return Boolean(loaderScriptPath && fs.existsSync(loaderScriptPath));
 }
 
+function readInstalledAddonHostVersion(loaderScriptPath) {
+  if (!isAddonHostLoaderPresent(loaderScriptPath)) return null;
+  try {
+    const src = fs.readFileSync(loaderScriptPath, 'utf8');
+    const cfgMatch = src.match(/const\s+HOST_CFG\s*=\s*(\{[\s\S]*?\});/);
+    if (cfgMatch && cfgMatch[1]) {
+      const parsed = JSON.parse(cfgMatch[1]);
+      if (parsed && typeof parsed.hostVersion === 'string' && parseSemver(parsed.hostVersion)) {
+        return parsed.hostVersion.trim();
+      }
+    }
+    const verMatch = src.match(/"hostVersion"\s*:\s*"([^"]+)"/);
+    if (verMatch && verMatch[1] && parseSemver(verMatch[1])) {
+      return verMatch[1].trim();
+    }
+  } catch (_err) {}
+  return null;
+}
+
 function registerAddonManifest(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROFILE) {
   const activeProfile = profile || ANTIGRAVITY_HOST_PROFILE;
   const p = { ...resolveHostPaths(process.env, activeProfile), ...(pathOverrides || {}) };
@@ -291,10 +363,14 @@ function unregisterAddonManifest(pathOverrides = null, profile = ANTIGRAVITY_HOS
 module.exports = {
   PLUGIN_ID_RE,
   FORBIDDEN_IDS,
+  WINDOWS_DOS_DEVICE_RE,
+  parseSemver,
+  compareSemver,
   validateAddonManifestContract,
   loadSourceAddonManifest,
   readRegisteredManifest,
   isAddonHostLoaderPresent,
+  readInstalledAddonHostVersion,
   registerAddonManifest,
   unregisterAddonManifest,
 };

@@ -748,6 +748,27 @@ test('AddonManifest.v2 capability handle: settingsBridge push, fail-closed missi
     assert.equal(stRot.provider, 'local-llm');
     assert.equal(externalFetchCount, 0);
     rotTr.dispose();
+
+    // Q3: Missing provider key in host settingsBridge snapshot MUST fail closed (MISSING_PROVIDER_ID, zero Google calls)
+    const missingProvCap = {
+      getSettings: () => ({ status: 'ok', data: { enabled: true, translateStaticUi: true } }),
+      onSettingsChange: () => () => {},
+    };
+    const missingProvTr = createKoTranslator({
+      win: port2.win,
+      doc: port2.doc,
+      hostCapability: missingProvCap,
+      fetchFn: async () => {
+        externalFetchCount += 1;
+        return { ok: true, json: async () => [[['외부전송금지']]] };
+      },
+    });
+    const stNoProv = missingProvTr.start();
+    assert.equal(stNoProv.enabled, false, 'Missing provider key in settingsBridge snapshot must fail closed');
+    assert.equal(stNoProv.provider, null);
+    assert.equal(stNoProv.lastError, 'MISSING_PROVIDER_ID');
+    assert.equal(externalFetchCount, 0);
+    missingProvTr.dispose();
   } finally {
     port2.cleanup();
   }

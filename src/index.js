@@ -34,8 +34,7 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
   if (!win || !doc) return null;
 
   const resolvedHostCap =
-    (hostCapabilityArg && typeof hostCapabilityArg === 'object' ? hostCapabilityArg : null) ||
-    (win && win.__ADDON_HOST_API__ && typeof win.__ADDON_HOST_API__ === 'object' ? win.__ADDON_HOST_API__ : null);
+    hostCapabilityArg && typeof hostCapabilityArg === 'object' ? hostCapabilityArg : null;
   const isHostManaged = Boolean(resolvedHostCap);
 
   // Never run inside non-top frames (e.g. Sidecar AUX_PANE iframes) unless explicitly mounted by caller.
@@ -77,7 +76,7 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
     doc,
     settings: initialSettings,
     hostCapability: resolvedHostCap,
-    version: '2.1.0',
+    version: '2.1.1',
   });
 
   if (!isHostManaged) {
