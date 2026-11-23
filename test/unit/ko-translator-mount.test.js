@@ -769,6 +769,27 @@ test('AddonManifest.v2 capability handle: settingsBridge push, fail-closed missi
     assert.equal(stNoProv.lastError, 'MISSING_PROVIDER_ID');
     assert.equal(externalFetchCount, 0);
     missingProvTr.dispose();
+
+    // NB-Q3-1: Non-string provider value MUST fail closed as INVALID_PROVIDER_ID
+    const nonStringProvCap = {
+      getSettings: () => ({ status: 'ok', data: { enabled: true, provider: 12345 } }),
+      onSettingsChange: () => () => {},
+    };
+    const nonStrTr = createKoTranslator({
+      win: port2.win,
+      doc: port2.doc,
+      hostCapability: nonStringProvCap,
+      fetchFn: async () => {
+        externalFetchCount += 1;
+        return { ok: true, json: async () => [[['외부전송금지']]] };
+      },
+    });
+    const stNonStr = nonStrTr.start();
+    assert.equal(stNonStr.enabled, false);
+    assert.equal(stNonStr.provider, null);
+    assert.equal(stNonStr.lastError, 'INVALID_PROVIDER_ID:12345');
+    assert.equal(externalFetchCount, 0);
+    nonStrTr.dispose();
   } finally {
     port2.cleanup();
   }

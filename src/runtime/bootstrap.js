@@ -152,25 +152,27 @@ function createTranslatorRuntime({
   const settingsMissing = initCfg.settingsMissing === true;
   const rawInitialProvider =
     initCfg.provider !== undefined && initCfg.provider !== null ? initCfg.provider : null;
+  const nonStringInitialProvider =
+    rawInitialProvider !== null && typeof rawInitialProvider !== 'string';
+  const trimmedInitialProvider = typeof rawInitialProvider === 'string' ? rawInitialProvider.trim() : '';
   const missingBridgeProvider =
     hasHostSettingsBridge &&
     settings === null &&
     !settingsCorrupted &&
     !settingsMissing &&
     !initialSettingsFailClosed &&
-    (rawInitialProvider === null || String(rawInitialProvider).trim() === '');
+    !nonStringInitialProvider &&
+    trimmedInitialProvider === '';
   const resolvedInitialProvider =
-    rawInitialProvider !== null && String(rawInitialProvider).trim() !== ''
-      ? canonicalizeProviderId(String(rawInitialProvider), aliasMap)
+    !nonStringInitialProvider && trimmedInitialProvider !== ''
+      ? canonicalizeProviderId(trimmedInitialProvider, aliasMap)
       : defaultProviderId;
   const invalidInitialProvider =
     !settingsCorrupted &&
     !settingsMissing &&
     !initialSettingsFailClosed &&
     !missingBridgeProvider &&
-    rawInitialProvider !== null &&
-    String(rawInitialProvider).trim() !== '' &&
-    !resolvedInitialProvider;
+    (nonStringInitialProvider || (trimmedInitialProvider !== '' && !resolvedInitialProvider));
   const failClosed =
     settingsCorrupted ||
     settingsMissing ||
@@ -483,7 +485,15 @@ function createTranslatorRuntime({
       return;
     }
     const data = unwrapped.data;
-    const rawProv = data.provider !== undefined && data.provider !== null ? String(data.provider).trim() : '';
+    if (data.provider === undefined || data.provider === null) {
+      applyFailClosed('MISSING_PROVIDER_ID');
+      return;
+    }
+    if (typeof data.provider !== 'string') {
+      applyFailClosed(`INVALID_PROVIDER_ID:${String(data.provider)}`);
+      return;
+    }
+    const rawProv = data.provider.trim();
     if (!rawProv) {
       applyFailClosed('MISSING_PROVIDER_ID');
       return;

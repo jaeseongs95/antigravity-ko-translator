@@ -1775,9 +1775,11 @@ var __agyKoTranslatorBundleExports = (() => {
         const settingsCorrupted = initCfg.settingsCorrupted === true;
         const settingsMissing = initCfg.settingsMissing === true;
         const rawInitialProvider = initCfg.provider !== void 0 && initCfg.provider !== null ? initCfg.provider : null;
-        const missingBridgeProvider = hasHostSettingsBridge && settings === null && !settingsCorrupted && !settingsMissing && !initialSettingsFailClosed && (rawInitialProvider === null || String(rawInitialProvider).trim() === "");
-        const resolvedInitialProvider = rawInitialProvider !== null && String(rawInitialProvider).trim() !== "" ? canonicalizeProviderId(String(rawInitialProvider), aliasMap) : defaultProviderId;
-        const invalidInitialProvider = !settingsCorrupted && !settingsMissing && !initialSettingsFailClosed && !missingBridgeProvider && rawInitialProvider !== null && String(rawInitialProvider).trim() !== "" && !resolvedInitialProvider;
+        const nonStringInitialProvider = rawInitialProvider !== null && typeof rawInitialProvider !== "string";
+        const trimmedInitialProvider = typeof rawInitialProvider === "string" ? rawInitialProvider.trim() : "";
+        const missingBridgeProvider = hasHostSettingsBridge && settings === null && !settingsCorrupted && !settingsMissing && !initialSettingsFailClosed && !nonStringInitialProvider && trimmedInitialProvider === "";
+        const resolvedInitialProvider = !nonStringInitialProvider && trimmedInitialProvider !== "" ? canonicalizeProviderId(trimmedInitialProvider, aliasMap) : defaultProviderId;
+        const invalidInitialProvider = !settingsCorrupted && !settingsMissing && !initialSettingsFailClosed && !missingBridgeProvider && (nonStringInitialProvider || trimmedInitialProvider !== "" && !resolvedInitialProvider);
         const failClosed = settingsCorrupted || settingsMissing || initialSettingsFailClosed || missingBridgeProvider || invalidInitialProvider;
         let state = {
           enabled: failClosed ? false : initCfg.enabled !== false,
@@ -2056,7 +2058,15 @@ var __agyKoTranslatorBundleExports = (() => {
             return;
           }
           const data = unwrapped.data;
-          const rawProv = data.provider !== void 0 && data.provider !== null ? String(data.provider).trim() : "";
+          if (data.provider === void 0 || data.provider === null) {
+            applyFailClosed("MISSING_PROVIDER_ID");
+            return;
+          }
+          if (typeof data.provider !== "string") {
+            applyFailClosed(`INVALID_PROVIDER_ID:${String(data.provider)}`);
+            return;
+          }
+          const rawProv = data.provider.trim();
           if (!rawProv) {
             applyFailClosed("MISSING_PROVIDER_ID");
             return;

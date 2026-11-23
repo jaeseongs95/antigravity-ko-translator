@@ -290,20 +290,25 @@ function isAddonHostLoaderPresent(loaderScriptPath) {
 
 function readInstalledAddonHostVersion(loaderScriptPath) {
   if (!isAddonHostLoaderPresent(loaderScriptPath)) return null;
+  let src = '';
   try {
-    const src = fs.readFileSync(loaderScriptPath, 'utf8');
-    const cfgMatch = src.match(/const\s+HOST_CFG\s*=\s*(\{[\s\S]*?\});/);
-    if (cfgMatch && cfgMatch[1]) {
+    src = fs.readFileSync(loaderScriptPath, 'utf8');
+  } catch (_err) {
+    return null;
+  }
+  const cfgMatch = src.match(/const\s+HOST_CFG\s*=\s*(\{[\s\S]*?\});/);
+  if (cfgMatch && cfgMatch[1]) {
+    try {
       const parsed = JSON.parse(cfgMatch[1]);
       if (parsed && typeof parsed.hostVersion === 'string' && parseSemver(parsed.hostVersion)) {
         return parsed.hostVersion.trim();
       }
-    }
-    const verMatch = src.match(/"hostVersion"\s*:\s*"([^"]+)"/);
-    if (verMatch && verMatch[1] && parseSemver(verMatch[1])) {
-      return verMatch[1].trim();
-    }
-  } catch (_err) {}
+    } catch (_parseErr) {}
+  }
+  const verMatch = src.match(/"hostVersion"\s*:\s*"([^"]+)"/);
+  if (verMatch && verMatch[1] && parseSemver(verMatch[1])) {
+    return verMatch[1].trim();
+  }
   return null;
 }
 
