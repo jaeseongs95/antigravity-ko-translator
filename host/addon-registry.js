@@ -20,6 +20,7 @@ const {
 } = require('./config-store');
 
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/;
+const HOST_PROFILE_ID_RE = /^[a-z0-9][a-z0-9._-]{1,63}$/;
 const SETTINGS_FILE_RE = /^[a-z0-9][a-z0-9._-]{1,63}\.json$/;
 const WINDOWS_DOS_DEVICE_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 const FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -128,7 +129,7 @@ function resolveConfinedScript(relScript, pluginDir, pluginsRootDir, { checkFile
 function validateAddonManifestContract(
   manifest,
   pluginsRootDir,
-  { expectedHostProfileId = null, hostVersion = null, checkFilesExist = true } = {}
+  { expectedHostProfileId = null, compatibleHostProfiles = null, hostVersion = null, checkFilesExist = true } = {}
 ) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return { ok: false, reason: 'INVALID_MANIFEST_OBJECT' };
@@ -148,13 +149,41 @@ function validateAddonManifestContract(
   if (manifest.trustLevel !== undefined && manifest.trustLevel !== 'trusted' && manifest.trustLevel !== 'restricted') {
     return { ok: false, reason: 'ERR_INVALID_TRUST_LEVEL' };
   }
-  if (
-    expectedHostProfileId &&
-    manifest.compatibility &&
-    manifest.compatibility.hostProfile &&
-    manifest.compatibility.hostProfile !== expectedHostProfileId
-  ) {
-    return { ok: false, reason: 'ERR_INCOMPATIBLE_HOST_PROFILE' };
+  if (manifest.compatibility && typeof manifest.compatibility === 'object') {
+    const compat = manifest.compatibility;
+    if (compat.hostProfiles !== undefined) {
+      if (
+        !Array.isArray(compat.hostProfiles) ||
+        compat.hostProfiles.length === 0 ||
+        compat.hostProfiles.some((p) => typeof p !== 'string' || !HOST_PROFILE_ID_RE.test(p) || FORBIDDEN_IDS.has(p))
+      ) {
+        return { ok: false, reason: 'ERR_INVALID_HOST_PROFILES' };
+      }
+    }
+    if (compat.excludeHostProfiles !== undefined) {
+      if (
+        !Array.isArray(compat.excludeHostProfiles) ||
+        compat.excludeHostProfiles.some((p) => typeof p !== 'string' || !HOST_PROFILE_ID_RE.test(p) || FORBIDDEN_IDS.has(p))
+      ) {
+        return { ok: false, reason: 'ERR_INVALID_EXCLUDE_HOST_PROFILES' };
+      }
+    }
+    if (expectedHostProfileId) {
+      if (Array.isArray(compat.excludeHostProfiles) && compat.excludeHostProfiles.includes(expectedHostProfileId)) {
+        return { ok: false, reason: 'ERR_INCOMPATIBLE_HOST_PROFILE' };
+      }
+      if (Array.isArray(compat.hostProfiles) && compat.hostProfiles.length > 0) {
+        if (!compat.hostProfiles.includes(expectedHostProfileId)) {
+          return { ok: false, reason: 'ERR_INCOMPATIBLE_HOST_PROFILE' };
+        }
+      } else if (compat.hostProfile && compat.hostProfile !== expectedHostProfileId) {
+        const acceptedCompat =
+          Array.isArray(compatibleHostProfiles) && compatibleHostProfiles.includes(compat.hostProfile);
+        if (!acceptedCompat) {
+          return { ok: false, reason: 'ERR_INCOMPATIBLE_HOST_PROFILE' };
+        }
+      }
+    }
   }
   if (manifest.compatibility && manifest.compatibility.minHostVersion !== undefined) {
     const minVer = manifest.compatibility.minHostVersion;

@@ -16,14 +16,17 @@ const { createAntigravityThinkingTranslator } = require('./thinking-translator')
 const {
   STATUSBAR_ADDON_ID,
   QUICK_SETTINGS_MODAL_SLOT_ID,
+  QUICK_SETTINGS_TAB_ID,
+  HOST_ACTION_IDS,
   createQuickSettingsUi,
 } = require('./quick-settings-ui');
 
 const STYLE_ID = 'agy-ko-thought-localizer-style';
+const REMOTE_WEB_HOST_PROFILE_ID = 'antigravity-remote-web';
 
 const ANTIGRAVITY_SELECTORS = Object.freeze({
   noTranslateSubtree:
-    '.agy-ko-thought-wrap, [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]',
+    '.agy-ko-thought-wrap, [data-addon-host-ignore], [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]',
   triggerLabelClass: 'agy-ko-trigger-label',
   conversationViews:
     '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]',
@@ -64,6 +67,20 @@ function buildMinimalOverlayCss() {
 `.trim();
 }
 
+function resolveUninitializedSettings(hostCapability) {
+  if (!hostCapability || hostCapability.hostProfileId !== REMOTE_WEB_HOST_PROFILE_ID) {
+    return null;
+  }
+  return {
+    schemaVersion: 1,
+    enabled: true,
+    translateThinking: true,
+    showThinking: true,
+    translateStaticUi: true,
+    provider: 'google-translate',
+  };
+}
+
 function createAntigravityHostAdapter() {
   return {
     id: 'antigravity-desktop',
@@ -71,6 +88,7 @@ function createAntigravityHostAdapter() {
     selectors: ANTIGRAVITY_SELECTORS,
     storageKeys: STORAGE_KEYS,
     buildOverlayCss: buildMinimalOverlayCss,
+    resolveUninitializedSettings,
     createStoragePort,
     createDictionaryCatalog: createAntigravityDictionaryCatalog,
     createUiLocalizer: createAntigravityUiLocalizer,
@@ -81,10 +99,14 @@ function createAntigravityHostAdapter() {
 
 module.exports = {
   STYLE_ID,
+  REMOTE_WEB_HOST_PROFILE_ID,
   STATUSBAR_ADDON_ID,
   QUICK_SETTINGS_MODAL_SLOT_ID,
+  QUICK_SETTINGS_TAB_ID,
+  HOST_ACTION_IDS,
   ANTIGRAVITY_SELECTORS,
   buildMinimalOverlayCss,
+  resolveUninitializedSettings,
   createAntigravityHostAdapter,
   createQuickSettingsUi,
 };

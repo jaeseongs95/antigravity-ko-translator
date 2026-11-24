@@ -18,6 +18,11 @@ const { DEFAULT_LLM_CONFIG } = require('../translators/default-providers');
 
 const STATUSBAR_ADDON_ID = 'ko-translator';
 const QUICK_SETTINGS_MODAL_SLOT_ID = 'ko-translator.quick-settings-modal';
+const QUICK_SETTINGS_TAB_ID = 'ko-translator.quick-settings';
+const HOST_ACTION_IDS = Object.freeze({
+  openQuickSettings: 'open-quick-settings',
+  toggleEngine: 'toggle-engine',
+});
 const SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
 
 const MODAL_CSS = `
@@ -441,6 +446,7 @@ function createQuickSettingsUi({
   let activePortal = null;
   let activeModalHandles = null;
   const cleanupListeners = [];
+  const hostRegistrations = [];
 
   function addTrackedListener(target, type, fn, opts) {
     if (!target || typeof target.addEventListener !== 'function') return;
@@ -1287,6 +1293,32 @@ function createQuickSettingsUi({
       });
     }
 
+    if (hostCapability && typeof hostCapability.registerSettingsTab === 'function') {
+      try {
+        const reg = hostCapability.registerSettingsTab(QUICK_SETTINGS_TAB_ID, {
+          label: '한국어 번역 설정',
+          onSelect: () => openModal(),
+        });
+        if (reg) hostRegistrations.push(reg);
+      } catch (_err) {}
+    }
+    if (hostCapability && typeof hostCapability.registerAction === 'function') {
+      try {
+        const openReg = hostCapability.registerAction(HOST_ACTION_IDS.openQuickSettings, {
+          label: '한국어 번역 설정 열기',
+          run: () => openModal(),
+        });
+        if (openReg) hostRegistrations.push(openReg);
+      } catch (_err) {}
+      try {
+        const toggleReg = hostCapability.registerAction(HOST_ACTION_IDS.toggleEngine, {
+          label: '번역 엔진 전환 (구글 ↔ 로컬 LLM)',
+          run: () => toggleEngineQuick(),
+        });
+        if (toggleReg) hostRegistrations.push(toggleReg);
+      } catch (_err) {}
+    }
+
     if (!syncStatusbarButton()) {
       const setInt = targetWin.setInterval || setInterval;
       pollTicks = 0;
@@ -1313,6 +1345,16 @@ function createQuickSettingsUi({
         unsubStatus();
       } catch (_err) {}
       unsubStatus = null;
+    }
+    while (hostRegistrations.length > 0) {
+      const reg = hostRegistrations.pop();
+      try {
+        if (typeof reg === 'function') {
+          reg();
+        } else if (reg && typeof reg.unregister === 'function') {
+          reg.unregister();
+        }
+      } catch (_err) {}
     }
     while (cleanupListeners.length > 0) {
       const fn = cleanupListeners.pop();
@@ -1344,6 +1386,8 @@ function createQuickSettingsUi({
 module.exports = {
   STATUSBAR_ADDON_ID,
   QUICK_SETTINGS_MODAL_SLOT_ID,
+  QUICK_SETTINGS_TAB_ID,
+  HOST_ACTION_IDS,
   computeStatusbarMeta,
   buildProbeUrl,
   createQuickSettingsUi,

@@ -84,7 +84,7 @@ function createTranslatorRuntime({
   providerBundle = null,
   hostCapability = null,
   settings = null,
-  version = '2.2.0',
+  version = '2.3.0',
   fetchFn = null,
   onStatus = null,
 } = {}) {
@@ -135,6 +135,22 @@ function createTranslatorRuntime({
     const unwrapped = unwrapHostSettingsSnapshot(rawSnap);
     if (unwrapped.ok) {
       effectiveInitialSettings = unwrapped.data;
+    } else if (
+      unwrapped.settingsMissing &&
+      typeof hostAdapter.resolveUninitializedSettings === 'function'
+    ) {
+      const adapterDefaults = hostAdapter.resolveUninitializedSettings(hostCapability);
+      if (adapterDefaults && typeof adapterDefaults === 'object' && !Array.isArray(adapterDefaults)) {
+        effectiveInitialSettings = adapterDefaults;
+      } else {
+        effectiveInitialSettings = {
+          enabled: false,
+          settingsCorrupted: unwrapped.settingsCorrupted,
+          settingsMissing: unwrapped.settingsMissing,
+        };
+        initialSettingsFailClosed = true;
+        initialBridgeError = unwrapped.reason;
+      }
     } else {
       effectiveInitialSettings = {
         enabled: false,
@@ -694,7 +710,10 @@ function createTranslatorRuntime({
   function getStatus() {
     return {
       version,
-      hostId: hostAdapter.id || 'unknown',
+      hostId:
+        (hostCapability && typeof hostCapability.hostProfileId === 'string' && hostCapability.hostProfileId) ||
+        hostAdapter.id ||
+        'unknown',
       started,
       disposed,
       enabled: state.enabled,

@@ -1,8 +1,8 @@
 {
   "name": "ko-thought-translator",
-  "displayName": "Antigravity 2.0 한국어 번역기 (데스크톱 전용)",
-  "description": "Antigravity 2.0 데스크톱 네이티브 앱의 Thinking(추론 과정)과 영문 고정 UI를 순수 읽기 전용 DOM 오버레이로 한국어 표시하는 AddonManifest.v2 호환 렌더러 전용 플러그인입니다(하단 상태바 엔진 버튼 + Shadow DOM 빠른 설정 모달 + 호스트 settingsBridge, mainHook·app.asar 직접 패치·Sidecar 0건).",
-  "version": "2.2.0",
+  "displayName": "Antigravity 2.0 한국어 번역기 (Desktop & Remote Web)",
+  "description": "Antigravity 2.0 데스크톱 네이티브 앱 및 원격 웹(Remote Web, Host v2.3.0+)의 Thinking(추론 과정)과 영문 고정 UI를 순수 읽기 전용 DOM 오버레이로 한국어 표시하는 AddonManifest.v2 호환 렌더러 전용 플러그인입니다(상태바 엔진 버튼 + 호스트 설정 탭/액션 + Shadow DOM 빠른 설정 모달 + 호스트 settingsBridge, mainHook·app.asar 직접 패치·Sidecar 0건).",
+  "version": "2.3.0",
   "repository": "https://github.com/jaeseongs95/antigravity-ko-translator",
   "suggestedPrompts": [
     "한글 번역기 애드온 상태를 확인해줘",

@@ -3,11 +3,15 @@
   "schemaVersion": 2,
   "pluginId": "ko-thought-translator",
   "displayName": "Antigravity Korean Thought & UI Translator",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "trustLevel": "trusted",
   "compatibility": {
     "hostProfile": "antigravity-desktop",
-    "minHostVersion": "2.1.0"
+    "hostProfiles": [
+      "antigravity-desktop",
+      "antigravity-remote-web"
+    ],
+    "minHostVersion": "2.3.0"
   },
   "capabilities": [
     "renderer"

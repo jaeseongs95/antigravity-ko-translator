@@ -1,4 +1,4 @@
-// === Antigravity Korean Thought & UI Translator v2.1.1 (AddonManifest.v2 World 998 Renderer-Only — Generated Bundle) ===
+// === Antigravity Korean Thought & UI Translator v2.3.0 (AddonManifest.v2 World 998 & Remote Web Renderer-Only — Generated Bundle) ===
 "use strict";
 var __agyKoTranslatorBundleExports = (() => {
   var __defProp = Object.defineProperty;
@@ -1721,7 +1721,7 @@ var __agyKoTranslatorBundleExports = (() => {
         providerBundle = null,
         hostCapability = null,
         settings = null,
-        version = "2.2.0",
+        version = "2.3.0",
         fetchFn = null,
         onStatus = null
       } = {}) {
@@ -1760,6 +1760,19 @@ var __agyKoTranslatorBundleExports = (() => {
           const unwrapped = unwrapHostSettingsSnapshot(rawSnap);
           if (unwrapped.ok) {
             effectiveInitialSettings = unwrapped.data;
+          } else if (unwrapped.settingsMissing && typeof hostAdapter.resolveUninitializedSettings === "function") {
+            const adapterDefaults = hostAdapter.resolveUninitializedSettings(hostCapability);
+            if (adapterDefaults && typeof adapterDefaults === "object" && !Array.isArray(adapterDefaults)) {
+              effectiveInitialSettings = adapterDefaults;
+            } else {
+              effectiveInitialSettings = {
+                enabled: false,
+                settingsCorrupted: unwrapped.settingsCorrupted,
+                settingsMissing: unwrapped.settingsMissing
+              };
+              initialSettingsFailClosed = true;
+              initialBridgeError = unwrapped.reason;
+            }
           } else {
             effectiveInitialSettings = {
               enabled: false,
@@ -2252,7 +2265,7 @@ var __agyKoTranslatorBundleExports = (() => {
         function getStatus() {
           return {
             version,
-            hostId: hostAdapter.id || "unknown",
+            hostId: hostCapability && typeof hostCapability.hostProfileId === "string" && hostCapability.hostProfileId || hostAdapter.id || "unknown",
             started,
             disposed,
             enabled: state.enabled,
@@ -4451,7 +4464,7 @@ var __agyKoTranslatorBundleExports = (() => {
     "src/adapters/antigravity/ui-localizer.js"(exports, module) {
       "use strict";
       var { isAlreadyKoreanOrNonEnglish } = require_text_tokenizer();
-      var BASE_EXCLUDED_SELECTOR = 'style, script, code, pre, kbd, samp, var, svg, math, [contenteditable="true"], .monaco-editor, .xterm, .cm-editor, .cm-content, .cm-line, .shiki, .code-block, .code-line, .line-content, .token, [class*="language-"], [data-line-number], [data-line], [data-line-start], [data-line-end], [data-start-line], [data-end-line], [data-diff-type], [data-diff-line], [data-file-uri], [data-active-file-uri], [data-current-line], [data-current-start-line], [data-current-end-line], [data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], [data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], [data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"], .agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], [data-testid="side-question-answer"] button[aria-expanded], [data-testid="planner-response-text"], [data-testid="user-message-bubble"], [data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], .cursor-edit, [data-agy-ko-thought-host="1"]';
+      var BASE_EXCLUDED_SELECTOR = 'style, script, code, pre, kbd, samp, var, svg, math, [contenteditable="true"], .monaco-editor, .xterm, .cm-editor, .cm-content, .cm-line, .shiki, .code-block, .code-line, .line-content, .token, [class*="language-"], [data-line-number], [data-line], [data-line-start], [data-line-end], [data-start-line], [data-end-line], [data-diff-type], [data-diff-line], [data-file-uri], [data-active-file-uri], [data-current-line], [data-current-start-line], [data-current-end-line], [data-uri], [data-symbol-name], [data-variable-name], [data-repo-slug], [data-quotable-inline], [data-quotable], [data-testid="code-viewer"], [data-testid="diff-viewer"], [data-testid="file-viewer"], [data-testid="terminal-output"], [data-testid="command-output"], [data-testid="lsp-hover"], [data-addon-host-ignore], [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"], .agy-ko-settings-root, #agy-ko-translator-modal, .agy-ko-thought-wrap, [data-testid="model-selector-trigger"], [data-testid="permissions-preset-selector"], [data-testid="permissions-selector-trigger"], button[data-testid="thinking-collapsible-trigger"], button[data-testid="worked-for-collapsible"], button[data-testid="tool-group-collapsible"], [data-testid="side-question-answer"] button[aria-expanded], [data-testid="planner-response-text"], [data-testid="user-message-bubble"], [data-testid="side-question-followup-user"], [data-testid="browser-subagent-thinking"], .cursor-edit, [data-agy-ko-thought-host="1"]';
       var TEXT_EXCLUDED_SELECTOR = "textarea, " + BASE_EXCLUDED_SELECTOR;
       var STATIC_UI_SUBTREE_PRUNE_SELECTOR = TEXT_EXCLUDED_SELECTOR;
       var EXCLUDED_CODE_DATA_ATTR_PREFIX_REGEX = /^data-(?:line-|quotable|diff-|code-|token-|syntax-|file-path|file-uri|symbol-|lsp-)/i;
@@ -4678,7 +4691,7 @@ var __agyKoTranslatorBundleExports = (() => {
         function localizeStaticUiInRoot(rootNode, observer = null) {
           const activeDoc = rootNode && rootNode.ownerDocument || doc;
           if (!rootNode || !activeDoc || typeof activeDoc.createTreeWalker !== "function") return;
-          if (rootNode.nodeType === 1 && (isIgnoredByHost(rootNode) || typeof rootNode.getAttribute === "function" && (rootNode.getAttribute("data-agy-no-translate") === "true" || rootNode.getAttribute("translate") === "no" || rootNode.hasAttribute("data-addon-host-owner") || rootNode.hasAttribute("data-addon-host-slot") || rootNode.hasAttribute("data-addon-host-no-translate")) || typeof rootNode.matches === "function" && rootNode.matches(effectiveBaseExcludedSelector))) {
+          if (rootNode.nodeType === 1 && (isIgnoredByHost(rootNode) || typeof rootNode.getAttribute === "function" && (rootNode.getAttribute("data-agy-no-translate") === "true" || rootNode.getAttribute("translate") === "no" || rootNode.hasAttribute("data-addon-host-ignore") || rootNode.hasAttribute("data-addon-host-owner") || rootNode.hasAttribute("data-addon-host-slot") || rootNode.hasAttribute("data-addon-host-no-translate")) || typeof rootNode.matches === "function" && rootNode.matches(effectiveBaseExcludedSelector))) {
             return;
           }
           localizeAttributesInRoot(rootNode);
@@ -4853,7 +4866,7 @@ var __agyKoTranslatorBundleExports = (() => {
         return false;
       }
       __name(isElementInLatestTurn, "isElementInLatestTurn");
-      var BASE_TRIGGER_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
+      var BASE_TRIGGER_NO_TRANSLATE_SELECTOR = '[data-addon-host-ignore], [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
       function buildTriggerNoTranslateSelector(extraSelector, doc) {
         if (typeof extraSelector !== "string" || !extraSelector.trim()) return BASE_TRIGGER_NO_TRANSLATE_SELECTOR;
         if (doc && typeof doc.querySelector === "function") {
@@ -5206,7 +5219,7 @@ var __agyKoTranslatorBundleExports = (() => {
         tokenizeBlockElement,
         buildTranslatedBlockElement
       } = require_dom_tokenizer();
-      var BASE_NO_TRANSLATE_SELECTOR = '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
+      var BASE_NO_TRANSLATE_SELECTOR = '[data-addon-host-ignore], [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
       function buildEffectiveNoTranslateSelector(extraSelector, doc) {
         if (typeof extraSelector !== "string" || !extraSelector.trim()) return BASE_NO_TRANSLATE_SELECTOR;
         if (doc && typeof doc.querySelector === "function") {
@@ -7299,6 +7312,11 @@ var __agyKoTranslatorBundleExports = (() => {
       var { DEFAULT_LLM_CONFIG } = require_default_providers();
       var STATUSBAR_ADDON_ID = "ko-translator";
       var QUICK_SETTINGS_MODAL_SLOT_ID = "ko-translator.quick-settings-modal";
+      var QUICK_SETTINGS_TAB_ID = "ko-translator.quick-settings";
+      var HOST_ACTION_IDS = Object.freeze({
+        openQuickSettings: "open-quick-settings",
+        toggleEngine: "toggle-engine"
+      });
       var SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
       var MODAL_CSS = `
 :host {
@@ -7708,6 +7726,7 @@ var __agyKoTranslatorBundleExports = (() => {
         let activePortal = null;
         let activeModalHandles = null;
         const cleanupListeners = [];
+        const hostRegistrations = [];
         function addTrackedListener(target, type, fn, opts) {
           if (!target || typeof target.addEventListener !== "function") return;
           target.addEventListener(type, fn, opts);
@@ -8497,6 +8516,34 @@ var __agyKoTranslatorBundleExports = (() => {
               updateModalLiveHeader(st);
             });
           }
+          if (hostCapability && typeof hostCapability.registerSettingsTab === "function") {
+            try {
+              const reg = hostCapability.registerSettingsTab(QUICK_SETTINGS_TAB_ID, {
+                label: "한국어 번역 설정",
+                onSelect: /* @__PURE__ */ __name(() => openModal(), "onSelect")
+              });
+              if (reg) hostRegistrations.push(reg);
+            } catch (_err) {
+            }
+          }
+          if (hostCapability && typeof hostCapability.registerAction === "function") {
+            try {
+              const openReg = hostCapability.registerAction(HOST_ACTION_IDS.openQuickSettings, {
+                label: "한국어 번역 설정 열기",
+                run: /* @__PURE__ */ __name(() => openModal(), "run")
+              });
+              if (openReg) hostRegistrations.push(openReg);
+            } catch (_err) {
+            }
+            try {
+              const toggleReg = hostCapability.registerAction(HOST_ACTION_IDS.toggleEngine, {
+                label: "번역 엔진 전환 (구글 ↔ 로컬 LLM)",
+                run: /* @__PURE__ */ __name(() => toggleEngineQuick(), "run")
+              });
+              if (toggleReg) hostRegistrations.push(toggleReg);
+            } catch (_err) {
+            }
+          }
           if (!syncStatusbarButton()) {
             const setInt = targetWin.setInterval || setInterval;
             pollTicks = 0;
@@ -8524,6 +8571,17 @@ var __agyKoTranslatorBundleExports = (() => {
             } catch (_err) {
             }
             unsubStatus = null;
+          }
+          while (hostRegistrations.length > 0) {
+            const reg = hostRegistrations.pop();
+            try {
+              if (typeof reg === "function") {
+                reg();
+              } else if (reg && typeof reg.unregister === "function") {
+                reg.unregister();
+              }
+            } catch (_err) {
+            }
           }
           while (cleanupListeners.length > 0) {
             const fn = cleanupListeners.pop();
@@ -8557,6 +8615,8 @@ var __agyKoTranslatorBundleExports = (() => {
       module.exports = {
         STATUSBAR_ADDON_ID,
         QUICK_SETTINGS_MODAL_SLOT_ID,
+        QUICK_SETTINGS_TAB_ID,
+        HOST_ACTION_IDS,
         computeStatusbarMeta,
         buildProbeUrl,
         createQuickSettingsUi
@@ -8576,11 +8636,14 @@ var __agyKoTranslatorBundleExports = (() => {
       var {
         STATUSBAR_ADDON_ID,
         QUICK_SETTINGS_MODAL_SLOT_ID,
+        QUICK_SETTINGS_TAB_ID,
+        HOST_ACTION_IDS,
         createQuickSettingsUi
       } = require_quick_settings_ui();
       var STYLE_ID = "agy-ko-thought-localizer-style";
+      var REMOTE_WEB_HOST_PROFILE_ID = "antigravity-remote-web";
       var ANTIGRAVITY_SELECTORS = Object.freeze({
-        noTranslateSubtree: '.agy-ko-thought-wrap, [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]',
+        noTranslateSubtree: '.agy-ko-thought-wrap, [data-addon-host-ignore], [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]',
         triggerLabelClass: "agy-ko-trigger-label",
         conversationViews: '[data-testid="conversation-view"], [data-testid="subagent-tab-conversation"], [data-testid="side-question-tab-conversation"]',
         conversationViewFallbackList: Object.freeze([
@@ -8617,6 +8680,20 @@ var __agyKoTranslatorBundleExports = (() => {
 `.trim();
       }
       __name(buildMinimalOverlayCss, "buildMinimalOverlayCss");
+      function resolveUninitializedSettings(hostCapability) {
+        if (!hostCapability || hostCapability.hostProfileId !== REMOTE_WEB_HOST_PROFILE_ID) {
+          return null;
+        }
+        return {
+          schemaVersion: 1,
+          enabled: true,
+          translateThinking: true,
+          showThinking: true,
+          translateStaticUi: true,
+          provider: "google-translate"
+        };
+      }
+      __name(resolveUninitializedSettings, "resolveUninitializedSettings");
       function createAntigravityHostAdapter() {
         return {
           id: "antigravity-desktop",
@@ -8624,6 +8701,7 @@ var __agyKoTranslatorBundleExports = (() => {
           selectors: ANTIGRAVITY_SELECTORS,
           storageKeys: STORAGE_KEYS,
           buildOverlayCss: buildMinimalOverlayCss,
+          resolveUninitializedSettings,
           createStoragePort,
           createDictionaryCatalog: createAntigravityDictionaryCatalog,
           createUiLocalizer: createAntigravityUiLocalizer,
@@ -8634,10 +8712,14 @@ var __agyKoTranslatorBundleExports = (() => {
       __name(createAntigravityHostAdapter, "createAntigravityHostAdapter");
       module.exports = {
         STYLE_ID,
+        REMOTE_WEB_HOST_PROFILE_ID,
         STATUSBAR_ADDON_ID,
         QUICK_SETTINGS_MODAL_SLOT_ID,
+        QUICK_SETTINGS_TAB_ID,
+        HOST_ACTION_IDS,
         ANTIGRAVITY_SELECTORS,
         buildMinimalOverlayCss,
+        resolveUninitializedSettings,
         createAntigravityHostAdapter,
         createQuickSettingsUi
       };
@@ -8652,11 +8734,14 @@ var __agyKoTranslatorBundleExports = (() => {
         STYLE_ID,
         STATUSBAR_ADDON_ID,
         QUICK_SETTINGS_MODAL_SLOT_ID,
+        QUICK_SETTINGS_TAB_ID,
+        HOST_ACTION_IDS,
         buildMinimalOverlayCss,
         createAntigravityHostAdapter,
         createQuickSettingsUi
       } = require_host_adapter();
       var { createDefaultProviderBundle } = require_default_providers();
+      var PLUGIN_VERSION = "2.3.0";
       function createKoTranslator(options = {}) {
         return createTranslatorRuntime({
           ...options,
@@ -8699,7 +8784,7 @@ var __agyKoTranslatorBundleExports = (() => {
           doc,
           settings: initialSettings,
           hostCapability: resolvedHostCap,
-          version: "2.1.1"
+          version: PLUGIN_VERSION
         });
         const quickSettingsUi = createQuickSettingsUi({
           win,
@@ -8739,9 +8824,12 @@ var __agyKoTranslatorBundleExports = (() => {
         mountIfBrowser(window, detectedHostCap);
       }
       module.exports = {
+        PLUGIN_VERSION,
         STYLE_ID,
         STATUSBAR_ADDON_ID,
         QUICK_SETTINGS_MODAL_SLOT_ID,
+        QUICK_SETTINGS_TAB_ID,
+        HOST_ACTION_IDS,
         buildMinimalOverlayCss,
         createTranslatorRuntime,
         createKoTranslator,

@@ -148,24 +148,25 @@ test('host CLI --status is 100% read-only and --install/--uninstall/--rollback m
   const { dir, pluginDir, paths } = makeTempEnv();
   try {
     const before = buildStatusReport(paths);
+    assert.equal(before.version, '2.3.0');
     assert.equal(before.manifestSchema, 'AddonManifest.v2');
     assert.equal(before.manifestRegistered, false);
     assert.equal(before.addonHostInstalled, false);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), false);
 
-    // Simulate installed shared host loader with older vs compatible hostVersion (I7)
-    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\nconst HOST_CFG = {"hostVersion":"2.0.0"};\n', 'utf8');
+    // Simulate installed shared host loader with older vs compatible hostVersion (I7 + v2.3.0)
+    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\nconst HOST_CFG = {"hostVersion":"2.2.0"};\n', 'utf8');
     const oldStatus = buildStatusReport(paths);
     assert.equal(oldStatus.addonHostInstalled, true);
-    assert.equal(oldStatus.addonHostVersion, '2.0.0');
+    assert.equal(oldStatus.addonHostVersion, '2.2.0');
     assert.equal(oldStatus.addonHostCompatible, false);
 
-    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\nconst HOST_CFG = {"hostVersion":"2.1.1"};\n', 'utf8');
+    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\nconst HOST_CFG = {"hostVersion":"2.3.0"};\n', 'utf8');
 
     const inst = await runCli(['--install'], paths);
     assert.equal(inst.status, 'INSTALLED');
     assert.equal(inst.addonHostInstalled, true);
-    assert.equal(inst.addonHostVersion, '2.1.1');
+    assert.equal(inst.addonHostVersion, '2.3.0');
     assert.equal(inst.addonHostCompatible, true);
     assert.equal(inst.settingsInitialized, true);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), true);

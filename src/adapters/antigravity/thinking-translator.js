@@ -11,7 +11,7 @@ const {
 } = require('./dom-tokenizer');
 
 const BASE_NO_TRANSLATE_SELECTOR =
-  '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
+  '[data-addon-host-ignore], [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
 
 function buildEffectiveNoTranslateSelector(extraSelector, doc) {
   if (typeof extraSelector !== 'string' || !extraSelector.trim()) return BASE_NO_TRANSLATE_SELECTOR;
