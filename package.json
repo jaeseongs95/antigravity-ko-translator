@@ -1,7 +1,7 @@
 {
   "name": "antigravity-ko-translator",
-  "version": "2.2.0",
-  "description": "Antigravity Desktop Native App Korean Thinking & Static UI Translator (AddonManifest.v2 Renderer-Only Plugin + Host settingsBridge + Statusbar & Shadow DOM Quick Settings Modal).",
+  "version": "2.3.0",
+  "description": "Antigravity Korean Thinking & Static UI Translator for Desktop & Remote Web (AddonManifest.v2 Renderer-Only Plugin + Host v2.3.0 settingsBridge + Statusbar, Host Actions & Shadow DOM Quick Settings Modal).",
   "private": true,
   "scripts": {
     "build": "node ./scripts/build.js",

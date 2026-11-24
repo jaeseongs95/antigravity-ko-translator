@@ -16,6 +16,7 @@ const REPO_ROOT = path.resolve(__dirname, '..');
 const SRC_ROOT = path.join(REPO_ROOT, 'src');
 const ENTRY_FILE = path.join(SRC_ROOT, 'index.js');
 const OUTPUT_BUNDLE_REL_PATH = 'dist/renderer.js';
+const PLUGIN_VERSION = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version || '2.3.0';
 
 function generateBundleSource(entryAbs = ENTRY_FILE) {
   const result = esbuild.buildSync({
@@ -32,7 +33,7 @@ function generateBundleSource(entryAbs = ENTRY_FILE) {
     legalComments: 'none',
     logLevel: 'silent',
     banner: {
-      js: '// === Antigravity Korean Thought & UI Translator v2.1.1 (AddonManifest.v2 World 998 Renderer-Only — Generated Bundle) ===',
+      js: `// === Antigravity Korean Thought & UI Translator v${PLUGIN_VERSION} (AddonManifest.v2 World 998 & Remote Web Renderer-Only — Generated Bundle) ===`,
     },
     footer: {
       js: 'if (typeof module !== "undefined" && module && module.exports) { module.exports = __agyKoTranslatorBundleExports; }',

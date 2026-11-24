@@ -17,11 +17,15 @@ const {
   STYLE_ID,
   STATUSBAR_ADDON_ID,
   QUICK_SETTINGS_MODAL_SLOT_ID,
+  QUICK_SETTINGS_TAB_ID,
+  HOST_ACTION_IDS,
   buildMinimalOverlayCss,
   createAntigravityHostAdapter,
   createQuickSettingsUi,
 } = require('./adapters/antigravity/host-adapter');
 const { createDefaultProviderBundle } = require('./adapters/translators/default-providers');
+
+const PLUGIN_VERSION = '2.3.0';
 
 function createKoTranslator(options = {}) {
   return createTranslatorRuntime({
@@ -79,7 +83,7 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
     doc,
     settings: initialSettings,
     hostCapability: resolvedHostCap,
-    version: '2.1.1',
+    version: PLUGIN_VERSION,
   });
 
   const quickSettingsUi = createQuickSettingsUi({
@@ -126,9 +130,12 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
 }
 
 module.exports = {
+  PLUGIN_VERSION,
   STYLE_ID,
   STATUSBAR_ADDON_ID,
   QUICK_SETTINGS_MODAL_SLOT_ID,
+  QUICK_SETTINGS_TAB_ID,
+  HOST_ACTION_IDS,
   buildMinimalOverlayCss,
   createTranslatorRuntime,
   createKoTranslator,

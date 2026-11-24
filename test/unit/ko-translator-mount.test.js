@@ -807,3 +807,91 @@ test('AddonManifest.v2 capability handle: settingsBridge push, fail-closed missi
     port2.cleanup();
   }
 });
+
+test('Host v2.3.0 Remote Web compatibility: first boot with null settings boots enabled on antigravity-remote-web, excludes [data-addon-host-ignore], while corrupted snapshots and Desktop missing still fail closed', () => {
+  const env = createHappyDomEnv();
+  try {
+    const convView = env.doc.createElement('div');
+    convView.setAttribute('data-testid', 'conversation-view');
+    const nativeBtn = env.doc.createElement('button');
+    nativeBtn.textContent = 'Settings';
+    convView.appendChild(nativeBtn);
+
+    // Remote Web v2.3.0 fallback dock / drawer attribute defense-in-depth
+    const hostIgnoreDock = env.doc.createElement('div');
+    hostIgnoreDock.setAttribute('data-addon-host-ignore', 'true');
+    const dockLabel = env.doc.createElement('span');
+    dockLabel.textContent = 'Settings';
+    hostIgnoreDock.appendChild(dockLabel);
+    convView.appendChild(hostIgnoreDock);
+    env.doc.body.appendChild(convView);
+
+    // 1. Remote Web with null initial settings (no pre-seeded snapshot) -> boots enabled with google-translate
+    const remoteNullCap = {
+      hostProfileId: 'antigravity-remote-web',
+      getSettings: () => null,
+      onSettingsChange: () => () => {},
+      injectStyle() {},
+      removeStyle() {},
+    };
+    const remoteTr = createKoTranslator({
+      win: env.win,
+      doc: env.doc,
+      hostCapability: remoteNullCap,
+      fetchFn: async () => ({ ok: true, json: async () => [[['원격 번역']]] }),
+    });
+    const stRemote = remoteTr.start();
+    assert.equal(stRemote.hostId, 'antigravity-remote-web');
+    assert.equal(stRemote.enabled, true, 'Remote Web first boot with null snapshot must boot enabled');
+    assert.equal(stRemote.provider, 'google-translate');
+    assert.equal(stRemote.lastError, null);
+    assert.equal(nativeBtn.textContent, '설정');
+    assert.equal(dockLabel.textContent, 'Settings', '[data-addon-host-ignore] subtree must never be translated');
+    remoteTr.dispose();
+    assert.equal(nativeBtn.textContent, 'Settings');
+
+    // 2. Remote Web with corrupted settings snapshot -> MUST STILL fail closed
+    let corruptFetchCalls = 0;
+    const remoteCorruptCap = {
+      hostProfileId: 'antigravity-remote-web',
+      getSettings: () => ({ status: 'error', data: null, reason: 'ERR_SETTINGS_INVALID_JSON' }),
+      onSettingsChange: () => () => {},
+    };
+    const remoteCorruptTr = createKoTranslator({
+      win: env.win,
+      doc: env.doc,
+      hostCapability: remoteCorruptCap,
+      fetchFn: async () => {
+        corruptFetchCalls += 1;
+        return { ok: true, json: async () => [[['금지']]] };
+      },
+    });
+    const stRemoteCorrupt = remoteCorruptTr.start();
+    assert.equal(stRemoteCorrupt.enabled, false, 'Corrupted Remote Web snapshot must fail closed');
+    assert.equal(stRemoteCorrupt.provider, null);
+    assert.equal(stRemoteCorrupt.lastError, 'ERR_SETTINGS_INVALID_JSON');
+    assert.equal(corruptFetchCalls, 0);
+    remoteCorruptTr.dispose();
+
+    // 3. Desktop profile with null settings snapshot -> MUST STILL fail closed (V1 invariant preserved)
+    const desktopNullCap = {
+      hostProfileId: 'antigravity-desktop',
+      getSettings: () => null,
+      onSettingsChange: () => () => {},
+    };
+    const desktopNullTr = createKoTranslator({
+      win: env.win,
+      doc: env.doc,
+      hostCapability: desktopNullCap,
+      fetchFn: async () => ({ ok: true, json: async () => [[['금지']]] }),
+    });
+    const stDesktopNull = desktopNullTr.start();
+    assert.equal(stDesktopNull.hostId, 'antigravity-desktop');
+    assert.equal(stDesktopNull.enabled, false, 'Desktop null snapshot must remain fail-closed');
+    assert.equal(stDesktopNull.provider, null);
+    assert.equal(stDesktopNull.lastError, 'ERR_SETTINGS_FILE_MISSING');
+    desktopNullTr.dispose();
+  } finally {
+    env.cleanup();
+  }
+});

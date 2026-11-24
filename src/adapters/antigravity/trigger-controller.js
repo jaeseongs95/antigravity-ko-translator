@@ -46,7 +46,7 @@ function isElementInLatestTurn(btn, doc, NodeCtor) {
 }
 
 const BASE_TRIGGER_NO_TRANSLATE_SELECTOR =
-  '[data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
+  '[data-addon-host-ignore], [data-addon-host-owner], [data-addon-host-slot], [data-addon-host-no-translate], [data-agy-no-translate="true"], [translate="no"]';
 
 function buildTriggerNoTranslateSelector(extraSelector, doc) {
   if (typeof extraSelector !== 'string' || !extraSelector.trim()) return BASE_TRIGGER_NO_TRANSLATE_SELECTOR;

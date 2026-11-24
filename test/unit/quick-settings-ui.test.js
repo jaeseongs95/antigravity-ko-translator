@@ -9,6 +9,8 @@ const {
   createQuickSettingsUi,
   STATUSBAR_ADDON_ID,
   QUICK_SETTINGS_MODAL_SLOT_ID,
+  QUICK_SETTINGS_TAB_ID,
+  HOST_ACTION_IDS,
 } = require('../../src/index');
 
 function createMockStatusbarApi() {
@@ -339,6 +341,92 @@ test('Quick Settings modal handles delayed statusbar-addons-ready event and corr
   } finally {
     ui.dispose();
     translator.dispose();
+    delete globalThis.__testDoc;
+    win.happyDOM.close();
+  }
+});
+
+test('Host v2.3.0 Remote Web integration: registers host settings tab & actions when statusbar is absent, opens modal / toggles engine, and cleans up on dispose', async () => {
+  const win = new Window({ url: 'https://antigravity.google.com/r/session-1' });
+  const doc = win.document;
+  globalThis.__testDoc = doc;
+
+  const mockHost = createMockHostCapability(null);
+  const registeredTabs = new Map();
+  const registeredActions = new Map();
+  let tabUnregistered = 0;
+  let actionsUnregistered = 0;
+
+  const remoteHostCapability = {
+    ...mockHost.hostCapability,
+    hostProfileId: 'antigravity-remote-web',
+    registerSettingsTab(tabId, opts) {
+      registeredTabs.set(tabId, opts);
+      return {
+        unregister() {
+          tabUnregistered += 1;
+          registeredTabs.delete(tabId);
+        },
+      };
+    },
+    registerAction(actionId, spec) {
+      registeredActions.set(actionId, spec);
+      return {
+        unregister() {
+          actionsUnregistered += 1;
+          registeredActions.delete(actionId);
+        },
+      };
+    },
+  };
+
+  const translator = createKoTranslator({
+    win,
+    doc,
+    hostCapability: remoteHostCapability,
+    fetchFn: async () => ({ ok: true, json: async () => [[['원격 번역']]] }),
+  });
+  const ui = createQuickSettingsUi({
+    win,
+    doc,
+    translator,
+    hostCapability: remoteHostCapability,
+  });
+
+  try {
+    // No window.statusbarAddons present (Remote Web without statusbar plugin)
+    translator.start();
+    ui.start();
+
+    assert.equal(translator.getStatus().enabled, true);
+    assert.equal(translator.getStatus().provider, 'google-translate');
+    assert.equal(registeredTabs.has(QUICK_SETTINGS_TAB_ID), true, 'Must register host settings tab');
+    assert.equal(registeredActions.has(HOST_ACTION_IDS.openQuickSettings), true, 'Must register open-quick-settings action');
+    assert.equal(registeredActions.has(HOST_ACTION_IDS.toggleEngine), true, 'Must register toggle-engine action');
+
+    // Open Quick Settings Modal via registered Settings Tab onSelect
+    registeredTabs.get(QUICK_SETTINGS_TAB_ID).onSelect();
+    assert.equal(ui.isModalOpen(), true, 'Settings tab onSelect must open Quick Settings modal');
+    ui.closeModal();
+    assert.equal(ui.isModalOpen(), false);
+
+    // Open Quick Settings Modal via registered Host Action
+    registeredActions.get(HOST_ACTION_IDS.openQuickSettings).run();
+    assert.equal(ui.isModalOpen(), true, 'open-quick-settings action must open Quick Settings modal');
+    ui.closeModal();
+
+    // Toggle translation engine via registered Host Action
+    await registeredActions.get(HOST_ACTION_IDS.toggleEngine).run();
+    assert.equal(mockHost.savedPayloads.length, 1);
+    assert.equal(mockHost.savedPayloads[0].provider, 'local-llm');
+    assert.equal(translator.getStatus().provider, 'local-llm');
+  } finally {
+    ui.dispose();
+    translator.dispose();
+    assert.equal(tabUnregistered, 1, 'dispose() must unregister host settings tab');
+    assert.equal(actionsUnregistered, 2, 'dispose() must unregister both host actions');
+    assert.equal(registeredTabs.size, 0);
+    assert.equal(registeredActions.size, 0);
     delete globalThis.__testDoc;
     win.happyDOM.close();
   }

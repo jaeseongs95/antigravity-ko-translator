@@ -33,9 +33,10 @@ const {
   unregisterAddonManifest,
 } = require('./addon-registry');
 
-const MIN_REQUIRED_HOST_VERSION = '2.1.0';
+const PKG_VERSION = require('../package.json').version || '2.3.0';
+const MIN_REQUIRED_HOST_VERSION = '2.3.0';
 const HOST_INSTALL_HINT =
-  'Install/upgrade antigravity-native-addon-host (>= v2.1.0) via `addon-host --upgrade` and approve trust via `addon-host trust approve ko-thought-translator` (using real copied plugin files, zero symlinks).';
+  'Install/upgrade antigravity-native-addon-host (>= v2.3.0) via `addon-host --upgrade` and approve trust via `addon-host trust approve ko-thought-translator` (using real copied plugin files, zero symlinks).';
 const TRUST_APPROVE_HINT =
   'Run `addon-host trust approve ko-thought-translator` after installing/updating real copied files in `~/.gemini/config/plugins/ko-thought-translator/`.';
 
@@ -73,7 +74,7 @@ function buildStatusReport(pathOverrides = null, profile = ANTIGRAVITY_HOST_PROF
     settingsError = err && err.message ? err.message : 'SETTINGS_FILE_CORRUPTED';
   }
   return {
-    version: '2.1.1',
+    version: PKG_VERSION,
     manifestSchema: 'AddonManifest.v2',
     patchMarker: activeProfile.patchMarker,
     pluginEnabled: isPluginEnabled(p.CONFIG_JSON_PATH, activeProfile.pluginId),
