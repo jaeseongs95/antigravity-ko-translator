@@ -84,7 +84,7 @@ function createTranslatorRuntime({
   providerBundle = null,
   hostCapability = null,
   settings = null,
-  version = '2.3.0',
+  version = '2.4.0',
   fetchFn = null,
   onStatus = null,
 } = {}) {

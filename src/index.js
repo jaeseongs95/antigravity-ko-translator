@@ -24,12 +24,16 @@ const {
   createQuickSettingsUi,
 } = require('./adapters/antigravity/host-adapter');
 const { createDefaultProviderBundle } = require('./adapters/translators/default-providers');
+const { createUserscriptFetch } = require('./adapters/translators/gm-fetch');
 
-const PLUGIN_VERSION = '2.3.0';
+const PLUGIN_VERSION = '2.4.0';
 
 function createKoTranslator(options = {}) {
+  const effectiveFetch =
+    typeof options.fetchFn === 'function' ? options.fetchFn : createUserscriptFetch();
   return createTranslatorRuntime({
     ...options,
+    fetchFn: effectiveFetch,
     hostAdapter: options.hostAdapter || createAntigravityHostAdapter(),
     providerBundle: options.providerBundle || createDefaultProviderBundle(),
   });
@@ -78,12 +82,14 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
       ? win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__
       : null;
 
+  const effectiveFetch = createUserscriptFetch();
   const instance = createKoTranslator({
     win,
     doc,
     settings: initialSettings,
     hostCapability: resolvedHostCap,
     version: PLUGIN_VERSION,
+    fetchFn: effectiveFetch,
   });
 
   const quickSettingsUi = createQuickSettingsUi({
@@ -91,6 +97,7 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
     doc,
     translator: instance,
     hostCapability: resolvedHostCap,
+    fetchFn: effectiveFetch,
   });
 
   const origDispose = instance.dispose.bind(instance);
