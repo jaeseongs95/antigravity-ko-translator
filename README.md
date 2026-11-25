@@ -1,8 +1,22 @@
-# Antigravity 2.0 Korean Thought & UI Translator (`v2.3.0`)
+# Antigravity 2.0 Korean Thought & UI Translator (`v2.4.0`)
 
-[한국어 README](./README.ko.md) | [Release Notes (`v2.3.0` EN/KO)](./RELEASE_NOTES_v2.3.0.md)
+[한국어 README](./README.ko.md) | [Release Notes (`v2.4.0` EN/KO)](./RELEASE_NOTES_v2.4.0.md)
 
-Clean-slate, renderer-only Korean localization plugin for **Antigravity 2.0 Desktop Native App & Remote Web (`antigravity.google.com/r/...`)**, hosted via **[antigravity-native-addon-host](https://github.com/jaeseongs95/antigravity-native-addon-host) (`>= v2.3.0`)** under **`AddonManifest.v2`** (zero `mainHook`, zero Sidecar `AUX_PANE`).
+Clean-slate, renderer-only Korean localization plugin for **Antigravity 2.0 Desktop Native App & Remote Web (`antigravity.google.com/r/...`)**, hosted via **[antigravity-addons](https://github.com/jaeseongs95/antigravity-addons) (`>= v2.3.0`, multi-Userscript coexistence `>= v2.8.0`)** under **`AddonManifest.v2`** (zero `mainHook`, zero Sidecar `AUX_PANE`).
+
+### 1-Click Remote Web Install (Public HTTPS Userscript — Zero Private IP / Zero Home PC)
+1. Install **Tampermonkey**, **Violentmonkey**, or **Userscripts (iOS/macOS Safari)** in your browser.
+2. Click the public HTTPS release link to install with automatic updates and `@require` host runtime:
+   - 👉 **[Install ko-thought-translator.user.js](https://github.com/jaeseongs95/antigravity-ko-translator/releases/latest/download/ko-thought-translator.user.js)**
+3. Open `https://antigravity.google.com` — the translator joins the unified Shadow-DOM Addons drawer and coexists cleanly with other modular Userscripts (such as `antigravity-statusbar.user.js`).
+
+### Highlights in v2.4.0
+- **Public HTTPS Modular Userscript Release (`ko-thought-translator.user.js` + `.meta.js`)**:
+  - Built via `antigravity-addons v2.8.0` `--build-addon-userscript` with `@require https://github.com/jaeseongs95/antigravity-addons/releases/latest/download/antigravity-remote-host.lib.js`, `@inject-into content`, `GM_getValue`/`GM_setValue`/`GM_deleteValue`/`GM_xmlhttpRequest`, explicit `@connect translate.googleapis.com`, and automatic GitHub Releases updates (`@updateURL`/`@downloadURL`).
+- **CSP/CORS-Resilient Userscript HTTPS Transport (`src/adapters/translators/gm-fetch.js`)**:
+  - Transparently routes `https:` translation requests through `GM_xmlhttpRequest` (`GM.xmlHttpRequest`) when running inside a Userscript sandbox so `translate.googleapis.com` works reliably even under strict `antigravity.google.com` page CSP `connect-src`/CORS, while respecting `AbortSignal` + `anonymous: true` and falling back to standard `fetch` on Desktop and local loopback HTTP.
+- **Version Metadata Sync (`v2.4.0`)**:
+  - Synchronizes `package.json`, `plugin.json`, `addon-manifest.v2.json`, `src/index.js`, `src/runtime/bootstrap.js`, `scripts/build.js`, and `host/cli.js` to `2.4.0`.
 
 ### Highlights in v2.3.0
 - **`antigravity-native-addon-host v2.3.0` Multi-Profile Compatibility (`antigravity-desktop` + `antigravity-remote-web`)**:

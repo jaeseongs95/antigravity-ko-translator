@@ -20,7 +20,7 @@ test('addon-manifest.v2.json satisfies AddonManifest.v2 renderer-only + settings
   const manifest = loadSourceAddonManifest(SOURCE_MANIFEST_PATH);
   assert.equal(manifest.schemaVersion, 2);
   assert.equal(manifest.pluginId, 'ko-thought-translator');
-  assert.equal(manifest.version, '2.3.0');
+  assert.equal(manifest.version, '2.4.0');
   assert.equal(manifest.trustLevel, 'trusted');
   assert.equal(manifest.compatibility.hostProfile, 'antigravity-desktop');
   assert.deepEqual(manifest.compatibility.hostProfiles, ['antigravity-desktop', 'antigravity-remote-web']);

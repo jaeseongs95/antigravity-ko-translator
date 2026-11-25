@@ -1,8 +1,22 @@
-# Antigravity 2.0 한국어 번역기 (`v2.3.0` · Desktop & Remote Web)
+# Antigravity 2.0 한국어 번역기 (`v2.4.0` · Desktop & Remote Web)
 
-[English README](./README.md) | [릴리스 노트 (`v2.3.0` 영문/국문)](./RELEASE_NOTES_v2.3.0.md)
+[English README](./README.md) | [릴리스 노트 (`v2.4.0` 영문/국문)](./RELEASE_NOTES_v2.4.0.md)
 
-공용 네이티브 애드온 호스트([antigravity-native-addon-host](https://github.com/jaeseongs95/antigravity-native-addon-host) `>= v2.3.0`, `AddonManifest.v2`) 위에서 **Antigravity 2.0 데스크톱 네이티브 앱 및 원격 웹(`antigravity.google.com/r/...`)** 양쪽을 지원하는 렌더러 전용 한국어 번역 플러그인입니다.
+공용 네이티브 애드온 호스트([antigravity-addons](https://github.com/jaeseongs95/antigravity-addons) `>= v2.3.0`, 원격 다중 Userscript 공존 `>= v2.8.0`, `AddonManifest.v2`) 위에서 **Antigravity 2.0 데스크톱 네이티브 앱 및 원격 웹(`antigravity.google.com/r/...`)** 양쪽을 지원하는 렌더러 전용 한국어 번역 플러그인입니다.
+
+### 원격 웹 1클릭 공개 HTTPS Userscript 설치 (사설 IP·개인 PC 불필요)
+1. 브라우저(PC Chrome/Edge/Firefox 또는 모바일 Safari Userscripts / Firefox / Edge Canary)에 **Tampermonkey**, **Violentmonkey**, 또는 **Userscripts(iOS Safari)** 를 설치합니다.
+2. 아래 공개 HTTPS 링크를 클릭해 1클릭 설치합니다(공용 호스트 라이브러리 `@require` 및 자동 업데이트 포함):
+   - 👉 **[ko-thought-translator.user.js 설치하기](https://github.com/jaeseongs95/antigravity-ko-translator/releases/latest/download/ko-thought-translator.user.js)**
+3. `https://antigravity.google.com`을 열면 우하단 통합 Addons 드로어에 자동 합류하며, `antigravity-statusbar.user.js` 등 다른 공개 HTTPS 애드온 Userscript와 단일 드로어에서 충돌 없이 공존합니다.
+
+### v2.4.0 주요 업데이트
+- **공개 HTTPS 모듈형 Userscript 공식 배포 (`ko-thought-translator.user.js` + `.meta.js`)**:
+  - `antigravity-addons v2.8.0`의 `--build-addon-userscript`로 생성되며 `@require https://github.com/jaeseongs95/antigravity-addons/releases/latest/download/antigravity-remote-host.lib.js`, `@inject-into content`, `@grant GM_getValue`/`GM_setValue`/`GM_deleteValue`/`GM_xmlhttpRequest`, `@connect translate.googleapis.com` 및 GitHub Releases 자동 업데이트(`@updateURL`/`@downloadURL`)를 포함합니다.
+- **Userscript CSP/CORS 내성 HTTPS 전송 어댑터 (`src/adapters/translators/gm-fetch.js`)**:
+  - `antigravity.google.com`의 엄격한 페이지 CSP `connect-src` / CORS 환경에서도 `translate.googleapis.com` 번역 요청이 안정적으로 동작하도록 Userscript 샌드박스에서 `GM_xmlhttpRequest`(`GM.xmlHttpRequest`)를 자동 사용하며, `AbortSignal`과 `anonymous: true`를 준수하고 데스크톱·로컬 루프백 HTTP에서는 기존 `fetch`를 그대로 사용합니다.
+- **버전 메타데이터 일괄 동기화 (`v2.4.0`)**:
+  - `package.json`, `plugin.json`, `addon-manifest.v2.json`, `src/index.js`, `src/runtime/bootstrap.js`, `scripts/build.js`, `host/cli.js`를 `2.4.0`으로 통일했습니다.
 
 ### v2.3.0 주요 업데이트
 - **`antigravity-native-addon-host v2.3.0` 다중 프로필 공식 대응 (`antigravity-desktop` + `antigravity-remote-web`)**:

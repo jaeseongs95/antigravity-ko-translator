@@ -1,4 +1,4 @@
-// === Antigravity Korean Thought & UI Translator v2.3.0 (AddonManifest.v2 World 998 & Remote Web Renderer-Only — Generated Bundle) ===
+// === Antigravity Korean Thought & UI Translator v2.4.0 (AddonManifest.v2 World 998 & Remote Web Renderer-Only — Generated Bundle) ===
 "use strict";
 var __agyKoTranslatorBundleExports = (() => {
   var __defProp = Object.defineProperty;
@@ -1721,7 +1721,7 @@ var __agyKoTranslatorBundleExports = (() => {
         providerBundle = null,
         hostCapability = null,
         settings = null,
-        version = "2.3.0",
+        version = "2.4.0",
         fetchFn = null,
         onStatus = null
       } = {}) {
@@ -8726,6 +8726,155 @@ var __agyKoTranslatorBundleExports = (() => {
     }
   });
 
+  // src/adapters/translators/gm-fetch.js
+  var require_gm_fetch = __commonJS({
+    "src/adapters/translators/gm-fetch.js"(exports, module) {
+      "use strict";
+      function detectGmXhr(globalScope) {
+        try {
+          if (typeof GM_xmlhttpRequest === "function") return GM_xmlhttpRequest;
+        } catch (_err) {
+        }
+        try {
+          if (typeof GM === "object" && GM && typeof GM.xmlHttpRequest === "function") {
+            return GM.xmlHttpRequest.bind(GM);
+          }
+        } catch (_err) {
+        }
+        const scope = globalScope || (typeof globalThis !== "undefined" ? globalThis : null);
+        if (scope && typeof scope.GM_xmlhttpRequest === "function") {
+          return scope.GM_xmlhttpRequest.bind(scope);
+        }
+        if (scope && scope.GM && typeof scope.GM.xmlHttpRequest === "function") {
+          return scope.GM.xmlHttpRequest.bind(scope.GM);
+        }
+        return null;
+      }
+      __name(detectGmXhr, "detectGmXhr");
+      function isHttpsUrl(rawUrl) {
+        return typeof rawUrl === "string" && /^https:\/\//i.test(rawUrl.trim());
+      }
+      __name(isHttpsUrl, "isHttpsUrl");
+      function makeAbortError() {
+        const err = new Error("The operation was aborted.");
+        err.name = "AbortError";
+        return err;
+      }
+      __name(makeAbortError, "makeAbortError");
+      function createUserscriptFetch({
+        fallbackFetch = typeof fetch === "function" ? fetch.bind(globalThis) : null,
+        gmXhr = null,
+        globalScope = null
+      } = {}) {
+        const xhrFn = typeof gmXhr === "function" ? gmXhr : detectGmXhr(globalScope);
+        if (typeof xhrFn !== "function") {
+          return fallbackFetch;
+        }
+        return /* @__PURE__ */ __name(function userscriptFetch(url, init = {}) {
+          const targetUrl = typeof url === "string" ? url : String(url || "");
+          if (!isHttpsUrl(targetUrl)) {
+            if (typeof fallbackFetch === "function") {
+              return fallbackFetch(url, init);
+            }
+            return Promise.reject(new Error("ERR_NON_HTTPS_WITHOUT_FALLBACK_FETCH"));
+          }
+          const opts = init && typeof init === "object" ? init : {};
+          const signal = opts.signal || null;
+          if (signal && signal.aborted) {
+            return Promise.reject(makeAbortError());
+          }
+          const method = typeof opts.method === "string" && opts.method.trim() ? opts.method.trim().toUpperCase() : "GET";
+          const headers = opts.headers && typeof opts.headers === "object" ? { ...opts.headers } : void 0;
+          const data = opts.body !== void 0 && opts.body !== null ? String(opts.body) : void 0;
+          return new Promise((resolve, reject) => {
+            let settled = false;
+            let reqHandle = null;
+            const onAbort = /* @__PURE__ */ __name(() => {
+              if (settled) return;
+              settled = true;
+              try {
+                if (reqHandle && typeof reqHandle.abort === "function") {
+                  reqHandle.abort();
+                }
+              } catch (_err) {
+              }
+              reject(makeAbortError());
+            }, "onAbort");
+            const cleanup = /* @__PURE__ */ __name(() => {
+              if (signal && typeof signal.removeEventListener === "function") {
+                try {
+                  signal.removeEventListener("abort", onAbort);
+                } catch (_err) {
+                }
+              }
+            }, "cleanup");
+            if (signal && typeof signal.addEventListener === "function") {
+              signal.addEventListener("abort", onAbort, { once: true });
+            }
+            try {
+              reqHandle = xhrFn({
+                method,
+                url: targetUrl,
+                headers,
+                data,
+                anonymous: opts.credentials !== "include",
+                onload(res) {
+                  if (settled) return;
+                  settled = true;
+                  cleanup();
+                  const status = res && typeof res.status === "number" ? res.status : 0;
+                  const statusText = res && typeof res.statusText === "string" ? res.statusText : "";
+                  const responseText = res && typeof res.responseText === "string" ? res.responseText : "";
+                  resolve({
+                    ok: status >= 200 && status < 300,
+                    status,
+                    statusText,
+                    async text() {
+                      return responseText;
+                    },
+                    async json() {
+                      return JSON.parse(responseText);
+                    }
+                  });
+                },
+                onerror(err) {
+                  if (settled) return;
+                  settled = true;
+                  cleanup();
+                  const detail = err && typeof err.error === "string" ? err.error : "GM_XHR_NETWORK_ERROR";
+                  reject(new Error(detail));
+                },
+                ontimeout() {
+                  if (settled) return;
+                  settled = true;
+                  cleanup();
+                  reject(new Error("GM_XHR_TIMEOUT"));
+                },
+                onabort() {
+                  if (settled) return;
+                  settled = true;
+                  cleanup();
+                  reject(makeAbortError());
+                }
+              });
+            } catch (err) {
+              if (!settled) {
+                settled = true;
+                cleanup();
+                reject(err);
+              }
+            }
+          });
+        }, "userscriptFetch");
+      }
+      __name(createUserscriptFetch, "createUserscriptFetch");
+      module.exports = {
+        detectGmXhr,
+        createUserscriptFetch
+      };
+    }
+  });
+
   // src/index.js
   var require_index = __commonJS({
     "src/index.js"(exports, module) {
@@ -8741,10 +8890,13 @@ var __agyKoTranslatorBundleExports = (() => {
         createQuickSettingsUi
       } = require_host_adapter();
       var { createDefaultProviderBundle } = require_default_providers();
-      var PLUGIN_VERSION = "2.3.0";
+      var { createUserscriptFetch } = require_gm_fetch();
+      var PLUGIN_VERSION = "2.4.0";
       function createKoTranslator(options = {}) {
+        const effectiveFetch = typeof options.fetchFn === "function" ? options.fetchFn : createUserscriptFetch();
         return createTranslatorRuntime({
           ...options,
+          fetchFn: effectiveFetch,
           hostAdapter: options.hostAdapter || createAntigravityHostAdapter(),
           providerBundle: options.providerBundle || createDefaultProviderBundle()
         });
@@ -8779,18 +8931,21 @@ var __agyKoTranslatorBundleExports = (() => {
           }
         }
         const initialSettings = !isHostManaged && win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ && typeof win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ === "object" ? win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ : null;
+        const effectiveFetch = createUserscriptFetch();
         const instance = createKoTranslator({
           win,
           doc,
           settings: initialSettings,
           hostCapability: resolvedHostCap,
-          version: PLUGIN_VERSION
+          version: PLUGIN_VERSION,
+          fetchFn: effectiveFetch
         });
         const quickSettingsUi = createQuickSettingsUi({
           win,
           doc,
           translator: instance,
-          hostCapability: resolvedHostCap
+          hostCapability: resolvedHostCap,
+          fetchFn: effectiveFetch
         });
         const origDispose = instance.dispose.bind(instance);
         instance.dispose = /* @__PURE__ */ __name(function disposeWithQuickSettingsUi() {
