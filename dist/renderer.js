@@ -1,4 +1,4 @@
-// === Antigravity Korean Thought & UI Translator v3.2.0 (AddonManifest.v3 API-First Desktop & Remote Web — Generated Bundle) ===
+// === Antigravity Korean Thought & UI Translator v3.2.1 (AddonManifest.v3 API-First Desktop & Remote Web — Generated Bundle) ===
 "use strict";
 var __agyKoTranslatorBundleExports = (() => {
   var __defProp = Object.defineProperty;
@@ -7069,14 +7069,7 @@ var __agyKoTranslatorBundleExports = (() => {
           label: "OpenAI",
           protocol: "openai",
           baseUrl: "https://api.openai.com/v1",
-          defaultModel: "gpt-4o-mini",
-          recommendedModels: Object.freeze([
-            "gpt-6-luna",
-            "gpt-6-sol",
-            "gpt-5-mini",
-            "gpt-4.1-mini",
-            "gpt-4o-mini"
-          ]),
+          defaultModel: "",
           secretKey: "cloud_api_key_openai",
           headerName: "Authorization",
           headerPrefix: "Bearer ",
@@ -7087,12 +7080,7 @@ var __agyKoTranslatorBundleExports = (() => {
           label: "Anthropic (Claude)",
           protocol: "anthropic",
           baseUrl: "https://api.anthropic.com",
-          defaultModel: "claude-haiku-4-5-20251001",
-          recommendedModels: Object.freeze([
-            "claude-haiku-4-5-20251001",
-            "claude-sonnet-4-5-20250929",
-            "claude-opus-4-5-20251101"
-          ]),
+          defaultModel: "",
           secretKey: "cloud_api_key_anthropic",
           headerName: "x-api-key",
           headerPrefix: "",
@@ -7103,12 +7091,7 @@ var __agyKoTranslatorBundleExports = (() => {
           label: "Google Gemini",
           protocol: "gemini",
           baseUrl: "https://generativelanguage.googleapis.com",
-          defaultModel: "gemini-2.5-flash",
-          recommendedModels: Object.freeze([
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-            "gemini-2.5-pro"
-          ]),
+          defaultModel: "",
           secretKey: "cloud_api_key_gemini",
           headerName: "x-goog-api-key",
           headerPrefix: "",
@@ -7119,14 +7102,7 @@ var __agyKoTranslatorBundleExports = (() => {
           label: "OpenAI 호환 (OpenRouter · DeepSeek · Groq 등)",
           protocol: "openai",
           baseUrl: "https://openrouter.ai/api/v1",
-          defaultModel: "openai/gpt-4o-mini",
-          recommendedModels: Object.freeze([
-            "openai/gpt-4o-mini",
-            "openai/gpt-6-luna",
-            "anthropic/claude-haiku-4.5",
-            "google/gemini-2.5-flash",
-            "deepseek/deepseek-chat"
-          ]),
+          defaultModel: "",
           secretKey: "cloud_api_key_openai_compat",
           headerName: "Authorization",
           headerPrefix: "Bearer ",
@@ -7172,7 +7148,7 @@ var __agyKoTranslatorBundleExports = (() => {
         return getCloudPreset(rawPreset).secretKey;
       }
       __name(getCloudSecretKeyForPreset, "getCloudSecretKeyForPreset");
-      function validateCloudApiConfig(rawCfg = {}) {
+      function validateCloudApiConfig(rawCfg = {}, { requireModel = false } = {}) {
         const src = rawCfg && typeof rawCfg === "object" && !Array.isArray(rawCfg) ? rawCfg : {};
         const presetId = normalizeCloudPresetId(src.preset);
         const preset = CLOUD_API_PRESETS[presetId];
@@ -7184,8 +7160,12 @@ var __agyKoTranslatorBundleExports = (() => {
         if (!isHttpsNonLoopbackEndpoint(parsed.href)) {
           throw new Error("ERR_CLOUD_API_HTTPS_REQUIRED");
         }
-        const rawModel = typeof src.model === "string" && src.model.trim() ? src.model.trim() : preset.defaultModel;
-        if (!SAFE_MODEL_RE.test(rawModel)) {
+        const rawModel = typeof src.model === "string" ? src.model.trim() : "";
+        if (!rawModel) {
+          if (requireModel) {
+            throw new Error("ERR_CLOUD_API_MODEL_REQUIRED");
+          }
+        } else if (!SAFE_MODEL_RE.test(rawModel)) {
           throw new Error("ERR_CLOUD_API_INVALID_MODEL");
         }
         const timeoutRaw = Number(src.timeoutMs);
@@ -7221,6 +7201,9 @@ var __agyKoTranslatorBundleExports = (() => {
       }
       __name(buildCloudApiUrl, "buildCloudApiUrl");
       function buildCloudApiRequest(validated, userPrompt, { maxTokens = 1024 } = {}) {
+        if (!validated || !validated.model) {
+          throw new Error("ERR_CLOUD_API_MODEL_REQUIRED");
+        }
         const url = buildCloudApiUrl(validated);
         const headers = { "Content-Type": "application/json" };
         const secretHeaders = {
@@ -7340,6 +7323,9 @@ var __agyKoTranslatorBundleExports = (() => {
           return `외부 API HTTP 오류 (${errOrStatus})${suffix}`;
         }
         const msg = String(errOrStatus && errOrStatus.message ? errOrStatus.message : errOrStatus || "");
+        if (msg === "ERR_CLOUD_API_MODEL_REQUIRED") {
+          return "모델이 선택되지 않았습니다. API 키 입력 후 [불러오기]로 모델을 선택하거나 직접 입력해 주세요.";
+        }
         if (msg.startsWith("ERR_SECRET_NOT_FOUND:")) {
           return "API 키가 등록되지 않았습니다. 설정에서 API 키를 입력하고 저장해 주세요.";
         }
@@ -7356,7 +7342,7 @@ var __agyKoTranslatorBundleExports = (() => {
         const cleanBase = String(validated.baseUrl || "").replace(/\/+$/, "");
         if (validated.protocol === "anthropic") {
           const stripped2 = cleanBase.replace(/\/v1\/messages$/i, "").replace(/\/v1$/i, "");
-          return `${stripped2}/v1/models?limit=100`;
+          return `${stripped2}/v1/models?limit=100&lifecycle=active`;
         }
         if (validated.protocol === "gemini") {
           const stripped2 = cleanBase.replace(/\/v1beta\/models\/[^/]+(?::[A-Za-z]+)?$/i, "").replace(/\/v1beta\/models$/i, "").replace(/\/v1beta$/i, "");
@@ -7368,20 +7354,50 @@ var __agyKoTranslatorBundleExports = (() => {
         return `${stripped}/v1/models`;
       }
       __name(buildCloudModelsUrl, "buildCloudModelsUrl");
-      var OPENAI_NON_CHAT_MODEL_RE = /(?:embedding|whisper|tts-|dall-e|moderation|realtime|transcribe|sora|babbage|davinci|audio-preview|image-|codex-mini-latest-internal)/i;
+      var OPENAI_NON_CHAT_OR_RETIRED_MODEL_RE = /(?:^gpt-live(?:$|-|\.)|^ft:|embedding|whisper|tts(?:$|-)|dall-e|moderation|realtime|transcribe|diarize|sora|audio|image|video|search(?:-preview|-api)?(?:$|-)|deep-research|computer-use|-healthcare(?:$|-)|-pro(?:$|-)|-codex(?:$|-)|^codex(?:$|-|\.)|-instruct(?:$|-)|^chat-latest$|^chatgpt-|^babbage|^davinci|^curie|^ada(?:$|-)|^gpt-3\.5(?:$|-|\.)|^gpt-4(?:$|-(?:0|1|3|turbo|vision|preview))|^o1(?:$|-))/i;
+      var OPENAI_DATED_SNAPSHOT_RE = /-(?:\d{4}-\d{2}-\d{2}|\d{4})$/;
+      var GEMINI_NON_TEXT_MODEL_RE = /(?:^|-)(?:imagen|veo|embedding|aqa|tts|image|audio|live|robotics|computer-use|deep-research|bisociative)(?:$|-)/i;
+      var GEMINI_DEPRECATED_DESC_RE = /(?:deprecated|discontinued|retired|shut\s*down|legacy\s+model)/i;
+      var GEMINI_NUMBERED_REV_RE = /-\d{3}$/;
+      var INACTIVE_STATUS_SET = /* @__PURE__ */ new Set(["deprecated", "retired", "inactive", "shutdown", "discontinued", "legacy"]);
       var MAX_RETURNED_CLOUD_MODELS = 200;
-      function parseCloudApiModelsResponse(protocol, data, { preset = null } = {}) {
+      function isInactiveModelMetadata(item, nowMs = Date.now()) {
+        if (!item || typeof item !== "object") return true;
+        if (item.deprecated === true || item.retired === true || item.is_deprecated === true) return true;
+        if (item.active === false || item.enabled === false) return true;
+        if (typeof item.lifecycle === "string" && item.lifecycle.trim()) {
+          if (item.lifecycle.trim().toLowerCase() !== "active") return true;
+        }
+        if (typeof item.status === "string" && item.status.trim()) {
+          if (INACTIVE_STATUS_SET.has(item.status.trim().toLowerCase())) return true;
+        }
+        if (typeof item.deprecated_at === "string" && item.deprecated_at.trim()) return true;
+        if (typeof item.deprecatedAt === "string" && item.deprecatedAt.trim()) return true;
+        for (const field of ["retires_at", "retired_at", "shutdown_date", "sunset_date"]) {
+          if (typeof item[field] === "string" && item[field].trim()) {
+            const ts = Date.parse(item[field]);
+            if (Number.isFinite(ts) && ts <= nowMs) return true;
+          }
+        }
+        return false;
+      }
+      __name(isInactiveModelMetadata, "isInactiveModelMetadata");
+      function parseCloudApiModelsResponse(protocol, data, { preset = null, nowMs = Date.now() } = {}) {
         const seen = /* @__PURE__ */ new Set();
         const rawItems = [];
         if (protocol === "gemini") {
           const list = data && Array.isArray(data.models) ? data.models : [];
           for (const item of list) {
-            if (!item || typeof item !== "object") continue;
+            if (isInactiveModelMetadata(item, nowMs)) continue;
             if (Array.isArray(item.supportedGenerationMethods) && item.supportedGenerationMethods.length > 0 && !item.supportedGenerationMethods.includes("generateContent")) {
+              continue;
+            }
+            if (typeof item.description === "string" && GEMINI_DEPRECATED_DESC_RE.test(item.description)) {
               continue;
             }
             const id = String(item.name || "").replace(/^models\//i, "").trim();
             if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
+            if (GEMINI_NON_TEXT_MODEL_RE.test(id)) continue;
             seen.add(id);
             const displayName = typeof item.displayName === "string" && item.displayName.trim() ? item.displayName.trim() : "";
             rawItems.push({
@@ -7393,7 +7409,7 @@ var __agyKoTranslatorBundleExports = (() => {
         } else if (protocol === "anthropic") {
           const list = data && Array.isArray(data.data) ? data.data : [];
           for (const item of list) {
-            if (!item || typeof item !== "object") continue;
+            if (isInactiveModelMetadata(item, nowMs)) continue;
             const id = String(item.id || "").trim();
             if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
             seen.add(id);
@@ -7407,7 +7423,7 @@ var __agyKoTranslatorBundleExports = (() => {
         } else {
           const list = data && Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : [];
           for (const item of list) {
-            if (!item || typeof item !== "object") continue;
+            if (isInactiveModelMetadata(item, nowMs)) continue;
             const id = String(item.id || "").trim();
             if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
             seen.add(id);
@@ -7421,8 +7437,14 @@ var __agyKoTranslatorBundleExports = (() => {
         }
         let filtered = rawItems;
         if (preset === "openai") {
-          const chatOnly = rawItems.filter((m) => !OPENAI_NON_CHAT_MODEL_RE.test(m.id));
-          if (chatOnly.length > 0) filtered = chatOnly;
+          const chatOnly = rawItems.filter((m) => !OPENAI_NON_CHAT_OR_RETIRED_MODEL_RE.test(m.id));
+          const undated = chatOnly.filter((m) => !OPENAI_DATED_SNAPSHOT_RE.test(m.id));
+          filtered = undated.length > 0 ? undated : chatOnly;
+        } else if (protocol === "gemini") {
+          const idSet = new Set(rawItems.map((m) => m.id));
+          filtered = rawItems.filter(
+            (m) => !(GEMINI_NUMBERED_REV_RE.test(m.id) && idSet.has(m.id.replace(GEMINI_NUMBERED_REV_RE, "")))
+          );
         }
         filtered.sort((a, b) => {
           if (b.created !== a.created) return b.created - a.created;
@@ -7435,7 +7457,7 @@ var __agyKoTranslatorBundleExports = (() => {
         if (typeof fetchFn !== "function") {
           return { ok: false, status: 0, models: [], reason: "ERR_FETCH_UNAVAILABLE" };
         }
-        const validated = validateCloudApiConfig(config);
+        const validated = validateCloudApiConfig(config, { requireModel: false });
         const url = buildCloudModelsUrl(validated);
         const headers = { Accept: "application/json" };
         if (validated.protocol === "anthropic") {
@@ -7483,7 +7505,12 @@ var __agyKoTranslatorBundleExports = (() => {
         if (typeof fetchFn !== "function") {
           return { ok: false, status: 0, sample: "", reason: "ERR_FETCH_UNAVAILABLE" };
         }
-        const validated = validateCloudApiConfig(config);
+        let validated;
+        try {
+          validated = validateCloudApiConfig(config, { requireModel: true });
+        } catch (err) {
+          return { ok: false, status: 0, sample: "", reason: formatCloudApiError(err) };
+        }
         const probeMaxTokens = validated.protocol === "openai" && !supportsOpenAiZeroTemperature(validated) ? 512 : 64;
         const req = buildCloudApiRequest(validated, "Translate to Korean:\nReady.", { maxTokens: probeMaxTokens });
         try {
@@ -7535,7 +7562,7 @@ var __agyKoTranslatorBundleExports = (() => {
           get label() {
             try {
               const cfg = validateCloudApiConfig(cloudApiConfigPort.getCloudApiConfig());
-              return `외부 API (${cfg.label} · ${cfg.model})`;
+              return cfg.model ? `외부 API (${cfg.label} · ${cfg.model})` : `외부 API (${cfg.label})`;
             } catch (_err) {
               return "외부 API (OpenAI · Claude · Gemini)";
             }
@@ -7546,7 +7573,7 @@ var __agyKoTranslatorBundleExports = (() => {
           async translate(text, ctx = {}) {
             const signal = ctx && ctx.signal ? ctx.signal : void 0;
             if (signal && signal.aborted) return "";
-            const validated = validateCloudApiConfig(cloudApiConfigPort.getCloudApiConfig());
+            const validated = validateCloudApiConfig(cloudApiConfigPort.getCloudApiConfig(), { requireModel: true });
             const normalizedInput = String(text || "").replace(/\(\s*using\s+(⟦[CT]\d+⟧)\s*\)/gi, "using $1").replace(/\bper\s+(⟦[CT]\d+⟧)/gi, "according to $1");
             const allPlaceholders = normalizedInput.match(/⟦[CT]\d+⟧/g) || [];
             const tokenHint = allPlaceholders.length > 0 ? ` (필수 포함 토큰: ${allPlaceholders.join(", ")})` : "";
@@ -9675,23 +9702,19 @@ ${normalizedInput}`, {
           cloudModelInput.type = "text";
           cloudModelInput.className = "ko-qs-input ko-qs-model-custom";
           cloudModelInput.setAttribute("data-testid", "ko-qs-cloud-model");
-          cloudModelInput.value = String(cloudCfg.model || initPreset.defaultModel);
-          cloudModelInput.placeholder = initPreset.defaultModel;
+          cloudModelInput.value = String(cloudCfg.model || "").trim();
+          cloudModelInput.placeholder = "모델 ID 직접 입력 (예: API [불러오기] 결과)";
           cloudModelInput.hidden = true;
           cloudModelField.appendChild(cloudModelLbl);
           cloudModelField.appendChild(cloudModelRow);
           cloudModelField.appendChild(cloudModelInput);
           const CLOUD_CUSTOM_MODEL_VALUE = "__custom__";
           const fetchedModelsCache = /* @__PURE__ */ new Map();
+          const savedPresetId = initPreset.id;
+          const savedPresetModel = String(cloudCfg.model || "").trim();
           let modelFetchSeq = 0;
-          function getPresetFallbackModels(presetId) {
-            const p = getCloudPreset(presetId);
-            const list = Array.isArray(p.recommendedModels) && p.recommendedModels.length > 0 ? p.recommendedModels : [p.defaultModel];
-            return list.map((id) => ({ id, label: id }));
-          }
-          __name(getPresetFallbackModels, "getPresetFallbackModels");
           function populateCloudModelSelect(models, desiredModel, { preserveCustomMode = false } = {}) {
-            const list = Array.isArray(models) && models.length > 0 ? models : getPresetFallbackModels(presetSelect.value);
+            const list = Array.isArray(models) ? models : [];
             const seen = /* @__PURE__ */ new Set();
             const normalized = [];
             for (const item of list) {
@@ -9708,11 +9731,19 @@ ${normalizedInput}`, {
             while (cloudModelSelect.firstChild) {
               cloudModelSelect.removeChild(cloudModelSelect.firstChild);
             }
-            for (const item of normalized) {
-              const opt = targetDoc.createElement("option");
-              opt.value = item.id;
-              opt.textContent = item.label;
-              cloudModelSelect.appendChild(opt);
+            if (normalized.length === 0) {
+              const placeholderOpt = targetDoc.createElement("option");
+              placeholderOpt.value = "";
+              placeholderOpt.textContent = "API 키 입력 후 [불러오기]로 조회";
+              placeholderOpt.disabled = true;
+              cloudModelSelect.appendChild(placeholderOpt);
+            } else {
+              for (const item of normalized) {
+                const opt = targetDoc.createElement("option");
+                opt.value = item.id;
+                opt.textContent = item.label;
+                cloudModelSelect.appendChild(opt);
+              }
             }
             const customOpt = targetDoc.createElement("option");
             customOpt.value = CLOUD_CUSTOM_MODEL_VALUE;
@@ -9721,6 +9752,10 @@ ${normalizedInput}`, {
             if (preserveCustomMode) {
               cloudModelSelect.value = CLOUD_CUSTOM_MODEL_VALUE;
               cloudModelInput.hidden = false;
+            } else if (normalized.length === 0) {
+              cloudModelSelect.value = "";
+              cloudModelInput.value = "";
+              cloudModelInput.hidden = true;
             } else {
               const activeId = targetModel && seen.has(targetModel) ? targetModel : normalized[0].id;
               cloudModelSelect.value = activeId;
@@ -9729,7 +9764,7 @@ ${normalizedInput}`, {
             }
           }
           __name(populateCloudModelSelect, "populateCloudModelSelect");
-          populateCloudModelSelect(getPresetFallbackModels(initPreset.id), cloudCfg.model || initPreset.defaultModel);
+          populateCloudModelSelect([], savedPresetModel);
           cloudModelSelect.addEventListener("change", () => {
             if (cloudModelSelect.value === CLOUD_CUSTOM_MODEL_VALUE) {
               cloudModelInput.hidden = false;
@@ -9739,7 +9774,7 @@ ${normalizedInput}`, {
                 } catch (_e) {
                 }
               }
-            } else {
+            } else if (cloudModelSelect.value) {
               cloudModelInput.value = cloudModelSelect.value;
               cloudModelInput.hidden = true;
             }
@@ -9888,7 +9923,7 @@ ${normalizedInput}`, {
                 config: {
                   preset: activePresetId,
                   baseUrl: activeBaseUrl,
-                  model: String(cloudModelInput.value || "").trim() || getCloudPreset(activePresetId).defaultModel,
+                  model: String(cloudModelInput.value || "").trim(),
                   timeoutMs: Number(cloudTimeoutInput.value) || 2e4
                 },
                 fetchFn: effectiveFetch,
@@ -9971,33 +10006,33 @@ ${normalizedInput}`, {
             const nextPreset = getCloudPreset(presetSelect.value);
             lastPresetId = nextPreset.id;
             const curUrl = String(cloudUrlInput.value || "").trim();
-            const curModel = String(cloudModelInput.value || "").trim();
             if (!curUrl || curUrl === prevPreset.baseUrl) {
               cloudUrlInput.value = nextPreset.baseUrl;
             }
-            const nextDesiredModel = !curModel || curModel === prevPreset.defaultModel || Array.isArray(prevPreset.recommendedModels) && prevPreset.recommendedModels.includes(curModel) ? nextPreset.defaultModel : curModel;
             cloudUrlInput.placeholder = nextPreset.baseUrl;
-            cloudModelInput.placeholder = nextPreset.defaultModel;
             const cacheKey = `${nextPreset.id}|${String(cloudUrlInput.value || "").trim()}`;
-            populateCloudModelSelect(
-              fetchedModelsCache.get(cacheKey) || getPresetFallbackModels(nextPreset.id),
-              nextDesiredModel
-            );
+            const cachedList = fetchedModelsCache.get(cacheKey) || [];
+            const nextDesiredModel = nextPreset.id === savedPresetId ? savedPresetModel : "";
+            populateCloudModelSelect(cachedList, nextDesiredModel);
             apiKeyInput.placeholder = `${nextPreset.keyPlaceholder} (새 키 입력 시에만 갱신)`;
             apiKeyInput.value = "";
             void refreshCloudKeyStatus();
           });
           apiKeyDelBtn.addEventListener("click", async () => {
             if (!secretsFacade.available) return;
-            const secretKey = getCloudSecretKeyForPreset(presetSelect.value);
+            const activePresetId = presetSelect.value;
+            const secretKey = getCloudSecretKeyForPreset(activePresetId);
             apiKeyDelBtn.disabled = true;
             try {
               await secretsFacade.delete(secretKey);
+              const cacheKey = `${activePresetId}|${String(cloudUrlInput.value || "").trim()}`;
+              fetchedModelsCache.delete(cacheKey);
+              populateCloudModelSelect([], activePresetId === savedPresetId ? savedPresetModel : "");
               apiKeyInput.value = "";
               cloudTestResultEl.textContent = "저장된 API 키를 삭제했습니다.";
               cloudTestResultEl.setAttribute("data-kind", "info");
             } finally {
-              await refreshCloudKeyStatus();
+              await refreshCloudKeyStatus({ autoLoadModels: false });
             }
           });
           const optionsSection = targetDoc.createElement("div");
@@ -10125,12 +10160,19 @@ ${normalizedInput}`, {
           }
           __name(readValidatedLlmInput, "readValidatedLlmInput");
           function readValidatedCloudInput() {
-            const validated = validateCloudApiConfig({
-              preset: presetSelect.value,
-              baseUrl: String(cloudUrlInput.value || "").trim(),
-              model: String(cloudModelInput.value || "").trim(),
-              timeoutMs: Number(cloudTimeoutInput.value)
-            });
+            const modelValue = String(cloudModelInput.value || "").trim();
+            if (!modelValue) {
+              throw new Error("모델을 선택하거나 직접 입력해 주세요. (API 키 입력 후 [불러오기]로 현재 제공 모델을 조회할 수 있습니다)");
+            }
+            const validated = validateCloudApiConfig(
+              {
+                preset: presetSelect.value,
+                baseUrl: String(cloudUrlInput.value || "").trim(),
+                model: modelValue,
+                timeoutMs: Number(cloudTimeoutInput.value)
+              },
+              { requireModel: true }
+            );
             return {
               preset: validated.preset,
               baseUrl: validated.baseUrl,

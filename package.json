@@ -1,6 +1,6 @@
 {
   "name": "antigravity-ko-translator",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "description": "Antigravity Korean Thinking & Static UI Translator for Desktop & Remote Web (AddonManifest.v3 API-First Plugin + Redesigned Slide-Switch Quick Settings + Dual-Key net.fetch + Public HTTPS Userscript).",
   "private": true,
   "scripts": {

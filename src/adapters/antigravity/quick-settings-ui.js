@@ -1291,8 +1291,8 @@ function createQuickSettingsUi({
     cloudModelInput.type = 'text';
     cloudModelInput.className = 'ko-qs-input ko-qs-model-custom';
     cloudModelInput.setAttribute('data-testid', 'ko-qs-cloud-model');
-    cloudModelInput.value = String(cloudCfg.model || initPreset.defaultModel);
-    cloudModelInput.placeholder = initPreset.defaultModel;
+    cloudModelInput.value = String(cloudCfg.model || '').trim();
+    cloudModelInput.placeholder = '모델 ID 직접 입력 (예: API [불러오기] 결과)';
     cloudModelInput.hidden = true;
 
     cloudModelField.appendChild(cloudModelLbl);
@@ -1301,18 +1301,12 @@ function createQuickSettingsUi({
 
     const CLOUD_CUSTOM_MODEL_VALUE = '__custom__';
     const fetchedModelsCache = new Map();
+    const savedPresetId = initPreset.id;
+    const savedPresetModel = String(cloudCfg.model || '').trim();
     let modelFetchSeq = 0;
 
-    function getPresetFallbackModels(presetId) {
-      const p = getCloudPreset(presetId);
-      const list = Array.isArray(p.recommendedModels) && p.recommendedModels.length > 0
-        ? p.recommendedModels
-        : [p.defaultModel];
-      return list.map((id) => ({ id, label: id }));
-    }
-
     function populateCloudModelSelect(models, desiredModel, { preserveCustomMode = false } = {}) {
-      const list = Array.isArray(models) && models.length > 0 ? models : getPresetFallbackModels(presetSelect.value);
+      const list = Array.isArray(models) ? models : [];
       const seen = new Set();
       const normalized = [];
       for (const item of list) {
@@ -1330,11 +1324,19 @@ function createQuickSettingsUi({
       while (cloudModelSelect.firstChild) {
         cloudModelSelect.removeChild(cloudModelSelect.firstChild);
       }
-      for (const item of normalized) {
-        const opt = targetDoc.createElement('option');
-        opt.value = item.id;
-        opt.textContent = item.label;
-        cloudModelSelect.appendChild(opt);
+      if (normalized.length === 0) {
+        const placeholderOpt = targetDoc.createElement('option');
+        placeholderOpt.value = '';
+        placeholderOpt.textContent = 'API 키 입력 후 [불러오기]로 조회';
+        placeholderOpt.disabled = true;
+        cloudModelSelect.appendChild(placeholderOpt);
+      } else {
+        for (const item of normalized) {
+          const opt = targetDoc.createElement('option');
+          opt.value = item.id;
+          opt.textContent = item.label;
+          cloudModelSelect.appendChild(opt);
+        }
       }
       const customOpt = targetDoc.createElement('option');
       customOpt.value = CLOUD_CUSTOM_MODEL_VALUE;
@@ -1344,6 +1346,10 @@ function createQuickSettingsUi({
       if (preserveCustomMode) {
         cloudModelSelect.value = CLOUD_CUSTOM_MODEL_VALUE;
         cloudModelInput.hidden = false;
+      } else if (normalized.length === 0) {
+        cloudModelSelect.value = '';
+        cloudModelInput.value = '';
+        cloudModelInput.hidden = true;
       } else {
         const activeId = targetModel && seen.has(targetModel) ? targetModel : normalized[0].id;
         cloudModelSelect.value = activeId;
@@ -1352,7 +1358,7 @@ function createQuickSettingsUi({
       }
     }
 
-    populateCloudModelSelect(getPresetFallbackModels(initPreset.id), cloudCfg.model || initPreset.defaultModel);
+    populateCloudModelSelect([], savedPresetModel);
 
     cloudModelSelect.addEventListener('change', () => {
       if (cloudModelSelect.value === CLOUD_CUSTOM_MODEL_VALUE) {
@@ -1362,7 +1368,7 @@ function createQuickSettingsUi({
             cloudModelInput.focus();
           } catch (_e) {}
         }
-      } else {
+      } else if (cloudModelSelect.value) {
         cloudModelInput.value = cloudModelSelect.value;
         cloudModelInput.hidden = true;
       }
@@ -1527,7 +1533,7 @@ function createQuickSettingsUi({
           config: {
             preset: activePresetId,
             baseUrl: activeBaseUrl,
-            model: String(cloudModelInput.value || '').trim() || getCloudPreset(activePresetId).defaultModel,
+            model: String(cloudModelInput.value || '').trim(),
             timeoutMs: Number(cloudTimeoutInput.value) || 20000,
           },
           fetchFn: effectiveFetch,
@@ -1610,21 +1616,14 @@ function createQuickSettingsUi({
       const nextPreset = getCloudPreset(presetSelect.value);
       lastPresetId = nextPreset.id;
       const curUrl = String(cloudUrlInput.value || '').trim();
-      const curModel = String(cloudModelInput.value || '').trim();
       if (!curUrl || curUrl === prevPreset.baseUrl) {
         cloudUrlInput.value = nextPreset.baseUrl;
       }
-      const nextDesiredModel = !curModel || curModel === prevPreset.defaultModel ||
-        (Array.isArray(prevPreset.recommendedModels) && prevPreset.recommendedModels.includes(curModel))
-        ? nextPreset.defaultModel
-        : curModel;
       cloudUrlInput.placeholder = nextPreset.baseUrl;
-      cloudModelInput.placeholder = nextPreset.defaultModel;
       const cacheKey = `${nextPreset.id}|${String(cloudUrlInput.value || '').trim()}`;
-      populateCloudModelSelect(
-        fetchedModelsCache.get(cacheKey) || getPresetFallbackModels(nextPreset.id),
-        nextDesiredModel
-      );
+      const cachedList = fetchedModelsCache.get(cacheKey) || [];
+      const nextDesiredModel = nextPreset.id === savedPresetId ? savedPresetModel : '';
+      populateCloudModelSelect(cachedList, nextDesiredModel);
       apiKeyInput.placeholder = `${nextPreset.keyPlaceholder} (새 키 입력 시에만 갱신)`;
       apiKeyInput.value = '';
       void refreshCloudKeyStatus();
@@ -1632,15 +1631,19 @@ function createQuickSettingsUi({
 
     apiKeyDelBtn.addEventListener('click', async () => {
       if (!secretsFacade.available) return;
-      const secretKey = getCloudSecretKeyForPreset(presetSelect.value);
+      const activePresetId = presetSelect.value;
+      const secretKey = getCloudSecretKeyForPreset(activePresetId);
       apiKeyDelBtn.disabled = true;
       try {
         await secretsFacade.delete(secretKey);
+        const cacheKey = `${activePresetId}|${String(cloudUrlInput.value || '').trim()}`;
+        fetchedModelsCache.delete(cacheKey);
+        populateCloudModelSelect([], activePresetId === savedPresetId ? savedPresetModel : '');
         apiKeyInput.value = '';
         cloudTestResultEl.textContent = '저장된 API 키를 삭제했습니다.';
         cloudTestResultEl.setAttribute('data-kind', 'info');
       } finally {
-        await refreshCloudKeyStatus();
+        await refreshCloudKeyStatus({ autoLoadModels: false });
       }
     });
 
@@ -1783,12 +1786,19 @@ function createQuickSettingsUi({
     }
 
     function readValidatedCloudInput() {
-      const validated = validateCloudApiConfig({
-        preset: presetSelect.value,
-        baseUrl: String(cloudUrlInput.value || '').trim(),
-        model: String(cloudModelInput.value || '').trim(),
-        timeoutMs: Number(cloudTimeoutInput.value),
-      });
+      const modelValue = String(cloudModelInput.value || '').trim();
+      if (!modelValue) {
+        throw new Error('모델을 선택하거나 직접 입력해 주세요. (API 키 입력 후 [불러오기]로 현재 제공 모델을 조회할 수 있습니다)');
+      }
+      const validated = validateCloudApiConfig(
+        {
+          preset: presetSelect.value,
+          baseUrl: String(cloudUrlInput.value || '').trim(),
+          model: modelValue,
+          timeoutMs: Number(cloudTimeoutInput.value),
+        },
+        { requireModel: true }
+      );
       return {
         preset: validated.preset,
         baseUrl: validated.baseUrl,

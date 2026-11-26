@@ -5,7 +5,7 @@
   "pluginId": "ko-thought-translator",
   "displayName": "Antigravity Korean Thought & UI Translator",
   "description": "Read-only Korean localization overlay for Antigravity Desktop & Remote Web with Google Translate, Local LLM, and Extenra ctx.secrets-backed External Cloud API adapters (OpenAI, Claude, Gemini, OpenAI-compatible).",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "trustLevel": "trusted",
   "compatibility": {
     "hostProfile": "antigravity-desktop",
