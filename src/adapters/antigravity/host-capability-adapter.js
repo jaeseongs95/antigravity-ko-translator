@@ -505,7 +505,7 @@ function createHostCapabilityAdapter(rawHostCapability) {
     surface,
     pluginId: (rawHostCapability.meta && rawHostCapability.meta.pluginId) || 'ko-thought-translator',
     displayName: (rawHostCapability.meta && rawHostCapability.meta.displayName) || 'ko-thought-translator',
-    version: (rawHostCapability.meta && rawHostCapability.meta.version) || '3.1.0',
+    version: (rawHostCapability.meta && rawHostCapability.meta.version) || '3.2.0',
     trustLevel: (rawHostCapability.meta && rawHostCapability.meta.trustLevel) || 'trusted',
     hasSettingsBridge: true,
     secrets: secretsFacade,

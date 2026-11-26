@@ -21,7 +21,7 @@ test('addon-manifest.v3.json satisfies AddonManifest.v3 API-First + permissions 
   assert.equal(manifest.schemaVersion, 3);
   assert.equal(manifest.apiVersion, 3);
   assert.equal(manifest.pluginId, 'ko-thought-translator');
-  assert.equal(manifest.version, '3.1.0');
+  assert.equal(manifest.version, '3.2.0');
   assert.equal(manifest.trustLevel, 'trusted');
   assert.equal(manifest.compatibility.hostProfile, 'antigravity-desktop');
   assert.deepEqual(manifest.compatibility.hostProfiles, ['antigravity-desktop', 'antigravity-remote-web']);

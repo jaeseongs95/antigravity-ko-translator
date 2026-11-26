@@ -148,7 +148,7 @@ test('host CLI --status is 100% read-only and --install/--uninstall/--rollback m
   const { dir, pluginDir, paths } = makeTempEnv();
   try {
     const before = buildStatusReport(paths);
-    assert.equal(before.version, '3.1.0');
+    assert.equal(before.version, '3.2.0');
     assert.equal(before.manifestSchema, 'AddonManifest.v3');
     assert.equal(before.manifestRegistered, false);
     assert.equal(before.addonHostInstalled, false);

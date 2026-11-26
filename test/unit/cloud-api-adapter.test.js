@@ -13,7 +13,10 @@ const {
   getCloudSecretKeyForPreset,
   validateCloudApiConfig,
   buildCloudApiRequest,
+  buildCloudModelsUrl,
+  parseCloudApiModelsResponse,
   extractCloudApiResponseText,
+  fetchCloudApiModels,
   probeCloudApiConnection,
   createCloudApiAdapter,
 } = require('../../src/adapters/translators/cloud-api');
@@ -434,3 +437,246 @@ test(
     }
   }
 );
+
+test('cloud-api uses max_completion_tokens and omits temperature:0 for modern OpenAI reasoning models (gpt-6-luna / gpt-5 / o3), and surfaces sanitized HTTP 400 error details', async () => {
+  const modernReq = buildCloudApiRequest(
+    validateCloudApiConfig({ preset: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-6-luna' }),
+    'Hello',
+    { maxTokens: 512 }
+  );
+  const modernBody = JSON.parse(modernReq.body);
+  assert.equal(modernBody.max_completion_tokens, 512);
+  assert.equal('max_tokens' in modernBody, false);
+  assert.equal('temperature' in modernBody, false);
+
+  const legacyReq = buildCloudApiRequest(
+    validateCloudApiConfig({ preset: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' }),
+    'Hello',
+    { maxTokens: 64 }
+  );
+  const legacyBody = JSON.parse(legacyReq.body);
+  assert.equal(legacyBody.max_completion_tokens, 64);
+  assert.equal(legacyBody.temperature, 0);
+
+  // Strict OpenAI gpt-6-luna contract: rejects max_tokens or temperature !== 1 with HTTP 400
+  const probeOk = await probeCloudApiConnection({
+    config: { preset: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-6-luna', timeoutMs: 20000 },
+    fetchFn: async (_url, init) => {
+      const b = JSON.parse(init.body);
+      assert.equal('max_tokens' in b, false);
+      assert.equal('temperature' in b, false);
+      assert.ok(b.max_completion_tokens >= 512);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: '준비 완료.' } }] }),
+      };
+    },
+  });
+  assert.equal(probeOk.ok, true);
+  assert.equal(probeOk.sample, '준비 완료.');
+
+  // HTTP 400 server JSON error message is surfaced (with secret redaction)
+  const probeErr = await probeCloudApiConnection({
+    config: { preset: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-6-luna', timeoutMs: 20000 },
+    fetchFn: async () => ({
+      ok: false,
+      status: 400,
+      text: async () =>
+        JSON.stringify({
+          error: { message: 'Invalid model parameter near sk-secret1234567890' },
+        }),
+    }),
+  });
+  assert.equal(probeErr.ok, false);
+  assert.equal(probeErr.status, 400);
+  assert.match(probeErr.reason, /외부 API HTTP 오류 \(400\): Invalid model parameter near \[REDACTED\]/);
+});
+
+test('fetchCloudApiModels parses live model lists from OpenAI, Anthropic, Gemini, and OpenAI-compat and Quick Settings UI populates model select box with custom fallback', async () => {
+  // 1. OpenAI: filters out non-chat models & sorts newest first
+  const openaiRes = await fetchCloudApiModels({
+    config: { preset: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-6-luna' },
+    fetchFn: async (url, init) => {
+      assert.equal(url, 'https://api.openai.com/v1/models');
+      assert.equal(init.method, 'GET');
+      assert.deepEqual(init.secretHeaders, {
+        Authorization: { secretKey: 'cloud_api_key_openai', prefix: 'Bearer ' },
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            { id: 'text-embedding-3-small', created: 200 },
+            { id: 'whisper-1', created: 100 },
+            { id: 'gpt-4o-mini', created: 1700000000 },
+            { id: 'gpt-6-luna', created: 1790000000 },
+          ],
+        }),
+      };
+    },
+  });
+  assert.equal(openaiRes.ok, true);
+  assert.deepEqual(
+    openaiRes.models.map((m) => m.id),
+    ['gpt-6-luna', 'gpt-4o-mini']
+  );
+
+  // 2. Anthropic: sends anthropic-version + x-api-key to /v1/models
+  const anthRes = await fetchCloudApiModels({
+    config: { preset: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-haiku-4-5-20251001' },
+    fetchFn: async (url, init) => {
+      assert.equal(url, 'https://api.anthropic.com/v1/models?limit=100');
+      assert.equal(init.headers['anthropic-version'], '2023-06-01');
+      assert.deepEqual(init.secretHeaders, {
+        'x-api-key': { secretKey: 'cloud_api_key_anthropic' },
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          data: [
+            { id: 'claude-sonnet-4-5-20250929', display_name: 'Claude Sonnet 4.5', created_at: '2025-09-29T00:00:00Z' },
+            { id: 'claude-haiku-4-5-20251001', display_name: 'Claude Haiku 4.5', created_at: '2025-10-01T00:00:00Z' },
+          ],
+        }),
+      };
+    },
+  });
+  assert.equal(anthRes.ok, true);
+  assert.deepEqual(
+    anthRes.models.map((m) => m.id),
+    ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929']
+  );
+
+  // 3. Gemini: filters generateContent & strips models/ prefix
+  const gemRes = await fetchCloudApiModels({
+    config: { preset: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-2.5-flash' },
+    fetchFn: async (url, init) => {
+      assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=100');
+      assert.deepEqual(init.secretHeaders, {
+        'x-goog-api-key': { secretKey: 'cloud_api_key_gemini' },
+      });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          models: [
+            { name: 'models/embedding-001', supportedGenerationMethods: ['embedContent'] },
+            { name: 'models/gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', supportedGenerationMethods: ['generateContent'] },
+          ],
+        }),
+      };
+    },
+  });
+  assert.equal(gemRes.ok, true);
+  assert.deepEqual(
+    gemRes.models.map((m) => m.id),
+    ['gemini-2.5-flash']
+  );
+
+  // 4. OpenAI-compat URL normalization
+  assert.equal(
+    buildCloudModelsUrl(
+      validateCloudApiConfig({ preset: 'openai-compat', baseUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-6-luna' })
+    ),
+    'https://openrouter.ai/api/v1/models'
+  );
+  assert.equal(parseCloudApiModelsResponse('openai', { data: [{ id: '../bad' }, { id: 'deepseek/deepseek-chat' }] }).length, 1);
+
+  // 5. Quick Settings UI: model select dropdown + live [불러오기] + custom manual input toggle
+  const win = new Window({ url: 'http://127.0.0.1:4243/' });
+  const doc = win.document;
+  const secretsMap = new Map([[getCloudSecretKeyForPreset('openai'), 'sk-live-test']]);
+  const mockV3 = {
+    apiVersion: 3,
+    meta: { pluginId: 'ko-thought-translator', displayName: 'Translator', version: '3.2.0', trustLevel: 'trusted', sourceSchemaVersion: 3 },
+    env: {
+      surface: 'desktop',
+      layoutMode: 'desktop',
+      capabilities: {
+        hasNetHttps: true,
+        hasLocalLoopback: true,
+        hasSecrets: true,
+        secretsPersistence: 'os-encrypted',
+        hasConfigBridge: false,
+        hasSettingsBridge: true,
+        hasDocumentTransform: true,
+      },
+    },
+    ui: {
+      registerStatusItem: (spec) => ({ id: spec.id, update() {}, dispose() {} }),
+      registerSettingsPage: (spec) => ({ id: spec.id, open: () => null, dispose() {} }),
+      registerCommand: () => ({ unregister() {}, dispose() {} }),
+      openModal: (opts = {}) => {
+        const dlg = doc.createElement('dialog');
+        const bodyEl = doc.createElement('div');
+        dlg.appendChild(bodyEl);
+        doc.body.appendChild(dlg);
+        return { element: dlg, bodyEl, close() { dlg.remove(); if (opts.onClose) opts.onClose(); } };
+      },
+      injectStyle() {},
+      removeStyle() {},
+    },
+    storage: { get: async () => undefined, set: async () => true, delete: async () => true, keys: async () => [], clear: async () => {}, onDidChange: () => () => {} },
+    services: { has: () => false, list: () => [], provide: () => ({ dispose() {} }), call: () => null },
+    dom: { isElementInsideIgnored: () => false },
+    secrets: {
+      getPersistenceMode: () => 'os-encrypted',
+      set: async (k, v) => { secretsMap.set(k, v); return { ok: true, key: k, persistence: 'os-encrypted' }; },
+      has: async (k) => secretsMap.has(k),
+      delete: async (k) => secretsMap.delete(k),
+      keys: async () => Array.from(secretsMap.keys()),
+    },
+    net: {
+      fetch: async (url) => {
+        if (url.endsWith('/models')) {
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            bodyText: JSON.stringify({
+              data: [
+                { id: 'gpt-6-luna', created: 1790000000 },
+                { id: 'gpt-6-astra', created: 1791000000 },
+              ],
+            }),
+          };
+        }
+        return { ok: true, status: 200, statusText: 'OK', bodyText: JSON.stringify({ choices: [{ message: { content: '준비 완료.' } }] }) };
+      },
+    },
+    lifecycle: { signal: null, onDispose() {}, dispose() {} },
+  };
+  const inst = mountIfBrowser(win, mockV3);
+  try {
+    const portal = inst.openQuickSettings();
+    const card = portal.bodyEl.querySelector('[data-testid="ko-qs-card"]');
+    card.querySelector('[data-testid="ko-qs-engine-cloud-api"]').click();
+    await new Promise((r) => setTimeout(r, 30));
+
+    const modelSel = card.querySelector('[data-testid="ko-qs-cloud-model-select"]');
+    const modelInp = card.querySelector('[data-testid="ko-qs-cloud-model"]');
+    assert.ok(modelSel);
+    assert.equal(modelInp.hidden, true);
+    const optValues = Array.from(modelSel.querySelectorAll('option')).map((o) => o.value);
+    assert.equal(optValues.includes('gpt-6-astra'), true, 'Auto-fetched live vendor model should appear in select');
+    assert.equal(optValues.includes('gpt-6-luna'), true);
+    assert.equal(optValues.includes('__custom__'), true);
+
+    // Select gpt-6-luna from dropdown -> syncs to modelInp
+    modelSel.value = 'gpt-6-luna';
+    modelSel.dispatchEvent(new win.Event('change'));
+    assert.equal(modelInp.value, 'gpt-6-luna');
+    assert.equal(modelInp.hidden, true);
+
+    // Select __custom__ -> reveals manual input
+    modelSel.value = '__custom__';
+    modelSel.dispatchEvent(new win.Event('change'));
+    assert.equal(modelInp.hidden, false);
+  } finally {
+    inst.dispose();
+    win.happyDOM.close();
+  }
+});
