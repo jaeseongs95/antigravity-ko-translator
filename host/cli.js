@@ -33,10 +33,10 @@ const {
   unregisterAddonManifest,
 } = require('./addon-registry');
 
-const PKG_VERSION = require('../package.json').version || '3.0.0';
-const MIN_REQUIRED_HOST_VERSION = '3.0.0';
+const PKG_VERSION = require('../package.json').version || '3.1.0';
+const MIN_REQUIRED_HOST_VERSION = '3.3.0';
 const HOST_INSTALL_HINT =
-  'Install/upgrade antigravity-native-addon-host (>= v3.0.0) via `addon-host --upgrade` and approve trust via `addon-host trust approve ko-thought-translator` (using real copied plugin files, zero symlinks).';
+  'Install/upgrade Extenra (>= v3.3.0) via `addon-host --upgrade` and approve trust via `addon-host trust approve ko-thought-translator` (using real copied plugin files, zero symlinks).';
 const TRUST_APPROVE_HINT =
   'Run `addon-host trust approve ko-thought-translator` after installing/updating real copied files in `~/.gemini/config/plugins/ko-thought-translator/`.';
 

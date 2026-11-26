@@ -1,8 +1,12 @@
-# Antigravity 2.0 한국어 번역기 (`v3.0.0` · Desktop & Remote Web)
+# Antigravity 2.0 한국어 번역기 (`v3.1.0` · Desktop & Remote Web)
 
-[English README](./README.md) | [릴리스 노트 (`v3.0.0` 영문/국문)](./RELEASE_NOTES_v3.0.0.md)
+[English README](./README.md) | [릴리스 노트 (`v3.1.0` 영문/국문)](./RELEASE_NOTES_v3.1.0.md)
 
-공용 네이티브 애드온 호스트([antigravity-addons](https://github.com/jaeseongs95/antigravity-addons) `>= v3.0.0`, `AddonManifest.v3` API-First) 위에서 **Antigravity 2.0 데스크톱 네이티브 앱 및 원격 웹(`antigravity.google.com/r/...`)** 양쪽을 지원하는 렌더러 전용 한국어 번역 플러그인입니다.
+공용 네이티브 애드온 호스트([Extenra](https://github.com/jaeseongs95/extenra) `>= v3.3.0`, `AddonManifest.v3` API-First) 위에서 **Antigravity 2.0 데스크톱 네이티브 앱 및 원격 웹(`antigravity.google.com/r/...`)** 양쪽을 지원하는 렌더러 전용 한국어 번역 플러그인입니다.
+
+### v3.1.0 주요 업데이트
+- **외부 API 번역 어댑터 (`cloud-api`) 추가**: 빠른 설정 모달의 3번째 엔진 카드(**외부 API**)에서 **OpenAI**, **Anthropic (Claude)**, **Google Gemini**, **OpenAI 호환** HTTPS API 키를 연결해 바로 번역할 수 있습니다.
+- **Extenra v3.3.0 `ctx.secrets` + `net.fetch({ secretHeaders })` 보안 저장소 연동**: API 키를 평문 설정 파일(`ko_translator_settings.json`)이나 `localStorage`에 절대 저장하지 않고, Extenra 호스트 암호화 금고(Desktop OS 암호화 / Remote Bridge / 단독 실행 시 세션 메모리)에 보관하며 요청 시 호스트가 인증 헤더를 직접 주입합니다.
 
 ### 원격 웹 1클릭 공개 HTTPS Userscript 설치 (사설 IP·개인 PC 불필요)
 1. 브라우저(PC Chrome/Edge/Firefox 또는 모바일 Safari Userscripts / Firefox / Edge Canary)에 **Tampermonkey**, **Violentmonkey**, 또는 **Userscripts(iOS Safari)** 를 설치합니다.

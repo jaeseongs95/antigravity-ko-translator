@@ -112,6 +112,7 @@ function createTranslatorRuntime({
   const storageKeys = hostAdapter.storageKeys || {};
   const defaultProviderId = providerBundle.defaultProviderId || 'default';
   const defaultLlmConfig = providerBundle.defaultLlmConfig || {};
+  const defaultCloudApiConfig = providerBundle.defaultCloudApiConfig || {};
   const aliasMap = providerBundle.aliasMap || {};
   const builtinProviderIds = new Set(
     Array.isArray(providerBundle.builtinProviderIds) ? providerBundle.builtinProviderIds : [defaultProviderId]
@@ -206,6 +207,10 @@ function createTranslatorRuntime({
       ...defaultLlmConfig,
       ...(initCfg.llmConfig && typeof initCfg.llmConfig === 'object' ? initCfg.llmConfig : {}),
     },
+    cloudApiConfig: {
+      ...defaultCloudApiConfig,
+      ...(initCfg.cloudApiConfig && typeof initCfg.cloudApiConfig === 'object' ? initCfg.cloudApiConfig : {}),
+    },
     customProviders: Array.isArray(initCfg.customProviders) ? initCfg.customProviders.slice() : [],
   };
 
@@ -236,11 +241,20 @@ function createTranslatorRuntime({
   const customProviderSpecFingerprints = new Map();
   const imperativeCustomProviders = new Map();
   const llmConfigSubscribers = new Set();
+  const cloudApiConfigSubscribers = new Set();
 
   function notifyLlmConfigSubscribers() {
     for (const fn of Array.from(llmConfigSubscribers)) {
       try {
         fn(state.llmConfig);
+      } catch (_err) {}
+    }
+  }
+
+  function notifyCloudApiConfigSubscribers() {
+    for (const fn of Array.from(cloudApiConfigSubscribers)) {
+      try {
+        fn(state.cloudApiConfig);
       } catch (_err) {}
     }
   }
@@ -254,9 +268,18 @@ function createTranslatorRuntime({
     },
   };
 
+  const cloudApiConfigPort = {
+    getCloudApiConfig: () => state.cloudApiConfig,
+    subscribe(fn) {
+      if (typeof fn !== 'function') return () => {};
+      cloudApiConfigSubscribers.add(fn);
+      return () => cloudApiConfigSubscribers.delete(fn);
+    },
+  };
+
   const builtinProviders =
     typeof providerBundle.createBuiltinProviders === 'function'
-      ? providerBundle.createBuiltinProviders({ fetchFn: effectiveFetch, llmConfigPort })
+      ? providerBundle.createBuiltinProviders({ fetchFn: effectiveFetch, llmConfigPort, cloudApiConfigPort })
       : [];
   for (const provider of builtinProviders) {
     providerRegistry.registerProvider(provider);
@@ -315,7 +338,7 @@ function createTranslatorRuntime({
     clearTimer: targetWin.clearTimeout ? targetWin.clearTimeout.bind(targetWin) : clearTimeout,
     getProviderCacheVariant: (pid) => {
       if (typeof providerBundle.getProviderCacheVariant === 'function') {
-        const builtinVariant = providerBundle.getProviderCacheVariant(pid, state.llmConfig);
+        const builtinVariant = providerBundle.getProviderCacheVariant(pid, state.llmConfig, state.cloudApiConfig);
         if (builtinVariant) return builtinVariant;
       }
       return customProviderSpecFingerprints.get(pid) || '';
@@ -557,6 +580,10 @@ function createTranslatorRuntime({
         ...defaultLlmConfig,
         ...(data.llmConfig && typeof data.llmConfig === 'object' ? data.llmConfig : {}),
       },
+      cloudApiConfig: {
+        ...defaultCloudApiConfig,
+        ...(data.cloudApiConfig && typeof data.cloudApiConfig === 'object' ? data.cloudApiConfig : {}),
+      },
       customProviders: Array.isArray(data.customProviders) ? data.customProviders : [],
       provider: rawProv,
     });
@@ -607,7 +634,12 @@ function createTranslatorRuntime({
       typeof providerBundle.getRuntimeConfigSignature === 'function'
         ? providerBundle.getRuntimeConfigSignature(cfg)
         : JSON.stringify(cfg || null);
+    const getCloudSig = (cfg) =>
+      typeof providerBundle.getCloudApiConfigSignature === 'function'
+        ? providerBundle.getCloudApiConfigSignature(cfg)
+        : JSON.stringify(cfg || null);
     const prevLlmSig = getConfigSig(state.llmConfig);
+    const prevCloudSig = getCloudSig(state.cloudApiConfig);
 
     if (typeof next.enabled === 'boolean') state.enabled = next.enabled;
     if (typeof next.translateThinking === 'boolean') {
@@ -622,10 +654,18 @@ function createTranslatorRuntime({
     if (next.llmConfig && typeof next.llmConfig === 'object') {
       state.llmConfig = { ...state.llmConfig, ...next.llmConfig };
     }
+    if (next.cloudApiConfig && typeof next.cloudApiConfig === 'object') {
+      state.cloudApiConfig = { ...state.cloudApiConfig, ...next.cloudApiConfig };
+    }
     const nextLlmSig = getConfigSig(state.llmConfig);
+    const nextCloudSig = getCloudSig(state.cloudApiConfig);
     const llmConfigChanged = nextLlmSig !== prevLlmSig;
+    const cloudConfigChanged = nextCloudSig !== prevCloudSig;
     if (llmConfigChanged) {
       notifyLlmConfigSubscribers();
+    }
+    if (cloudConfigChanged) {
+      notifyCloudApiConfigSubscribers();
     }
     let customProvidersChanged = false;
     if (Array.isArray(next.customProviders)) {
@@ -668,7 +708,7 @@ function createTranslatorRuntime({
         state.provider !== prevProvider ||
         next.clearCache === true ||
         customProvidersChanged ||
-        (llmConfigChanged &&
+        ((llmConfigChanged || cloudConfigChanged) &&
           (typeof providerBundle.shouldRetranslateOnConfigChange === 'function'
             ? providerBundle.shouldRetranslateOnConfigChange(state.provider)
             : true))
@@ -740,6 +780,7 @@ function createTranslatorRuntime({
       builtinProviderIds: Array.from(builtinProviderIds),
       availableProviders: providerRegistry.listProviderIds(),
       llmConfig: { ...defaultLlmConfig, ...state.llmConfig },
+      cloudApiConfig: { ...defaultCloudApiConfig, ...state.cloudApiConfig },
       customProviders: state.customProviders.map((cp) => (cp && typeof cp === 'object' ? { ...cp } : cp)),
       cacheSize: translationService.getCacheSize(),
       failClosed: failClosedFlag,
@@ -798,6 +839,11 @@ function createTranslatorRuntime({
         ? { ...defaultLlmConfig, ...state.llmConfig, ...patch.llmConfig }
         : { ...defaultLlmConfig, ...state.llmConfig };
 
+    const nextCloudApiConfig =
+      patch.cloudApiConfig && typeof patch.cloudApiConfig === 'object' && !Array.isArray(patch.cloudApiConfig)
+        ? { ...defaultCloudApiConfig, ...state.cloudApiConfig, ...patch.cloudApiConfig }
+        : { ...defaultCloudApiConfig, ...state.cloudApiConfig };
+
     const nextSettings = {
       schemaVersion: 1,
       enabled: typeof patch.enabled === 'boolean' ? patch.enabled : failClosedFlag ? true : state.enabled,
@@ -808,6 +854,7 @@ function createTranslatorRuntime({
         typeof patch.translateStaticUi === 'boolean' ? patch.translateStaticUi : state.translateStaticUi,
       provider: resolvedProvider,
       llmConfig: nextLlmConfig,
+      cloudApiConfig: nextCloudApiConfig,
       customProviders: Array.isArray(patch.customProviders)
         ? patch.customProviders.slice()
         : state.customProviders.slice(),

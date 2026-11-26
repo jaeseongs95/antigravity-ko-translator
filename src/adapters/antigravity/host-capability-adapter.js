@@ -11,13 +11,26 @@
  * - Standalone tests without a host capability handle
  */
 
-const { DEFAULT_LLM_CONFIG } = require('../translators/default-providers');
+const { DEFAULT_LLM_CONFIG, DEFAULT_CLOUD_API_CONFIG } = require('../translators/default-providers');
+const { validateCloudApiConfig } = require('../translators/cloud-api');
 const { validateTranslationEndpointUrl } = require('../translators/endpoint-validator');
 
 const V3_SETTINGS_STORAGE_KEY = 'ko_translator_settings_v1';
-const ALLOWED_NET_HTTPS_HOSTS = new Set(['translate.googleapis.com']);
+const ALLOWED_NET_HTTPS_HOSTS = new Set([
+  'translate.googleapis.com',
+  'api.openai.com',
+  'api.anthropic.com',
+  'generativelanguage.googleapis.com',
+  'openrouter.ai',
+  'api.deepseek.com',
+  'api.groq.com',
+  'api.x.ai',
+  'api.mistral.ai',
+  'api.together.xyz',
+]);
 const ALLOWED_NET_LOOPBACK_PORTS = new Set([11434]);
 const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const FORBIDDEN_CLOUD_SECRET_KEYS = new Set(['apikey', 'api_key', 'secret', 'token', 'authorization', 'key']);
 const SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
 
 function isAddonContextV3(candidate) {
@@ -67,6 +80,7 @@ function buildDefaultSettings() {
     translateStaticUi: true,
     provider: 'google-translate',
     llmConfig: { ...DEFAULT_LLM_CONFIG },
+    cloudApiConfig: { ...DEFAULT_CLOUD_API_CONFIG },
     customProviders: [],
   };
 }
@@ -79,6 +93,7 @@ function sanitizeStoredSettings(raw, fallback = buildDefaultSettings()) {
   const next = {
     ...fallback,
     llmConfig: { ...DEFAULT_LLM_CONFIG, ...(fallback.llmConfig || {}) },
+    cloudApiConfig: { ...DEFAULT_CLOUD_API_CONFIG, ...(fallback.cloudApiConfig || {}) },
     customProviders: Array.isArray(fallback.customProviders) ? fallback.customProviders.slice() : [],
   };
 
@@ -122,6 +137,24 @@ function sanitizeStoredSettings(raw, fallback = buildDefaultSettings()) {
     mergedLlm.allowRemoteHttps = Boolean(mergedLlm.allowRemoteHttps);
     next.llmConfig = mergedLlm;
   }
+  if (clean.cloudApiConfig && typeof clean.cloudApiConfig === 'object' && !Array.isArray(clean.cloudApiConfig)) {
+    const strippedCloud = {};
+    for (const k of Object.keys(clean.cloudApiConfig)) {
+      if (FORBIDDEN_CLOUD_SECRET_KEYS.has(String(k).toLowerCase())) continue;
+      strippedCloud[k] = clean.cloudApiConfig[k];
+    }
+    try {
+      const v = validateCloudApiConfig({ ...next.cloudApiConfig, ...strippedCloud });
+      next.cloudApiConfig = {
+        preset: v.preset,
+        baseUrl: v.baseUrl,
+        model: v.model,
+        timeoutMs: v.timeoutMs,
+      };
+    } catch (_err) {
+      next.cloudApiConfig = { ...DEFAULT_CLOUD_API_CONFIG };
+    }
+  }
   if (Array.isArray(clean.customProviders)) {
     next.customProviders = clean.customProviders.slice(0, 16);
   }
@@ -135,7 +168,7 @@ function makeAbortError() {
   return err;
 }
 
-function shouldUseV3NetFetch(rawUrl, v3Ctx) {
+function shouldUseV3NetFetch(rawUrl, v3Ctx, init = null) {
   if (!v3Ctx || !v3Ctx.net || typeof v3Ctx.net.fetch !== 'function') return false;
   const caps = (v3Ctx.env && v3Ctx.env.capabilities) || {};
   let parsed;
@@ -144,10 +177,21 @@ function shouldUseV3NetFetch(rawUrl, v3Ctx) {
   } catch (_err) {
     return false;
   }
+  const hasSecretHeaders = Boolean(
+    init &&
+      typeof init === 'object' &&
+      init.secretHeaders &&
+      typeof init.secretHeaders === 'object' &&
+      Object.keys(init.secretHeaders).length > 0
+  );
   if (parsed.protocol === 'https:') {
+    if (hasSecretHeaders) {
+      return Boolean(caps.hasNetHttps);
+    }
     return Boolean(caps.hasNetHttps && ALLOWED_NET_HTTPS_HOSTS.has(parsed.hostname.toLowerCase()));
   }
   if (parsed.protocol === 'http:') {
+    if (hasSecretHeaders) return false;
     if (!caps.hasLocalLoopback) return false;
     const host = parsed.hostname.toLowerCase();
     if (host !== '127.0.0.1' && host !== 'localhost') return false;
@@ -159,20 +203,33 @@ function shouldUseV3NetFetch(rawUrl, v3Ctx) {
 
 function createHostAwareFetch({ hostCapability = null, fallbackFetch = null } = {}) {
   const v3Ctx = extractV3Context(hostCapability);
-  if (!v3Ctx || !v3Ctx.net || typeof v3Ctx.net.fetch !== 'function') {
-    return fallbackFetch;
-  }
 
   return async function hostAwareFetch(url, init = {}) {
-    const targetUrl = typeof url === 'string' ? url : String(url || '');
-    if (!shouldUseV3NetFetch(targetUrl, v3Ctx)) {
+    const opts = init && typeof init === 'object' ? init : {};
+    const hasSecretHeaders = Boolean(
+      opts.secretHeaders && typeof opts.secretHeaders === 'object' && Object.keys(opts.secretHeaders).length > 0
+    );
+    if (!v3Ctx || !v3Ctx.net || typeof v3Ctx.net.fetch !== 'function') {
+      if (hasSecretHeaders) {
+        throw new Error('ERR_SECRETS_NET_BRIDGE_REQUIRED');
+      }
       if (typeof fallbackFetch === 'function') {
         return fallbackFetch(url, init);
       }
       throw new Error('ERR_NET_FETCH_FALLBACK_UNAVAILABLE');
     }
 
-    const opts = init && typeof init === 'object' ? init : {};
+    const targetUrl = typeof url === 'string' ? url : String(url || '');
+    if (!shouldUseV3NetFetch(targetUrl, v3Ctx, opts)) {
+      if (hasSecretHeaders) {
+        throw new Error('ERR_SECRETS_NET_BRIDGE_REQUIRED');
+      }
+      if (typeof fallbackFetch === 'function') {
+        return fallbackFetch(url, init);
+      }
+      throw new Error('ERR_NET_FETCH_FALLBACK_UNAVAILABLE');
+    }
+
     const signal = opts.signal || null;
     if (signal && signal.aborted) {
       throw makeAbortError();
@@ -183,6 +240,9 @@ function createHostAwareFetch({ hostCapability = null, fallbackFetch = null } = 
     };
     if (opts.headers && typeof opts.headers === 'object') {
       netInit.headers = { ...opts.headers };
+    }
+    if (hasSecretHeaders) {
+      netInit.secretHeaders = { ...opts.secretHeaders };
     }
     if (opts.body !== undefined && opts.body !== null) {
       netInit.body = String(opts.body);
@@ -210,6 +270,7 @@ function createHostAwareFetch({ hostCapability = null, fallbackFetch = null } = 
       if (aborted) throw makeAbortError();
 
       if (
+        !hasSecretHeaders &&
         res &&
         res.ok === false &&
         !res.status &&
@@ -266,6 +327,7 @@ function createV3StorageSettingsBridge(v3Ctx) {
       data: Object.freeze({
         ...data,
         llmConfig: Object.freeze({ ...(data.llmConfig || DEFAULT_LLM_CONFIG) }),
+        cloudApiConfig: Object.freeze({ ...(data.cloudApiConfig || DEFAULT_CLOUD_API_CONFIG) }),
         customProviders: Object.freeze(Array.isArray(data.customProviders) ? data.customProviders.slice() : []),
       }),
       reason: null,
@@ -359,6 +421,35 @@ function createV3StorageSettingsBridge(v3Ctx) {
   };
 }
 
+function createSecretsFacade(v3Ctx) {
+  const s = v3Ctx && v3Ctx.secrets && typeof v3Ctx.secrets === 'object' ? v3Ctx.secrets : null;
+  if (!s || typeof s.set !== 'function' || typeof s.has !== 'function' || typeof s.delete !== 'function') {
+    return Object.freeze({
+      available: false,
+      getPersistenceMode: () => 'none',
+      set: async () => ({ ok: false, reason: 'ERR_SECRETS_UNAVAILABLE' }),
+      has: async () => false,
+      delete: async () => false,
+      keys: async () => [],
+    });
+  }
+  return Object.freeze({
+    available: true,
+    getPersistenceMode: () => {
+      if (typeof s.getPersistenceMode === 'function') {
+        try {
+          return s.getPersistenceMode();
+        } catch (_err) {}
+      }
+      return (v3Ctx.env && v3Ctx.env.capabilities && v3Ctx.env.capabilities.secretsPersistence) || 'os-encrypted';
+    },
+    set: (key, value) => Promise.resolve(s.set(key, value)),
+    has: (key) => Promise.resolve(s.has(key)),
+    delete: (key) => Promise.resolve(s.delete(key)),
+    keys: () => (typeof s.keys === 'function' ? Promise.resolve(s.keys()) : Promise.resolve([])),
+  });
+}
+
 function createHostCapabilityAdapter(rawHostCapability) {
   if (!rawHostCapability || typeof rawHostCapability !== 'object') {
     return null;
@@ -369,6 +460,7 @@ function createHostCapabilityAdapter(rawHostCapability) {
 
   const v3Ctx = extractV3Context(rawHostCapability);
   const pureV3 = isAddonContextV3(rawHostCapability);
+  const secretsFacade = createSecretsFacade(v3Ctx);
   const surface =
     v3Ctx && v3Ctx.env && typeof v3Ctx.env.surface === 'string'
       ? v3Ctx.env.surface
@@ -385,6 +477,7 @@ function createHostCapabilityAdapter(rawHostCapability) {
       surface,
       isV3: Boolean(v3Ctx),
       isPureV3: false,
+      secrets: rawHostCapability.secrets || secretsFacade,
     });
   }
 
@@ -412,9 +505,10 @@ function createHostCapabilityAdapter(rawHostCapability) {
     surface,
     pluginId: (rawHostCapability.meta && rawHostCapability.meta.pluginId) || 'ko-thought-translator',
     displayName: (rawHostCapability.meta && rawHostCapability.meta.displayName) || 'ko-thought-translator',
-    version: (rawHostCapability.meta && rawHostCapability.meta.version) || '3.0.0',
+    version: (rawHostCapability.meta && rawHostCapability.meta.version) || '3.1.0',
     trustLevel: (rawHostCapability.meta && rawHostCapability.meta.trustLevel) || 'trusted',
     hasSettingsBridge: true,
+    secrets: secretsFacade,
     getSettings() {
       if (nativeSettingsBridge) return nativeSettingsBridge.get();
       return fallbackStorageBridge.getSettings();
