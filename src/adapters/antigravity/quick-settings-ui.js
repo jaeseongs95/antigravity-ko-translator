@@ -22,7 +22,17 @@
  */
 
 const { validateTranslationEndpointUrl } = require('../translators/endpoint-validator');
-const { DEFAULT_LLM_CONFIG } = require('../translators/default-providers');
+const {
+  DEFAULT_LLM_CONFIG,
+  DEFAULT_CLOUD_API_CONFIG,
+  CLOUD_API_PRESETS,
+  getCloudPreset,
+  getCloudSecretKeyForPreset,
+} = require('../translators/default-providers');
+const {
+  validateCloudApiConfig,
+  probeCloudApiConnection,
+} = require('../translators/cloud-api');
 const { extractV3Context } = require('./host-capability-adapter');
 
 const STATUSBAR_ADDON_ID = 'ko-translator';
@@ -189,8 +199,13 @@ const MODAL_CSS = `
 }
 .ko-qs-engine-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+}
+@media (max-width: 460px) {
+  .ko-qs-engine-grid {
+    grid-template-columns: 1fr;
+  }
 }
 .ko-qs-engine-btn {
   appearance: none;
@@ -238,8 +253,55 @@ const MODAL_CSS = `
   flex-direction: column;
   gap: 10px;
 }
-.ko-qs-llm-box[hidden] {
+.ko-qs-llm-box[hidden],
+.ko-qs-cloud-box[hidden] {
   display: none;
+}
+.ko-qs-cloud-box {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--ag-border, rgba(255, 255, 255, 0.1));
+  background: rgba(255, 255, 255, 0.025);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ko-qs-secret-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ko-qs-secret-row .ko-qs-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ko-qs-secret-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ko-qs-secret-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--ag-text-muted, #9ba7bc);
+}
+.ko-qs-secret-pill[data-state="saved"] {
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.34);
+  color: #7ee2a8;
+}
+.ko-qs-secret-pill[data-state="warn"] {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.34);
+  color: #fbbf24;
 }
 .ko-qs-grid-2 {
   display: grid;
@@ -520,6 +582,9 @@ function computeStatusbarMeta(status) {
   } else if (provider === 'local-llm') {
     label = '번역:LLM';
     engineName = '로컬 LLM';
+  } else if (provider === 'cloud-api') {
+    label = '번역:API';
+    engineName = '외부 API';
   } else if (provider === 'google-translate') {
     label = '번역:구글';
     engineName = '구글 번역';
@@ -702,7 +767,7 @@ function createQuickSettingsUi({
     quickToggling = true;
     try {
       const cfg = translator.getConfigSnapshot();
-      const nextProvider = cfg.provider === 'local-llm' ? 'google-translate' : 'local-llm';
+      const nextProvider = cfg.provider === 'local-llm' || cfg.provider === 'cloud-api' ? 'google-translate' : 'local-llm';
       const patch = {
         enabled: true,
         provider: nextProvider,
@@ -810,6 +875,9 @@ function createQuickSettingsUi({
         badgeEl.setAttribute('data-state', 'off');
       } else if (status.provider === 'local-llm') {
         badgeEl.textContent = '활성 · 로컬 LLM';
+        badgeEl.setAttribute('data-state', 'on');
+      } else if (status.provider === 'cloud-api') {
+        badgeEl.textContent = '활성 · 외부 API';
         badgeEl.setAttribute('data-state', 'on');
       } else if (status.provider === 'google-translate') {
         badgeEl.textContent = '활성 · 구글 번역';
@@ -952,21 +1020,24 @@ function createQuickSettingsUi({
     const engineOptions = [
       { id: 'google-translate', name: '구글 번역', desc: '빠른 응답 · 별도 서버 불필요' },
       { id: 'local-llm', name: '로컬 LLM', desc: 'Ollama / OpenAI 호환 로컬 모델' },
+      { id: 'cloud-api', name: '외부 API', desc: 'OpenAI · Claude · Gemini' },
     ];
     for (const cp of cfg.customProviders || []) {
-      if (cp && cp.id && cp.id !== 'google-translate' && cp.id !== 'local-llm') {
+      if (cp && cp.id && cp.id !== 'google-translate' && cp.id !== 'local-llm' && cp.id !== 'cloud-api') {
         engineOptions.push({ id: cp.id, name: cp.label || cp.id, desc: '사용자 지정 HTTP 번역기' });
       }
     }
 
     const engineButtons = new Map();
     const llmBox = targetDoc.createElement('div');
+    const cloudBox = targetDoc.createElement('div');
 
     function syncSelectedEngineUi() {
       for (const [id, btn] of engineButtons.entries()) {
         btn.setAttribute('aria-checked', id === selectedProvider ? 'true' : 'false');
       }
       llmBox.hidden = selectedProvider !== 'local-llm';
+      cloudBox.hidden = selectedProvider !== 'cloud-api';
     }
 
     for (const opt of engineOptions) {
@@ -1121,6 +1192,242 @@ function createQuickSettingsUi({
 
     body.appendChild(llmBox);
 
+    // External Cloud API Config Box (Extenra v3.3.0 ctx.secrets + net.fetch secretHeaders)
+    cloudBox.className = 'ko-qs-cloud-box';
+    cloudBox.setAttribute('data-testid', 'ko-qs-cloud-section');
+    const cloudCfg = { ...DEFAULT_CLOUD_API_CONFIG, ...(cfg.cloudApiConfig || {}) };
+    const secretsFacade =
+      hostCapability && hostCapability.secrets && typeof hostCapability.secrets === 'object'
+        ? hostCapability.secrets
+        : v3Ctx && v3Ctx.secrets
+          ? {
+              available: true,
+              getPersistenceMode: () =>
+                typeof v3Ctx.secrets.getPersistenceMode === 'function'
+                  ? v3Ctx.secrets.getPersistenceMode()
+                  : 'os-encrypted',
+              set: (k, v) => Promise.resolve(v3Ctx.secrets.set(k, v)),
+              has: (k) => Promise.resolve(v3Ctx.secrets.has(k)),
+              delete: (k) => Promise.resolve(v3Ctx.secrets.delete(k)),
+            }
+          : {
+              available: false,
+              getPersistenceMode: () => 'none',
+              set: async () => ({ ok: false, reason: 'ERR_SECRETS_UNAVAILABLE' }),
+              has: async () => false,
+              delete: async () => false,
+            };
+
+    const cloudHeader = targetDoc.createElement('div');
+    cloudHeader.className = 'ko-qs-section-label';
+    cloudHeader.textContent = '외부 API 연결 설정 (Extenra 암호화 시크릿)';
+    cloudBox.appendChild(cloudHeader);
+
+    const cloudRow1 = targetDoc.createElement('div');
+    cloudRow1.className = 'ko-qs-grid-2';
+
+    const presetField = targetDoc.createElement('div');
+    presetField.className = 'ko-qs-field';
+    const presetLbl = targetDoc.createElement('label');
+    presetLbl.textContent = 'API 제공자';
+    const presetSelect = targetDoc.createElement('select');
+    presetSelect.className = 'ko-qs-select';
+    presetSelect.setAttribute('data-testid', 'ko-qs-cloud-preset');
+    for (const key of Object.keys(CLOUD_API_PRESETS)) {
+      const pDef = CLOUD_API_PRESETS[key];
+      const o = targetDoc.createElement('option');
+      o.value = pDef.id;
+      o.textContent = pDef.label;
+      presetSelect.appendChild(o);
+    }
+    const initPreset = getCloudPreset(cloudCfg.preset);
+    presetSelect.value = initPreset.id;
+    let lastPresetId = initPreset.id;
+    presetField.appendChild(presetLbl);
+    presetField.appendChild(presetSelect);
+
+    const cloudModelField = targetDoc.createElement('div');
+    cloudModelField.className = 'ko-qs-field';
+    const cloudModelLbl = targetDoc.createElement('label');
+    cloudModelLbl.textContent = '모델명';
+    const cloudModelInput = targetDoc.createElement('input');
+    cloudModelInput.type = 'text';
+    cloudModelInput.className = 'ko-qs-input';
+    cloudModelInput.setAttribute('data-testid', 'ko-qs-cloud-model');
+    cloudModelInput.value = String(cloudCfg.model || initPreset.defaultModel);
+    cloudModelInput.placeholder = initPreset.defaultModel;
+    cloudModelField.appendChild(cloudModelLbl);
+    cloudModelField.appendChild(cloudModelInput);
+
+    cloudRow1.appendChild(presetField);
+    cloudRow1.appendChild(cloudModelField);
+    cloudBox.appendChild(cloudRow1);
+
+    const cloudRow2 = targetDoc.createElement('div');
+    cloudRow2.className = 'ko-qs-grid-2';
+
+    const cloudUrlField = targetDoc.createElement('div');
+    cloudUrlField.className = 'ko-qs-field';
+    const cloudUrlLbl = targetDoc.createElement('label');
+    cloudUrlLbl.textContent = 'HTTPS API 주소';
+    const cloudUrlInput = targetDoc.createElement('input');
+    cloudUrlInput.type = 'url';
+    cloudUrlInput.className = 'ko-qs-input';
+    cloudUrlInput.setAttribute('data-testid', 'ko-qs-cloud-url');
+    cloudUrlInput.value = String(cloudCfg.baseUrl || initPreset.baseUrl);
+    cloudUrlInput.placeholder = initPreset.baseUrl;
+    cloudUrlField.appendChild(cloudUrlLbl);
+    cloudUrlField.appendChild(cloudUrlInput);
+
+    const cloudTimeoutField = targetDoc.createElement('div');
+    cloudTimeoutField.className = 'ko-qs-field';
+    const cloudTimeoutLbl = targetDoc.createElement('label');
+    cloudTimeoutLbl.textContent = '타임아웃 (ms)';
+    const cloudTimeoutInput = targetDoc.createElement('input');
+    cloudTimeoutInput.type = 'number';
+    cloudTimeoutInput.min = '1000';
+    cloudTimeoutInput.max = '120000';
+    cloudTimeoutInput.step = '1000';
+    cloudTimeoutInput.className = 'ko-qs-input';
+    cloudTimeoutInput.setAttribute('data-testid', 'ko-qs-cloud-timeout');
+    cloudTimeoutInput.value = String(Number(cloudCfg.timeoutMs) || 20000);
+    cloudTimeoutField.appendChild(cloudTimeoutLbl);
+    cloudTimeoutField.appendChild(cloudTimeoutInput);
+
+    cloudRow2.appendChild(cloudUrlField);
+    cloudRow2.appendChild(cloudTimeoutField);
+    cloudBox.appendChild(cloudRow2);
+
+    const apiKeyField = targetDoc.createElement('div');
+    apiKeyField.className = 'ko-qs-field';
+    const apiKeyMeta = targetDoc.createElement('div');
+    apiKeyMeta.className = 'ko-qs-secret-meta';
+    const apiKeyLbl = targetDoc.createElement('label');
+    apiKeyLbl.textContent = 'API 키 (설정 JSON에 저장되지 않음)';
+    const apiKeyStatusPill = targetDoc.createElement('span');
+    apiKeyStatusPill.className = 'ko-qs-secret-pill';
+    apiKeyStatusPill.setAttribute('data-testid', 'ko-qs-cloud-key-status');
+    apiKeyStatusPill.textContent = secretsFacade.available ? '확인 중...' : 'Extenra v3.3.0+ 필요';
+    apiKeyMeta.appendChild(apiKeyLbl);
+    apiKeyMeta.appendChild(apiKeyStatusPill);
+
+    const apiKeyRow = targetDoc.createElement('div');
+    apiKeyRow.className = 'ko-qs-secret-row';
+    const apiKeyInput = targetDoc.createElement('input');
+    apiKeyInput.type = 'password';
+    apiKeyInput.autocomplete = 'off';
+    apiKeyInput.className = 'ko-qs-input';
+    apiKeyInput.setAttribute('data-testid', 'ko-qs-cloud-apikey');
+    apiKeyInput.placeholder = `${initPreset.keyPlaceholder} (새 키 입력 시에만 갱신)`;
+    apiKeyInput.disabled = !secretsFacade.available;
+
+    const apiKeyDelBtn = targetDoc.createElement('button');
+    apiKeyDelBtn.type = 'button';
+    apiKeyDelBtn.className = 'ko-qs-btn ko-qs-btn-danger';
+    apiKeyDelBtn.setAttribute('data-testid', 'ko-qs-cloud-key-delete');
+    apiKeyDelBtn.textContent = '키 삭제';
+    apiKeyDelBtn.disabled = true;
+
+    apiKeyRow.appendChild(apiKeyInput);
+    apiKeyRow.appendChild(apiKeyDelBtn);
+    apiKeyField.appendChild(apiKeyMeta);
+    apiKeyField.appendChild(apiKeyRow);
+    cloudBox.appendChild(apiKeyField);
+
+    const cloudTestRow = targetDoc.createElement('div');
+    cloudTestRow.className = 'ko-qs-row-between';
+    const cloudTestResultEl = targetDoc.createElement('span');
+    cloudTestResultEl.className = 'ko-qs-test-result';
+    cloudTestResultEl.setAttribute('data-testid', 'ko-qs-cloud-test-result');
+    cloudTestResultEl.textContent = secretsFacade.available
+      ? 'API 키는 호스트 암호화 금고에 저장되며 번역 요청 시 호스트가 헤더를 주입합니다.'
+      : '외부 API 키 저장을 위해 Extenra v3.3.0 이상 호스트가 필요합니다.';
+    const cloudTestBtn = targetDoc.createElement('button');
+    cloudTestBtn.type = 'button';
+    cloudTestBtn.className = 'ko-qs-btn';
+    cloudTestBtn.setAttribute('data-testid', 'ko-qs-cloud-test');
+    cloudTestBtn.textContent = '연결 테스트';
+    cloudTestBtn.disabled = !secretsFacade.available;
+    cloudTestRow.appendChild(cloudTestResultEl);
+    cloudTestRow.appendChild(cloudTestBtn);
+    cloudBox.appendChild(cloudTestRow);
+
+    body.appendChild(cloudBox);
+
+    function formatPersistenceLabel(mode) {
+      if (mode === 'os-encrypted') return 'OS 암호화';
+      if (mode === 'remote-bridge') return 'Remote Bridge';
+      if (mode === 'session-memory') return '세션 메모리';
+      return '미지원';
+    }
+
+    let keyStatusSeq = 0;
+    async function refreshCloudKeyStatus() {
+      const seq = ++keyStatusSeq;
+      if (!secretsFacade.available) {
+        apiKeyStatusPill.textContent = 'Extenra v3.3.0+ 필요';
+        apiKeyStatusPill.setAttribute('data-state', 'warn');
+        apiKeyDelBtn.disabled = true;
+        return false;
+      }
+      const secretKey = getCloudSecretKeyForPreset(presetSelect.value);
+      try {
+        const exists = await secretsFacade.has(secretKey);
+        if (seq !== keyStatusSeq) return exists;
+        const mode = secretsFacade.getPersistenceMode();
+        if (exists) {
+          apiKeyStatusPill.textContent = `저장됨 · ${formatPersistenceLabel(mode)}`;
+          apiKeyStatusPill.setAttribute('data-state', mode === 'session-memory' ? 'warn' : 'saved');
+          apiKeyDelBtn.disabled = false;
+        } else {
+          apiKeyStatusPill.textContent = `미등록 · ${formatPersistenceLabel(mode)}`;
+          apiKeyStatusPill.setAttribute('data-state', 'none');
+          apiKeyDelBtn.disabled = true;
+        }
+        return exists;
+      } catch (_err) {
+        if (seq === keyStatusSeq) {
+          apiKeyStatusPill.textContent = '확인 실패';
+          apiKeyStatusPill.setAttribute('data-state', 'warn');
+          apiKeyDelBtn.disabled = true;
+        }
+        return false;
+      }
+    }
+
+    presetSelect.addEventListener('change', () => {
+      const prevPreset = getCloudPreset(lastPresetId);
+      const nextPreset = getCloudPreset(presetSelect.value);
+      lastPresetId = nextPreset.id;
+      const curUrl = String(cloudUrlInput.value || '').trim();
+      const curModel = String(cloudModelInput.value || '').trim();
+      if (!curUrl || curUrl === prevPreset.baseUrl) {
+        cloudUrlInput.value = nextPreset.baseUrl;
+      }
+      if (!curModel || curModel === prevPreset.defaultModel) {
+        cloudModelInput.value = nextPreset.defaultModel;
+      }
+      cloudUrlInput.placeholder = nextPreset.baseUrl;
+      cloudModelInput.placeholder = nextPreset.defaultModel;
+      apiKeyInput.placeholder = `${nextPreset.keyPlaceholder} (새 키 입력 시에만 갱신)`;
+      apiKeyInput.value = '';
+      void refreshCloudKeyStatus();
+    });
+
+    apiKeyDelBtn.addEventListener('click', async () => {
+      if (!secretsFacade.available) return;
+      const secretKey = getCloudSecretKeyForPreset(presetSelect.value);
+      apiKeyDelBtn.disabled = true;
+      try {
+        await secretsFacade.delete(secretKey);
+        apiKeyInput.value = '';
+        cloudTestResultEl.textContent = '저장된 API 키를 삭제했습니다.';
+        cloudTestResultEl.setAttribute('data-kind', 'info');
+      } finally {
+        await refreshCloudKeyStatus();
+      }
+    });
+
     // Translation Options (3 clear, non-redundant slide ON/OFF switches)
     const optionsSection = targetDoc.createElement('div');
     const optionsLabel = targetDoc.createElement('div');
@@ -1259,6 +1566,37 @@ function createQuickSettingsUi({
       };
     }
 
+    function readValidatedCloudInput() {
+      const validated = validateCloudApiConfig({
+        preset: presetSelect.value,
+        baseUrl: String(cloudUrlInput.value || '').trim(),
+        model: String(cloudModelInput.value || '').trim(),
+        timeoutMs: Number(cloudTimeoutInput.value),
+      });
+      return {
+        preset: validated.preset,
+        baseUrl: validated.baseUrl,
+        model: validated.model,
+        timeoutMs: validated.timeoutMs,
+      };
+    }
+
+    async function persistPendingCloudSecretIfEntered() {
+      const rawKey = String(apiKeyInput.value || '').trim();
+      if (!rawKey) return { saved: false, ok: true };
+      if (!secretsFacade.available) {
+        return { saved: false, ok: false, reason: 'ERR_SECRETS_UNAVAILABLE' };
+      }
+      const secretKey = getCloudSecretKeyForPreset(presetSelect.value);
+      const res = await secretsFacade.set(secretKey, rawKey);
+      if (!res || res.ok !== true) {
+        return { saved: false, ok: false, reason: (res && res.reason) || 'ERR_SECRETS_SAVE_FAILED' };
+      }
+      apiKeyInput.value = '';
+      await refreshCloudKeyStatus();
+      return { saved: true, ok: true };
+    }
+
     async function handleSave({ resetToDefaults = false } = {}) {
       if (saving) return;
       let patch;
@@ -1270,6 +1608,7 @@ function createQuickSettingsUi({
           translateStaticUi: true,
           provider: 'google-translate',
           llmConfig: { ...DEFAULT_LLM_CONFIG },
+          cloudApiConfig: { ...DEFAULT_CLOUD_API_CONFIG },
         };
       } else {
         let nextLlmConfig;
@@ -1278,6 +1617,20 @@ function createQuickSettingsUi({
         } catch (err) {
           setFeedback(err && err.message ? err.message : '로컬 LLM 설정이 올바르지 않습니다.', 'err');
           return;
+        }
+        let nextCloudConfig = { ...DEFAULT_CLOUD_API_CONFIG, ...(cfg.cloudApiConfig || {}) };
+        if (selectedProvider === 'cloud-api') {
+          try {
+            nextCloudConfig = readValidatedCloudInput();
+          } catch (err) {
+            setFeedback(err && err.message ? err.message : '외부 API 설정이 올바르지 않습니다.', 'err');
+            return;
+          }
+          const secretRes = await persistPendingCloudSecretIfEntered();
+          if (!secretRes.ok) {
+            setFeedback(formatErrorMessage(secretRes.reason), 'err');
+            return;
+          }
         }
         const derivedToggles = deriveToggleSaveState({
           translateStaticUi: staticUiChk.checked,
@@ -1288,6 +1641,7 @@ function createQuickSettingsUi({
           ...derivedToggles,
           provider: selectedProvider,
           llmConfig: nextLlmConfig,
+          cloudApiConfig: nextCloudConfig,
         };
       }
 
@@ -1371,6 +1725,76 @@ function createQuickSettingsUi({
       }
     }
 
+    async function handleTestCloudConnection() {
+      if (!secretsFacade.available) {
+        cloudTestResultEl.textContent = 'Extenra v3.3.0 이상 호스트의 시크릿 저장소가 필요합니다.';
+        cloudTestResultEl.setAttribute('data-kind', 'err');
+        return;
+      }
+      if (!effectiveFetch) {
+        cloudTestResultEl.textContent = 'fetch API를 사용할 수 없습니다.';
+        cloudTestResultEl.setAttribute('data-kind', 'err');
+        return;
+      }
+      let nextCloud;
+      try {
+        nextCloud = readValidatedCloudInput();
+      } catch (err) {
+        cloudTestResultEl.textContent = err && err.message ? err.message : '외부 API 설정이 올바르지 않습니다.';
+        cloudTestResultEl.setAttribute('data-kind', 'err');
+        return;
+      }
+      cloudTestBtn.disabled = true;
+      cloudTestResultEl.textContent = 'API 연결 및 키 확인 중...';
+      cloudTestResultEl.setAttribute('data-kind', 'info');
+      try {
+        const secretSave = await persistPendingCloudSecretIfEntered();
+        if (!secretSave.ok) {
+          cloudTestResultEl.textContent = formatErrorMessage(secretSave.reason);
+          cloudTestResultEl.setAttribute('data-kind', 'err');
+          return;
+        }
+        const hasKey = await secretsFacade.has(getCloudSecretKeyForPreset(nextCloud.preset));
+        if (!hasKey) {
+          cloudTestResultEl.textContent = 'API 키가 등록되지 않았습니다. 키를 입력한 뒤 다시 테스트해 주세요.';
+          cloudTestResultEl.setAttribute('data-kind', 'err');
+          return;
+        }
+        const ac = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = ac
+          ? (targetWin.setTimeout || setTimeout)(() => {
+              try {
+                ac.abort();
+              } catch (_e) {}
+            }, 10000)
+          : null;
+        try {
+          const probe = await probeCloudApiConnection({
+            config: nextCloud,
+            fetchFn: effectiveFetch,
+            signal: ac ? ac.signal : undefined,
+          });
+          if (probe.ok) {
+            cloudTestResultEl.textContent = probe.sample
+              ? `연결 성공 · 응답: ${probe.sample}`
+              : '연결 성공';
+            cloudTestResultEl.setAttribute('data-kind', 'ok');
+          } else {
+            cloudTestResultEl.textContent = `연결 실패 (${probe.reason || `HTTP ${probe.status}`})`;
+            cloudTestResultEl.setAttribute('data-kind', 'err');
+          }
+        } finally {
+          if (timer !== null) {
+            try {
+              (targetWin.clearTimeout || clearTimeout)(timer);
+            } catch (_e) {}
+          }
+        }
+      } finally {
+        cloudTestBtn.disabled = !secretsFacade.available;
+      }
+    }
+
     cancelBtn.addEventListener('click', () => onClose());
     saveBtn.addEventListener('click', () => {
       void handleSave({ resetToDefaults: false });
@@ -1380,6 +1804,9 @@ function createQuickSettingsUi({
     });
     testBtn.addEventListener('click', () => {
       void handleTestConnection();
+    });
+    cloudTestBtn.addEventListener('click', () => {
+      void handleTestCloudConnection();
     });
     retranslateBtn.addEventListener('click', () => {
       translator.retranslateNow(false);
@@ -1391,7 +1818,7 @@ function createQuickSettingsUi({
     });
 
     // IME-safe Enter submit inside text inputs
-    for (const inp of [urlInput, modelInput, timeoutInput]) {
+    for (const inp of [urlInput, modelInput, timeoutInput, cloudUrlInput, cloudModelInput, cloudTimeoutInput, apiKeyInput]) {
       inp.addEventListener('keydown', (ev) => {
         if (!ev || ev.key !== 'Enter' || ev.isComposing || ev.keyCode === 229) return;
         if (typeof ev.preventDefault === 'function') ev.preventDefault();
@@ -1407,6 +1834,7 @@ function createQuickSettingsUi({
     };
 
     syncSelectedEngineUi();
+    void refreshCloudKeyStatus();
     updateModalLiveHeader(status);
     if (initialError) {
       setFeedback(initialError, 'err');

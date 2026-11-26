@@ -1,11 +1,11 @@
 {
-  "$schema": "https://github.com/jaeseongs95/antigravity-addons/schemas/addon-manifest.v3.schema.json",
+  "$schema": "https://github.com/jaeseongs95/extenra/schemas/addon-manifest.v3.schema.json",
   "schemaVersion": 3,
   "apiVersion": 3,
   "pluginId": "ko-thought-translator",
   "displayName": "Antigravity Korean Thought & UI Translator",
-  "description": "Read-only Korean localization overlay for Antigravity Desktop & Remote Web with slide-switch quick settings and dual-key net.fetch.",
-  "version": "3.0.0",
+  "description": "Read-only Korean localization overlay for Antigravity Desktop & Remote Web with Google Translate, Local LLM, and Extenra ctx.secrets-backed External Cloud API adapters (OpenAI, Claude, Gemini, OpenAI-compatible).",
+  "version": "3.1.0",
   "trustLevel": "trusted",
   "compatibility": {
     "hostProfile": "antigravity-desktop",
@@ -17,7 +17,7 @@
       "desktop",
       "remote-web"
     ],
-    "minHostVersion": "3.0.0"
+    "minHostVersion": "3.3.0"
   },
   "capabilities": [
     "renderer"
@@ -39,6 +39,11 @@
       "maxBytes": 65536,
       "namespace": "ko-thought-translator"
     },
+    "secrets": {
+      "maxKeys": 8,
+      "maxBytes": 16384,
+      "allowRead": false
+    },
     "services": {
       "consume": [
         "host.statusbar"
@@ -46,8 +51,18 @@
     },
     "net": {
       "httpsHosts": [
-        "translate.googleapis.com"
+        "translate.googleapis.com",
+        "api.openai.com",
+        "api.anthropic.com",
+        "generativelanguage.googleapis.com",
+        "openrouter.ai",
+        "api.deepseek.com",
+        "api.groq.com",
+        "api.x.ai",
+        "api.mistral.ai",
+        "api.together.xyz"
       ],
+      "userApprovedHttps": true,
       "localLoopback": [
         11434
       ]

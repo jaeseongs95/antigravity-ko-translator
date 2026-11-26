@@ -27,7 +27,15 @@ const {
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const MANIFEST_V3_PATH = path.join(REPO_ROOT, 'addon-manifest.v3.json');
-const SIBLING_ADDONS_ROOT = path.resolve(REPO_ROOT, '..', 'antigravity-addons');
+const SIBLING_CANDIDATES = [
+  path.resolve(REPO_ROOT, '..', 'extenra'),
+  path.resolve(REPO_ROOT, '..', 'antigravity-addons'),
+];
+const SIBLING_ADDONS_ROOT =
+  SIBLING_CANDIDATES.find((dir) =>
+    fs.existsSync(path.join(dir, 'packages', 'sdk', 'src', 'test-host.js')) &&
+    fs.existsSync(path.join(dir, 'src', 'core', 'manifest-validator.js'))
+  ) || SIBLING_CANDIDATES[0];
 const SDK_TEST_HOST_PATH = path.join(SIBLING_ADDONS_ROOT, 'packages', 'sdk', 'src', 'test-host.js');
 const HOST_VALIDATOR_PATH = path.join(SIBLING_ADDONS_ROOT, 'src', 'core', 'manifest-validator.js');
 
@@ -325,11 +333,11 @@ test(
     const { createTestHost } = require(SDK_TEST_HOST_PATH);
     const manifest = JSON.parse(fs.readFileSync(MANIFEST_V3_PATH, 'utf8'));
 
-    // 1. Validate real addon-manifest.v3.json against antigravity-addons v3.0.0 schema validator
+    // 1. Validate real addon-manifest.v3.json against Extenra v3.3.0 schema validator
     for (const profile of ['antigravity-desktop', 'antigravity-remote-web']) {
       const res = validateAddonManifest(manifest, {
         hostProfileId: profile,
-        hostVersion: '3.0.0',
+        hostVersion: '3.3.0',
         checkFilesExist: false,
       });
       assert.equal(res.ok, true, `Manifest must validate on ${profile}: ${JSON.stringify(res)}`);
@@ -337,6 +345,7 @@ test(
       assert.equal(res.trustLevel, 'trusted');
       assert.equal(res.hasDocumentTransformSlot, true);
       assert.equal(res.hasSettingsBridge, true);
+      assert.equal(res.hasSecrets, true);
     }
 
     // 2. Boot real antigravity-addons renderer kernel via SDK createTestHost on BOTH Desktop & Remote Web
@@ -354,6 +363,7 @@ test(
         assert.equal(v3Ctx.apiVersion, 3);
         assert.equal(v3Ctx.env.surface, surface);
         assert.equal(v3Ctx.env.capabilities.hasNetHttps, true);
+        assert.equal(v3Ctx.env.capabilities.hasSecrets, true);
         assert.equal(v3Ctx.env.capabilities.hasLocalLoopback, surface === 'desktop');
         assert.equal(v3Ctx.env.capabilities.hasDocumentTransform, true);
 

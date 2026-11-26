@@ -30,7 +30,7 @@ const {
 const { createDefaultProviderBundle } = require('./adapters/translators/default-providers');
 const { createUserscriptFetch } = require('./adapters/translators/gm-fetch');
 
-const PLUGIN_VERSION = '3.0.0';
+const PLUGIN_VERSION = '3.1.0';
 
 function createKoTranslator(options = {}) {
   const adaptedHostCap = createHostCapabilityAdapter(options.hostCapability || null);

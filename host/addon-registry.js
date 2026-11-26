@@ -26,6 +26,7 @@ const WINDOWS_DOS_DEVICE_RE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 const FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 const RESERVED_SETTINGS_FILES = new Set([
   'trust-policy.json',
+  'secrets-vault.json',
   'config.json',
   'index.json',
   'build-manifest.json',
@@ -290,6 +291,11 @@ function validateAddonManifestContract(
     if (perms.net && typeof perms.net === 'object') {
       if (Array.isArray(perms.net.localLoopback) && perms.net.localLoopback.length > 0 && manifest.trustLevel !== 'trusted') {
         return { ok: false, reason: 'ERR_RESTRICTED_LOCAL_LOOPBACK_FORBIDDEN' };
+      }
+    }
+    if (perms.secrets !== undefined && perms.secrets !== null) {
+      if (manifest.trustLevel !== 'trusted') {
+        return { ok: false, reason: 'ERR_RESTRICTED_SECRETS_FORBIDDEN' };
       }
     }
   }

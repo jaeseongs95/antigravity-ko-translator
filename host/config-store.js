@@ -15,7 +15,8 @@ const crypto = require('crypto');
 const lockfile = require('proper-lockfile');
 
 const { resolveHostPaths, PLUGIN_ID } = require('./paths');
-const { DEFAULT_LLM_CONFIG } = require('../src/adapters/translators/default-providers');
+const { DEFAULT_LLM_CONFIG, DEFAULT_CLOUD_API_CONFIG } = require('../src/adapters/translators/default-providers');
+const { validateCloudApiConfig } = require('../src/adapters/translators/cloud-api');
 const { validateTranslationEndpointUrl } = require('../src/adapters/translators/endpoint-validator');
 const { validateCustomProviderSpec } = require('../src/adapters/translators/custom-provider');
 
@@ -29,6 +30,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   translateStaticUi: true,
   provider: 'google-translate',
   llmConfig: DEFAULT_LLM_CONFIG,
+  cloudApiConfig: DEFAULT_CLOUD_API_CONFIG,
   customProviders: Object.freeze([]),
 });
 
@@ -175,6 +177,17 @@ function normalizeProviderId(raw) {
   }
   if (s === 'google' || s === 'gtx' || s === 'google-translate') return 'google-translate';
   if (s === 'local' || s === 'llm' || s === 'ollama' || s === 'local-llm') return 'local-llm';
+  if (
+    s === 'cloud' ||
+    s === 'api' ||
+    s === 'openai' ||
+    s === 'claude' ||
+    s === 'anthropic' ||
+    s === 'gemini' ||
+    s === 'cloud-api'
+  ) {
+    return 'cloud-api';
+  }
   if (/^[a-z0-9][a-z0-9._:-]{0,63}$/.test(s)) return s;
   throw new Error(`Invalid provider id: ${raw}`);
 }
@@ -243,6 +256,33 @@ function sanitizeLlmConfig(raw, existing = DEFAULT_LLM_CONFIG, { strict = false 
 const SECRET_HEADER_RE =
   /^(?:authorization|proxy-authorization|x-api-key|api-key|x-goog-api-key|x-auth-token|x-access-token|x-secret|cookie)$/i;
 const SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
+const FORBIDDEN_CLOUD_SECRET_FIELDS = new Set(['apikey', 'api_key', 'secret', 'token', 'authorization', 'key']);
+
+function sanitizeCloudApiConfig(raw, existing = DEFAULT_CLOUD_API_CONFIG, { strict = false } = {}) {
+  const base = { ...DEFAULT_CLOUD_API_CONFIG, ...(existing || {}) };
+  if (raw === undefined || raw === null) return base;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    if (strict) throw new Error('INVALID_CLOUD_API_CONFIG');
+    return base;
+  }
+  for (const k of Object.keys(raw)) {
+    if (FORBIDDEN_CLOUD_SECRET_FIELDS.has(String(k).toLowerCase())) {
+      throw new Error(`FORBIDDEN_SECRET_FIELD_IN_CLOUD_API_CONFIG:${k}`);
+    }
+  }
+  try {
+    const validated = validateCloudApiConfig({ ...base, ...raw });
+    return {
+      preset: validated.preset,
+      baseUrl: validated.baseUrl,
+      model: validated.model,
+      timeoutMs: validated.timeoutMs,
+    };
+  } catch (err) {
+    if (strict) throw err;
+    return base;
+  }
+}
 
 function sanitizeCustomProviders(rawList, { strict = false } = {}) {
   if (!Array.isArray(rawList)) {
@@ -322,6 +362,7 @@ function readTranslatorSettings(pathOverrides = null, { strict = false } = {}) {
       return {
         ...DEFAULT_SETTINGS,
         llmConfig: { ...DEFAULT_LLM_CONFIG },
+        cloudApiConfig: { ...DEFAULT_CLOUD_API_CONFIG },
         customProviders: [],
       };
     }
@@ -347,6 +388,7 @@ function readTranslatorSettings(pathOverrides = null, { strict = false } = {}) {
       translateStaticUi: parsed.translateStaticUi !== false,
       provider: normalizeProviderId(parsed.provider),
       llmConfig: sanitizeLlmConfig(parsed.llmConfig, DEFAULT_LLM_CONFIG, { strict }),
+      cloudApiConfig: sanitizeCloudApiConfig(parsed.cloudApiConfig, DEFAULT_CLOUD_API_CONFIG, { strict }),
       customProviders:
         parsed.customProviders === undefined
           ? []
@@ -359,6 +401,7 @@ function readTranslatorSettings(pathOverrides = null, { strict = false } = {}) {
     return {
       ...DEFAULT_SETTINGS,
       llmConfig: { ...DEFAULT_LLM_CONFIG },
+      cloudApiConfig: { ...DEFAULT_CLOUD_API_CONFIG },
       customProviders: [],
     };
   }
@@ -382,6 +425,7 @@ function saveTranslatorSettings(patch, pathOverrides = null, { allowCorruptedRec
         current = {
           ...DEFAULT_SETTINGS,
           llmConfig: { ...DEFAULT_LLM_CONFIG },
+          cloudApiConfig: { ...DEFAULT_CLOUD_API_CONFIG },
           customProviders: [],
         };
       } else {
@@ -406,6 +450,10 @@ function saveTranslatorSettings(patch, pathOverrides = null, { allowCorruptedRec
         patch.llmConfig !== undefined
           ? sanitizeLlmConfig(patch.llmConfig, current.llmConfig, { strict: true })
           : current.llmConfig,
+      cloudApiConfig:
+        patch.cloudApiConfig !== undefined
+          ? sanitizeCloudApiConfig(patch.cloudApiConfig, current.cloudApiConfig, { strict: true })
+          : current.cloudApiConfig,
       customProviders:
         patch.customProviders !== undefined
           ? sanitizeCustomProviders(patch.customProviders, { strict: true })
@@ -437,12 +485,14 @@ function removeTranslatorSettings(pathOverrides = null) {
 
 module.exports = {
   DEFAULT_LLM_CONFIG,
+  DEFAULT_CLOUD_API_CONFIG,
   DEFAULT_SETTINGS,
   acquireExclusiveLock,
   releaseExclusiveLock,
   writeFileAtomicSync,
   normalizeProviderId,
   sanitizeLlmConfig,
+  sanitizeCloudApiConfig,
   isPluginEnabled,
   readTranslatorSettings,
   saveTranslatorSettings,
