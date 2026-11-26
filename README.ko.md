@@ -1,6 +1,6 @@
 # Antigravity 2.0 한국어 번역기 (`v3.0.0` · Desktop & Remote Web)
 
-[English README](./README.md) | [릴리스 노트 (`v2.4.0` 영문/국문)](./RELEASE_NOTES_v2.4.0.md)
+[English README](./README.md) | [릴리스 노트 (`v3.0.0` 영문/국문)](./RELEASE_NOTES_v3.0.0.md)
 
 공용 네이티브 애드온 호스트([antigravity-addons](https://github.com/jaeseongs95/antigravity-addons) `>= v3.0.0`, `AddonManifest.v3` API-First) 위에서 **Antigravity 2.0 데스크톱 네이티브 앱 및 원격 웹(`antigravity.google.com/r/...`)** 양쪽을 지원하는 렌더러 전용 한국어 번역 플러그인입니다.
 

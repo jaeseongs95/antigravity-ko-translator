@@ -1,6 +1,6 @@
 # Antigravity 2.0 Korean Thought & UI Translator (`v3.0.0`)
 
-[한국어 README](./README.ko.md) | [Release Notes (`v2.4.0` EN/KO)](./RELEASE_NOTES_v2.4.0.md)
+[한국어 README](./README.ko.md) | [Release Notes (`v3.0.0` EN/KO)](./RELEASE_NOTES_v3.0.0.md)
 
 Clean-slate, renderer-only Korean localization plugin for **Antigravity 2.0 Desktop Native App & Remote Web (`antigravity.google.com/r/...`)**, built for **[antigravity-addons](https://github.com/jaeseongs95/antigravity-addons) `v3.0.0+`** under **`AddonManifest.v3`** API-First architecture (zero `mainHook`, zero Sidecar `AUX_PANE`, Desktop & Remote Web parity via `AddonContextV3`).
 
