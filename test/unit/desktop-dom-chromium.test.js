@@ -239,6 +239,9 @@ test(
       const sr = dlg && dlg.firstElementChild && dlg.firstElementChild.shadowRoot;
       const cardEl = sr && sr.querySelector('[data-testid="ko-qs-card"]');
       const modalOpened = Boolean(cardEl);
+      const switchCount = sr ? sr.querySelectorAll('input[role="switch"]').length : 0;
+      const legacyCheckboxCount = sr ? sr.querySelectorAll('.ko-qs-checkbox').length : -1;
+      const hasDuplicateEnabledSwitch = Boolean(sr && sr.querySelector('[data-testid="ko-qs-opt-enabled"]'));
       const cardRect = cardEl ? cardEl.getBoundingClientRect() : null;
       const modalCenterOffsetX = cardRect ? Math.abs((cardRect.left + cardRect.width / 2) - window.innerWidth / 2) : 9999;
       const modalCenterOffsetY = cardRect
@@ -262,6 +265,9 @@ test(
       document.getElementById('e2e-result').textContent = JSON.stringify({
         initialLabel,
         modalOpened,
+        switchCount,
+        legacyCheckboxCount,
+        hasDuplicateEnabledSwitch,
         modalLeft,
         modalTop,
         modalCenterOffsetX: Math.round(modalCenterOffsetX * 10) / 10,
@@ -297,6 +303,9 @@ test(
       const result = JSON.parse(m[1].replace(/&quot;/g, '"'));
       assert.equal(result.initialLabel, '번역:구글');
       assert.equal(result.modalOpened, true);
+      assert.equal(result.switchCount, 4, 'All 4 popup toggles must render as role="switch" slide switches');
+      assert.equal(result.legacyCheckboxCount, 0, 'Zero legacy checkboxes may remain in the popup');
+      assert.equal(result.hasDuplicateEnabledSwitch, false, 'Duplicate enabled checkbox must remain merged');
       assert.ok(result.modalLeft > 100, `modal must be horizontally centered, got left=${result.modalLeft}`);
       assert.ok(result.modalTop >= 36, `modal must stay below 36px titlebar, got top=${result.modalTop}`);
       assert.ok(result.modalCenterOffsetX <= 2, `horizontal center offset too large: ${result.modalCenterOffsetX}`);

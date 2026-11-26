@@ -22,17 +22,27 @@ const {
   buildMinimalOverlayCss,
   createAntigravityHostAdapter,
   createQuickSettingsUi,
+  isAddonContextV3,
+  extractV3Context,
+  createHostAwareFetch,
+  createHostCapabilityAdapter,
 } = require('./adapters/antigravity/host-adapter');
 const { createDefaultProviderBundle } = require('./adapters/translators/default-providers');
 const { createUserscriptFetch } = require('./adapters/translators/gm-fetch');
 
-const PLUGIN_VERSION = '2.4.0';
+const PLUGIN_VERSION = '3.0.0';
 
 function createKoTranslator(options = {}) {
-  const effectiveFetch =
+  const adaptedHostCap = createHostCapabilityAdapter(options.hostCapability || null);
+  const baseFetch =
     typeof options.fetchFn === 'function' ? options.fetchFn : createUserscriptFetch();
+  const effectiveFetch =
+    typeof options.fetchFn === 'function'
+      ? options.fetchFn
+      : createHostAwareFetch({ hostCapability: adaptedHostCap, fallbackFetch: baseFetch });
   return createTranslatorRuntime({
     ...options,
+    hostCapability: adaptedHostCap,
     fetchFn: effectiveFetch,
     hostAdapter: options.hostAdapter || createAntigravityHostAdapter(),
     providerBundle: options.providerBundle || createDefaultProviderBundle(),
@@ -44,8 +54,9 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
   const doc = win && win.document ? win.document : typeof document !== 'undefined' ? document : null;
   if (!win || !doc) return null;
 
-  const resolvedHostCap =
-    hostCapabilityArg && typeof hostCapabilityArg === 'object' ? hostCapabilityArg : null;
+  const resolvedHostCap = createHostCapabilityAdapter(
+    hostCapabilityArg && typeof hostCapabilityArg === 'object' ? hostCapabilityArg : null
+  );
   const isHostManaged = Boolean(resolvedHostCap);
 
   // Never run inside non-top frames (e.g. Sidecar AUX_PANE iframes) unless explicitly mounted by caller.
@@ -82,7 +93,10 @@ function mountIfBrowser(globalScope, hostCapabilityArg = null) {
       ? win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__
       : null;
 
-  const effectiveFetch = createUserscriptFetch();
+  const effectiveFetch = createHostAwareFetch({
+    hostCapability: resolvedHostCap,
+    fallbackFetch: createUserscriptFetch(),
+  });
   const instance = createKoTranslator({
     win,
     doc,
@@ -147,5 +161,9 @@ module.exports = {
   createTranslatorRuntime,
   createKoTranslator,
   createQuickSettingsUi,
+  isAddonContextV3,
+  extractV3Context,
+  createHostAwareFetch,
+  createHostCapabilityAdapter,
   mountIfBrowser,
 };

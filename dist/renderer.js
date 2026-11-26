@@ -1,4 +1,4 @@
-// === Antigravity Korean Thought & UI Translator v2.4.0 (AddonManifest.v2 World 998 & Remote Web Renderer-Only — Generated Bundle) ===
+// === Antigravity Korean Thought & UI Translator v3.0.0 (AddonManifest.v3 API-First Desktop & Remote Web — Generated Bundle) ===
 "use strict";
 var __agyKoTranslatorBundleExports = (() => {
   var __defProp = Object.defineProperty;
@@ -1721,7 +1721,7 @@ var __agyKoTranslatorBundleExports = (() => {
         providerBundle = null,
         hostCapability = null,
         settings = null,
-        version = "2.4.0",
+        version = "3.0.0",
         fetchFn = null,
         onStatus = null
       } = {}) {
@@ -2265,7 +2265,7 @@ var __agyKoTranslatorBundleExports = (() => {
         function getStatus() {
           return {
             version,
-            hostId: hostCapability && typeof hostCapability.hostProfileId === "string" && hostCapability.hostProfileId || hostAdapter.id || "unknown",
+            hostId: hostCapability && typeof hostCapability.hostProfileId === "string" && hostCapability.hostProfileId || hostCapability && typeof hostCapability.surface === "string" && hostCapability.surface || hostAdapter.id || "unknown",
             started,
             disposed,
             enabled: state.enabled,
@@ -7304,12 +7304,419 @@ var __agyKoTranslatorBundleExports = (() => {
     }
   });
 
+  // src/adapters/antigravity/host-capability-adapter.js
+  var require_host_capability_adapter = __commonJS({
+    "src/adapters/antigravity/host-capability-adapter.js"(exports, module) {
+      "use strict";
+      var { DEFAULT_LLM_CONFIG } = require_default_providers();
+      var { validateTranslationEndpointUrl } = require_endpoint_validator();
+      var V3_SETTINGS_STORAGE_KEY = "ko_translator_settings_v1";
+      var ALLOWED_NET_HTTPS_HOSTS = /* @__PURE__ */ new Set(["translate.googleapis.com"]);
+      var ALLOWED_NET_LOOPBACK_PORTS = /* @__PURE__ */ new Set([11434]);
+      var FORBIDDEN_KEYS = /* @__PURE__ */ new Set(["__proto__", "constructor", "prototype"]);
+      var SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
+      function isAddonContextV3(candidate) {
+        return Boolean(
+          candidate && typeof candidate === "object" && candidate.apiVersion === 3 && candidate.ui && typeof candidate.ui === "object" && candidate.lifecycle && typeof candidate.lifecycle === "object"
+        );
+      }
+      __name(isAddonContextV3, "isAddonContextV3");
+      function extractV3Context(candidate) {
+        if (isAddonContextV3(candidate)) return candidate;
+        if (candidate && typeof candidate === "object" && isAddonContextV3(candidate.v3)) {
+          return candidate.v3;
+        }
+        return null;
+      }
+      __name(extractV3Context, "extractV3Context");
+      function sanitizeDeepPlain(value, depth = 0) {
+        if (depth > 8 || value === null || value === void 0) return value;
+        const t = typeof value;
+        if (t === "string" || t === "number" || t === "boolean") return value;
+        if (Array.isArray(value)) {
+          return value.map((item) => sanitizeDeepPlain(item, depth + 1));
+        }
+        if (t === "object") {
+          const out = {};
+          for (const k of Object.keys(value)) {
+            if (FORBIDDEN_KEYS.has(k)) continue;
+            out[k] = sanitizeDeepPlain(value[k], depth + 1);
+          }
+          return out;
+        }
+        return void 0;
+      }
+      __name(sanitizeDeepPlain, "sanitizeDeepPlain");
+      function buildDefaultSettings() {
+        return {
+          schemaVersion: 1,
+          enabled: true,
+          translateThinking: true,
+          showThinking: true,
+          translateStaticUi: true,
+          provider: "google-translate",
+          llmConfig: { ...DEFAULT_LLM_CONFIG },
+          customProviders: []
+        };
+      }
+      __name(buildDefaultSettings, "buildDefaultSettings");
+      function sanitizeStoredSettings(raw, fallback = buildDefaultSettings()) {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+        const clean = sanitizeDeepPlain(raw);
+        if (!clean || typeof clean !== "object") return null;
+        const next = {
+          ...fallback,
+          llmConfig: { ...DEFAULT_LLM_CONFIG, ...fallback.llmConfig || {} },
+          customProviders: Array.isArray(fallback.customProviders) ? fallback.customProviders.slice() : []
+        };
+        if (typeof clean.enabled === "boolean") next.enabled = clean.enabled;
+        if (typeof clean.translateThinking === "boolean") next.translateThinking = clean.translateThinking;
+        if (typeof clean.showThinking === "boolean") next.showThinking = clean.showThinking;
+        if (typeof clean.translateStaticUi === "boolean") next.translateStaticUi = clean.translateStaticUi;
+        if (typeof clean.provider === "string" && clean.provider.trim()) {
+          const p = clean.provider.trim().toLowerCase();
+          if (!FORBIDDEN_KEYS.has(p) && /^[a-z0-9][a-z0-9._:-]{0,63}$/.test(p)) {
+            next.provider = p;
+          }
+        }
+        if (clean.llmConfig && typeof clean.llmConfig === "object" && !Array.isArray(clean.llmConfig)) {
+          const mergedLlm = { ...next.llmConfig, ...clean.llmConfig };
+          const allowRemoteHttps = Boolean(mergedLlm.allowRemoteHttps);
+          if (typeof mergedLlm.baseUrl === "string" && mergedLlm.baseUrl.trim() && !SECRET_QUERY_RE.test(mergedLlm.baseUrl)) {
+            try {
+              const parsed = validateTranslationEndpointUrl(mergedLlm.baseUrl.trim(), { allowRemoteHttps });
+              mergedLlm.baseUrl = parsed.href.replace(/\/+$/, "");
+            } catch (_err) {
+              mergedLlm.baseUrl = DEFAULT_LLM_CONFIG.baseUrl;
+              mergedLlm.allowRemoteHttps = false;
+            }
+          } else {
+            mergedLlm.baseUrl = DEFAULT_LLM_CONFIG.baseUrl;
+            mergedLlm.allowRemoteHttps = false;
+          }
+          if (mergedLlm.apiFormat !== "openai" && mergedLlm.apiFormat !== "ollama") {
+            mergedLlm.apiFormat = "ollama";
+          }
+          const rawTimeout = Number(mergedLlm.timeoutMs);
+          mergedLlm.timeoutMs = Number.isFinite(rawTimeout) && rawTimeout >= 1e3 && rawTimeout <= 12e4 ? Math.floor(rawTimeout) : DEFAULT_LLM_CONFIG.timeoutMs;
+          mergedLlm.model = typeof mergedLlm.model === "string" && mergedLlm.model.trim() ? mergedLlm.model.trim().slice(0, 128) : DEFAULT_LLM_CONFIG.model;
+          mergedLlm.allowRemoteHttps = Boolean(mergedLlm.allowRemoteHttps);
+          next.llmConfig = mergedLlm;
+        }
+        if (Array.isArray(clean.customProviders)) {
+          next.customProviders = clean.customProviders.slice(0, 16);
+        }
+        next.schemaVersion = 1;
+        return next;
+      }
+      __name(sanitizeStoredSettings, "sanitizeStoredSettings");
+      function makeAbortError() {
+        const err = new Error("The operation was aborted.");
+        err.name = "AbortError";
+        return err;
+      }
+      __name(makeAbortError, "makeAbortError");
+      function shouldUseV3NetFetch(rawUrl, v3Ctx) {
+        if (!v3Ctx || !v3Ctx.net || typeof v3Ctx.net.fetch !== "function") return false;
+        const caps = v3Ctx.env && v3Ctx.env.capabilities || {};
+        let parsed;
+        try {
+          parsed = new URL(String(rawUrl || ""));
+        } catch (_err) {
+          return false;
+        }
+        if (parsed.protocol === "https:") {
+          return Boolean(caps.hasNetHttps && ALLOWED_NET_HTTPS_HOSTS.has(parsed.hostname.toLowerCase()));
+        }
+        if (parsed.protocol === "http:") {
+          if (!caps.hasLocalLoopback) return false;
+          const host = parsed.hostname.toLowerCase();
+          if (host !== "127.0.0.1" && host !== "localhost") return false;
+          const port = parsed.port ? Number(parsed.port) : 80;
+          return ALLOWED_NET_LOOPBACK_PORTS.has(port);
+        }
+        return false;
+      }
+      __name(shouldUseV3NetFetch, "shouldUseV3NetFetch");
+      function createHostAwareFetch({ hostCapability = null, fallbackFetch = null } = {}) {
+        const v3Ctx = extractV3Context(hostCapability);
+        if (!v3Ctx || !v3Ctx.net || typeof v3Ctx.net.fetch !== "function") {
+          return fallbackFetch;
+        }
+        return /* @__PURE__ */ __name(async function hostAwareFetch(url, init = {}) {
+          const targetUrl = typeof url === "string" ? url : String(url || "");
+          if (!shouldUseV3NetFetch(targetUrl, v3Ctx)) {
+            if (typeof fallbackFetch === "function") {
+              return fallbackFetch(url, init);
+            }
+            throw new Error("ERR_NET_FETCH_FALLBACK_UNAVAILABLE");
+          }
+          const opts = init && typeof init === "object" ? init : {};
+          const signal = opts.signal || null;
+          if (signal && signal.aborted) {
+            throw makeAbortError();
+          }
+          const netInit = {
+            method: typeof opts.method === "string" && opts.method.trim() ? opts.method.trim().toUpperCase() : "GET"
+          };
+          if (opts.headers && typeof opts.headers === "object") {
+            netInit.headers = { ...opts.headers };
+          }
+          if (opts.body !== void 0 && opts.body !== null) {
+            netInit.body = String(opts.body);
+          }
+          if (Number.isFinite(Number(opts.timeoutMs)) && Number(opts.timeoutMs) > 0) {
+            netInit.timeoutMs = Math.floor(Number(opts.timeoutMs));
+          }
+          let aborted = false;
+          let onAbort = null;
+          const abortPromise = signal && typeof signal.addEventListener === "function" ? new Promise((_resolve, reject) => {
+            onAbort = /* @__PURE__ */ __name(() => {
+              aborted = true;
+              reject(makeAbortError());
+            }, "onAbort");
+            signal.addEventListener("abort", onAbort, { once: true });
+          }) : null;
+          try {
+            const fetchPromise = Promise.resolve(v3Ctx.net.fetch(targetUrl, netInit));
+            const res = abortPromise ? await Promise.race([fetchPromise, abortPromise]) : await fetchPromise;
+            if (aborted) throw makeAbortError();
+            if (res && res.ok === false && !res.status && (res.reason === "ERR_NET_HOST_NOT_ALLOWED" || res.reason === "ERR_NET_LOOPBACK_NOT_ALLOWED") && typeof fallbackFetch === "function") {
+              return fallbackFetch(url, init);
+            }
+            if (!res || res.ok === false && !res.status && res.reason) {
+              throw new Error(res && res.reason || "ERR_NET_FETCH_FAILED");
+            }
+            const status = typeof res.status === "number" ? res.status : res.ok ? 200 : 0;
+            const statusText = typeof res.statusText === "string" ? res.statusText : "";
+            const bodyText = typeof res.bodyText === "string" ? res.bodyText : "";
+            return {
+              ok: Boolean(res.ok && status >= 200 && status < 300),
+              status,
+              statusText,
+              async text() {
+                return bodyText;
+              },
+              async json() {
+                return JSON.parse(bodyText);
+              }
+            };
+          } finally {
+            if (signal && onAbort && typeof signal.removeEventListener === "function") {
+              try {
+                signal.removeEventListener("abort", onAbort);
+              } catch (_err) {
+              }
+            }
+          }
+        }, "hostAwareFetch");
+      }
+      __name(createHostAwareFetch, "createHostAwareFetch");
+      function createV3StorageSettingsBridge(v3Ctx) {
+        const listeners = /* @__PURE__ */ new Set();
+        let revision = 1;
+        let saveSeq = 0;
+        let currentData = buildDefaultSettings();
+        let currentSnap = Object.freeze({
+          status: "ok",
+          revision,
+          data: Object.freeze({ ...currentData, llmConfig: Object.freeze({ ...currentData.llmConfig }) }),
+          reason: null
+        });
+        function makeFrozenSnap(data, rev) {
+          return Object.freeze({
+            status: "ok",
+            revision: rev,
+            data: Object.freeze({
+              ...data,
+              llmConfig: Object.freeze({ ...data.llmConfig || DEFAULT_LLM_CONFIG }),
+              customProviders: Object.freeze(Array.isArray(data.customProviders) ? data.customProviders.slice() : [])
+            }),
+            reason: null
+          });
+        }
+        __name(makeFrozenSnap, "makeFrozenSnap");
+        function emitSnapshot(snap) {
+          currentSnap = snap;
+          for (const cb of Array.from(listeners)) {
+            try {
+              cb(snap);
+            } catch (_err) {
+            }
+          }
+        }
+        __name(emitSnapshot, "emitSnapshot");
+        const storage = v3Ctx && v3Ctx.storage && typeof v3Ctx.storage.get === "function" ? v3Ctx.storage : null;
+        let storageUnsub = null;
+        if (storage) {
+          const seqAtStart = saveSeq;
+          Promise.resolve(storage.get(V3_SETTINGS_STORAGE_KEY)).then((stored) => {
+            if (saveSeq !== seqAtStart || !stored) return;
+            const sanitized = sanitizeStoredSettings(stored, currentData);
+            if (!sanitized) return;
+            currentData = sanitized;
+            revision += 1;
+            emitSnapshot(makeFrozenSnap(currentData, revision));
+          }).catch(() => {
+          });
+          if (typeof storage.onDidChange === "function") {
+            try {
+              storageUnsub = storage.onDidChange((ev) => {
+                if (!ev || ev.key !== V3_SETTINGS_STORAGE_KEY || !ev.newValue) return;
+                const sanitized = sanitizeStoredSettings(ev.newValue, currentData);
+                if (!sanitized) return;
+                currentData = sanitized;
+                revision += 1;
+                emitSnapshot(makeFrozenSnap(currentData, revision));
+              });
+            } catch (_err) {
+            }
+          }
+        }
+        return {
+          getSettings() {
+            return currentSnap;
+          },
+          onSettingsChange(cb) {
+            if (typeof cb !== "function") return () => {
+            };
+            listeners.add(cb);
+            return () => {
+              listeners.delete(cb);
+            };
+          },
+          async saveSettings(nextData) {
+            if (!nextData || typeof nextData !== "object" || Array.isArray(nextData)) {
+              return Object.freeze({ ok: false, reason: "ERR_SETTINGS_MUST_BE_OBJECT", snapshot: null });
+            }
+            const merged = sanitizeStoredSettings({ ...currentData, ...nextData }, currentData);
+            if (!merged) {
+              return Object.freeze({ ok: false, reason: "ERR_SETTINGS_INVALID_JSON", snapshot: null });
+            }
+            saveSeq += 1;
+            if (storage && typeof storage.set === "function") {
+              try {
+                await storage.set(V3_SETTINGS_STORAGE_KEY, merged);
+              } catch (err) {
+                return Object.freeze({
+                  ok: false,
+                  reason: err && err.message || "ERR_SETTINGS_WRITE_FAILED",
+                  snapshot: null
+                });
+              }
+            }
+            currentData = merged;
+            revision += 1;
+            const snap = makeFrozenSnap(currentData, revision);
+            emitSnapshot(snap);
+            return Object.freeze({ ok: true, reason: null, snapshot: snap });
+          },
+          dispose() {
+            listeners.clear();
+            if (typeof storageUnsub === "function") {
+              try {
+                storageUnsub();
+              } catch (_err) {
+              }
+              storageUnsub = null;
+            }
+          }
+        };
+      }
+      __name(createV3StorageSettingsBridge, "createV3StorageSettingsBridge");
+      function createHostCapabilityAdapter(rawHostCapability) {
+        if (!rawHostCapability || typeof rawHostCapability !== "object") {
+          return null;
+        }
+        if (rawHostCapability.__isHostCapabilityAdapter === true) {
+          return rawHostCapability;
+        }
+        const v3Ctx = extractV3Context(rawHostCapability);
+        const pureV3 = isAddonContextV3(rawHostCapability);
+        const surface = v3Ctx && v3Ctx.env && typeof v3Ctx.env.surface === "string" ? v3Ctx.env.surface : rawHostCapability.hostProfileId === "antigravity-remote-web" ? "remote-web" : "desktop";
+        if (!pureV3) {
+          return Object.freeze({
+            ...rawHostCapability,
+            __isHostCapabilityAdapter: true,
+            v3: v3Ctx,
+            surface,
+            isV3: Boolean(v3Ctx),
+            isPureV3: false
+          });
+        }
+        const nativeSettingsBridge = rawHostCapability.settingsBridge && typeof rawHostCapability.settingsBridge.get === "function" && typeof rawHostCapability.settingsBridge.save === "function" ? rawHostCapability.settingsBridge : null;
+        const fallbackStorageBridge = nativeSettingsBridge ? null : createV3StorageSettingsBridge(rawHostCapability);
+        if (fallbackStorageBridge && typeof rawHostCapability.lifecycle.onDispose === "function") {
+          try {
+            rawHostCapability.lifecycle.onDispose(() => fallbackStorageBridge.dispose());
+          } catch (_err) {
+          }
+        }
+        const adapted = {
+          __isHostCapabilityAdapter: true,
+          apiVersion: 3,
+          isV3: true,
+          isPureV3: true,
+          v3: rawHostCapability,
+          surface,
+          pluginId: rawHostCapability.meta && rawHostCapability.meta.pluginId || "ko-thought-translator",
+          displayName: rawHostCapability.meta && rawHostCapability.meta.displayName || "ko-thought-translator",
+          version: rawHostCapability.meta && rawHostCapability.meta.version || "3.0.0",
+          trustLevel: rawHostCapability.meta && rawHostCapability.meta.trustLevel || "trusted",
+          hasSettingsBridge: true,
+          getSettings() {
+            if (nativeSettingsBridge) return nativeSettingsBridge.get();
+            return fallbackStorageBridge.getSettings();
+          },
+          onSettingsChange(cb) {
+            if (nativeSettingsBridge && typeof nativeSettingsBridge.onChange === "function") {
+              return nativeSettingsBridge.onChange(cb);
+            }
+            return fallbackStorageBridge.onSettingsChange(cb);
+          },
+          saveSettings(nextData) {
+            if (nativeSettingsBridge) return nativeSettingsBridge.save(nextData);
+            return fallbackStorageBridge.saveSettings(nextData);
+          },
+          injectStyle(styleId, cssText, opts) {
+            return rawHostCapability.ui.injectStyle(styleId, cssText, opts);
+          },
+          removeStyle(styleId) {
+            return rawHostCapability.ui.removeStyle(styleId);
+          },
+          isElementInsideIgnored(nodeOrEvent, opts) {
+            if (rawHostCapability.dom && typeof rawHostCapability.dom.isElementInsideIgnored === "function") {
+              return rawHostCapability.dom.isElementInsideIgnored(nodeOrEvent, opts);
+            }
+            return false;
+          },
+          onDispose(fn) {
+            return rawHostCapability.lifecycle.onDispose(fn);
+          }
+        };
+        return Object.freeze(adapted);
+      }
+      __name(createHostCapabilityAdapter, "createHostCapabilityAdapter");
+      module.exports = {
+        V3_SETTINGS_STORAGE_KEY,
+        ALLOWED_NET_HTTPS_HOSTS,
+        ALLOWED_NET_LOOPBACK_PORTS,
+        isAddonContextV3,
+        extractV3Context,
+        shouldUseV3NetFetch,
+        createHostAwareFetch,
+        createHostCapabilityAdapter
+      };
+    }
+  });
+
   // src/adapters/antigravity/quick-settings-ui.js
   var require_quick_settings_ui = __commonJS({
     "src/adapters/antigravity/quick-settings-ui.js"(exports, module) {
       "use strict";
       var { validateTranslationEndpointUrl } = require_endpoint_validator();
       var { DEFAULT_LLM_CONFIG } = require_default_providers();
+      var { extractV3Context } = require_host_capability_adapter();
       var STATUSBAR_ADDON_ID = "ko-translator";
       var QUICK_SETTINGS_MODAL_SLOT_ID = "ko-translator.quick-settings-modal";
       var QUICK_SETTINGS_TAB_ID = "ko-translator.quick-settings";
@@ -7321,7 +7728,7 @@ var __agyKoTranslatorBundleExports = (() => {
       var MODAL_CSS = `
 :host {
   all: initial;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+  font-family: var(--ag-font, -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif);
   color-scheme: dark;
 }
 .ko-qs-card {
@@ -7330,14 +7737,23 @@ var __agyKoTranslatorBundleExports = (() => {
   max-height: calc(100vh - 96px);
   display: flex;
   flex-direction: column;
-  background: #1a1e26;
-  color: #e6ebf4;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 14px;
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.58);
+  background: var(--ag-surface, #1a1e26);
+  color: var(--ag-text, #e6ebf4);
+  border: 1px solid var(--ag-border, rgba(255, 255, 255, 0.14));
+  border-radius: var(--ag-radius, 14px);
+  box-shadow: var(--ag-shadow, 0 22px 60px rgba(0, 0, 0, 0.58));
   overflow: hidden;
   font-size: 13px;
   line-height: 1.45;
+  font-family: var(--ag-font, -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif);
+}
+.ko-qs-card[data-embedded="true"] {
+  width: 100%;
+  max-height: none;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 .ko-qs-card *, .ko-qs-card *::before, .ko-qs-card *::after {
   box-sizing: border-box;
@@ -7348,8 +7764,19 @@ var __agyKoTranslatorBundleExports = (() => {
   justify-content: space-between;
   gap: 12px;
   padding: 14px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--ag-border, rgba(255, 255, 255, 0.08));
   background: rgba(255, 255, 255, 0.02);
+}
+.ko-qs-inline-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 0 2px 0;
+}
+.ko-qs-inline-meta {
+  font-size: 11.5px;
+  color: var(--ag-text-muted, #97a3b8);
 }
 .ko-qs-title-wrap {
   display: flex;
@@ -7362,12 +7789,12 @@ var __agyKoTranslatorBundleExports = (() => {
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.01em;
-  color: #f3f6fc;
+  color: var(--ag-text, #f3f6fc);
 }
 .ko-qs-badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
@@ -7377,9 +7804,9 @@ var __agyKoTranslatorBundleExports = (() => {
   white-space: nowrap;
 }
 .ko-qs-badge[data-state="off"] {
-  background: rgba(255, 255, 255, 0.08);
-  color: #9ba5b8;
-  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(148, 163, 184, 0.14);
+  color: var(--ag-text-muted, #9ba5b8);
+  border-color: rgba(148, 163, 184, 0.24);
 }
 .ko-qs-badge[data-state="error"] {
   background: rgba(242, 95, 92, 0.18);
@@ -7388,9 +7815,9 @@ var __agyKoTranslatorBundleExports = (() => {
 }
 .ko-qs-close {
   appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--ag-border, rgba(255, 255, 255, 0.12));
   background: rgba(255, 255, 255, 0.04);
-  color: #cbd4e3;
+  color: var(--ag-text-muted, #cbd4e3);
   width: 28px;
   height: 28px;
   border-radius: 8px;
@@ -7403,14 +7830,32 @@ var __agyKoTranslatorBundleExports = (() => {
 }
 .ko-qs-close:hover {
   background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
+  color: var(--ag-text, #ffffff);
 }
 .ko-qs-body {
   padding: 14px 16px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.32) transparent;
+}
+.ko-qs-body::-webkit-scrollbar {
+  width: 6px;
+}
+.ko-qs-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ko-qs-body::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.32);
+  border-radius: 999px;
+}
+.ko-qs-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.5);
+}
+.ko-qs-card[data-embedded="true"] .ko-qs-body {
+  padding: 2px 0 12px 0;
 }
 .ko-qs-banner {
   padding: 10px 12px;
@@ -7430,7 +7875,7 @@ var __agyKoTranslatorBundleExports = (() => {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: #97a3b8;
+  color: var(--ag-text-muted, #97a3b8);
   margin: 0 0 6px 0;
 }
 .ko-qs-engine-grid {
@@ -7443,9 +7888,9 @@ var __agyKoTranslatorBundleExports = (() => {
   text-align: left;
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--ag-border, rgba(255, 255, 255, 0.12));
   background: rgba(255, 255, 255, 0.03);
-  color: #dce3f0;
+  color: var(--ag-text, #dce3f0);
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -7457,28 +7902,28 @@ var __agyKoTranslatorBundleExports = (() => {
   background: rgba(79, 140, 255, 0.08);
 }
 .ko-qs-engine-btn[aria-checked="true"] {
-  border-color: #4f8cff;
+  border-color: var(--ag-accent, #4f8cff);
   background: rgba(79, 140, 255, 0.16);
   box-shadow: 0 0 0 1px rgba(79, 140, 255, 0.35) inset;
 }
 .ko-qs-engine-name {
   font-weight: 700;
   font-size: 13px;
-  color: #f4f7fc;
+  color: var(--ag-text, #f4f7fc);
 }
 .ko-qs-engine-desc {
   font-size: 11px;
-  color: #9ba7bc;
+  color: var(--ag-text-muted, #9ba7bc);
 }
 .ko-qs-hint {
   margin: 6px 0 0 0;
   font-size: 11px;
-  color: #8b97ad;
+  color: var(--ag-text-muted, #8b97ad);
 }
 .ko-qs-llm-box {
   padding: 12px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ag-border, rgba(255, 255, 255, 0.1));
   background: rgba(255, 255, 255, 0.025);
   display: flex;
   flex-direction: column;
@@ -7500,15 +7945,15 @@ var __agyKoTranslatorBundleExports = (() => {
 .ko-qs-field label {
   font-size: 11px;
   font-weight: 600;
-  color: #aab5c9;
+  color: var(--ag-text-muted, #aab5c9);
 }
 .ko-qs-input, .ko-qs-select {
   width: 100%;
   padding: 7px 9px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: #12151b;
-  color: #eef2fa;
+  border: 1px solid var(--ag-border, rgba(255, 255, 255, 0.14));
+  background: var(--ag-surface-alt, #12151b);
+  color: var(--ag-text, #eef2fa);
   font-size: 12px;
   font-family: inherit;
 }
@@ -7517,7 +7962,7 @@ var __agyKoTranslatorBundleExports = (() => {
 .ko-qs-btn:focus-visible,
 .ko-qs-engine-btn:focus-visible,
 .ko-qs-close:focus-visible {
-  outline: 2px solid #6ba0ff;
+  outline: 2px solid var(--ag-accent, #6ba0ff);
   outline-offset: 1px;
 }
 .ko-qs-row-between {
@@ -7529,39 +7974,109 @@ var __agyKoTranslatorBundleExports = (() => {
 .ko-qs-toggles {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--ag-border, rgba(255, 255, 255, 0.09));
+  background: rgba(255, 255, 255, 0.025);
+  overflow: hidden;
 }
 .ko-qs-toggle-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
+  padding: 11px 13px;
   cursor: pointer;
+  user-select: none;
+  transition: background-color 120ms ease;
+}
+.ko-qs-toggles .ko-qs-toggle-row + .ko-qs-toggle-row {
+  border-top: 1px solid var(--ag-border, rgba(255, 255, 255, 0.07));
+}
+.ko-qs-toggle-row:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+.ko-qs-llm-box .ko-qs-toggle-row {
+  padding: 6px 2px;
+  border-radius: 8px;
 }
 .ko-qs-toggle-text {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
 }
 .ko-qs-toggle-title {
   font-size: 12.5px;
   font-weight: 600;
-  color: #e7ecf5;
+  color: var(--ag-text, #e7ecf5);
 }
 .ko-qs-toggle-sub {
   font-size: 11px;
-  color: #8c98ae;
+  line-height: 1.4;
+  color: var(--ag-text-muted, #8c98ae);
+  word-break: keep-all;
 }
-.ko-qs-checkbox {
-  width: 16px;
-  height: 16px;
-  accent-color: #4f8cff;
-  cursor: pointer;
+.ko-qs-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
   flex-shrink: 0;
+  width: 42px;
+  height: 24px;
+}
+.ko-qs-switch-input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+.ko-qs-switch-track {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 42px;
+  height: 24px;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.24);
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+.ko-qs-switch-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #d5dce8;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.38);
+  transform: translateX(0);
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background-color 160ms ease;
+}
+.ko-qs-switch-input:checked + .ko-qs-switch-track {
+  background: var(--ag-accent, #3d7eff);
+  border-color: var(--ag-accent, #4f8cff);
+}
+.ko-qs-switch-input:checked + .ko-qs-switch-track .ko-qs-switch-thumb {
+  background: #ffffff;
+  transform: translateX(18px);
+}
+.ko-qs-switch-input:focus-visible + .ko-qs-switch-track {
+  outline: 2px solid var(--ag-accent, #6ba0ff);
+  outline-offset: 2px;
+}
+.ko-qs-switch-input:disabled + .ko-qs-switch-track {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ko-qs-engine-btn,
+  .ko-qs-toggle-row,
+  .ko-qs-switch-track,
+  .ko-qs-switch-thumb {
+    transition: none;
+  }
 }
 .ko-qs-actions-bar {
   display: flex;
@@ -7571,12 +8086,12 @@ var __agyKoTranslatorBundleExports = (() => {
   flex-wrap: wrap;
   padding: 10px 12px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ag-border, rgba(255, 255, 255, 0.08));
   background: rgba(255, 255, 255, 0.02);
 }
 .ko-qs-cache-label {
   font-size: 12px;
-  color: #aeb9cc;
+  color: var(--ag-text-muted, #aeb9cc);
 }
 .ko-qs-btn-group {
   display: flex;
@@ -7585,9 +8100,9 @@ var __agyKoTranslatorBundleExports = (() => {
 }
 .ko-qs-btn {
   appearance: none;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--ag-border, rgba(255, 255, 255, 0.14));
   background: rgba(255, 255, 255, 0.06);
-  color: #e6ebf4;
+  color: var(--ag-text, #e6ebf4);
   padding: 6px 11px;
   border-radius: 8px;
   font-size: 12px;
@@ -7603,8 +8118,8 @@ var __agyKoTranslatorBundleExports = (() => {
   cursor: not-allowed;
 }
 .ko-qs-btn-primary {
-  background: #3d7eff;
-  border-color: #4f8cff;
+  background: var(--ag-accent, #3d7eff);
+  border-color: var(--ag-accent, #4f8cff);
   color: #ffffff;
 }
 .ko-qs-btn-primary:hover:not(:disabled) {
@@ -7620,12 +8135,16 @@ var __agyKoTranslatorBundleExports = (() => {
   justify-content: space-between;
   gap: 10px;
   padding: 12px 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--ag-border, rgba(255, 255, 255, 0.08));
   background: rgba(255, 255, 255, 0.02);
+}
+.ko-qs-card[data-embedded="true"] .ko-qs-footer {
+  padding: 12px 0 0 0;
+  background: transparent;
 }
 .ko-qs-feedback {
   font-size: 11.5px;
-  color: #9ba7bc;
+  color: var(--ag-text-muted, #9ba7bc);
   min-height: 16px;
   flex: 1;
 }
@@ -7637,7 +8156,7 @@ var __agyKoTranslatorBundleExports = (() => {
 }
 .ko-qs-test-result {
   font-size: 11.5px;
-  color: #9ba7bc;
+  color: var(--ag-text-muted, #9ba7bc);
 }
 .ko-qs-test-result[data-kind="ok"] {
   color: #7ee2a8;
@@ -7646,6 +8165,23 @@ var __agyKoTranslatorBundleExports = (() => {
   color: #ff9c9a;
 }
 `;
+      function isTranslationActiveStatus(status) {
+        if (!status || !status.enabled) return false;
+        return status.translateStaticUi !== false || status.translateThinking !== false;
+      }
+      __name(isTranslationActiveStatus, "isTranslationActiveStatus");
+      function deriveToggleSaveState({ translateStaticUi, translateThinking, showThinking }) {
+        const staticOn = Boolean(translateStaticUi);
+        const thinkingOn = Boolean(translateThinking);
+        const showThinkingOn = Boolean(showThinking);
+        return {
+          enabled: Boolean(staticOn || thinkingOn || !showThinkingOn),
+          translateStaticUi: staticOn,
+          translateThinking: thinkingOn,
+          showThinking: showThinkingOn
+        };
+      }
+      __name(deriveToggleSaveState, "deriveToggleSaveState");
       function formatErrorMessage(reason) {
         const code = String(reason || "ERR_SETTINGS_SAVE_FAILED");
         if (code === "ERR_HOST_SAVE_UNSUPPORTED" || code === "ERR_SETTINGS_SAVE_UNAVAILABLE") {
@@ -7664,11 +8200,11 @@ var __agyKoTranslatorBundleExports = (() => {
       }
       __name(formatErrorMessage, "formatErrorMessage");
       function computeStatusbarMeta(status) {
-        const enabled = Boolean(status && status.enabled);
+        const active = isTranslationActiveStatus(status);
         const provider = status && typeof status.provider === "string" ? status.provider : null;
         let label;
         let engineName;
-        if (!enabled) {
+        if (!active) {
           label = "번역:꺼짐";
           engineName = "꺼짐";
         } else if (provider === "local-llm") {
@@ -7682,7 +8218,7 @@ var __agyKoTranslatorBundleExports = (() => {
           label = `번역:${shortId}`;
           engineName = provider || "커스텀";
         }
-        const title = enabled ? `한국어 번역기 (${engineName}) · 클릭: 빠른 설정 · Shift+클릭: 구글↔로컬 LLM 즉시 전환` : "한국어 번역기 (꺼짐) · 클릭: 빠른 설정 · Shift+클릭: 켜기 및 엔진 전환";
+        const title = active ? `한국어 번역기 (${engineName}) · 클릭: 빠른 설정 · Shift+클릭: 구글↔로컬 LLM 즉시 전환` : "한국어 번역기 (꺼짐) · 클릭: 빠른 설정 · Shift+클릭: 켜기 및 엔진 전환";
         return {
           id: STATUSBAR_ADDON_ID,
           label,
@@ -7713,10 +8249,13 @@ var __agyKoTranslatorBundleExports = (() => {
         if (!targetWin || !targetDoc || !translator) {
           throw new Error("createQuickSettingsUi requires win, doc, and translator");
         }
+        const v3Ctx = extractV3Context(hostCapability);
+        const isPureV3 = Boolean(hostCapability && hostCapability.isPureV3 && v3Ctx);
         const effectiveFetch = typeof fetchFn === "function" ? fetchFn : typeof targetWin.fetch === "function" ? targetWin.fetch.bind(targetWin) : typeof fetch === "function" ? fetch.bind(globalThis) : null;
         let started = false;
         let disposed = false;
         let statusbarRegistered = false;
+        let v3StatusItemHandle = null;
         let pollTimer = null;
         let pollTicks = 0;
         let shiftKeyDown = false;
@@ -7750,25 +8289,83 @@ var __agyKoTranslatorBundleExports = (() => {
           }
         }
         __name(clearPollTimer, "clearPollTimer");
+        function hasV3StatusbarService() {
+          if (!v3Ctx || !v3Ctx.services || typeof v3Ctx.services.has !== "function") return false;
+          try {
+            return Boolean(v3Ctx.services.has("host.statusbar"));
+          } catch (_err) {
+            return false;
+          }
+        }
+        __name(hasV3StatusbarService, "hasV3StatusbarService");
+        function unregisterLegacyStatusbar() {
+          if (!statusbarRegistered) return;
+          if (targetWin.statusbarAddons && typeof targetWin.statusbarAddons.unregister === "function") {
+            try {
+              targetWin.statusbarAddons.unregister(STATUSBAR_ADDON_ID);
+            } catch (_err) {
+            }
+          }
+          statusbarRegistered = false;
+        }
+        __name(unregisterLegacyStatusbar, "unregisterLegacyStatusbar");
+        function handleStatusClick(evOrCtx, maybeEv) {
+          if (disposed) return;
+          const shiftPressed = Boolean(
+            maybeEv && maybeEv.shiftKey || evOrCtx && evOrCtx.shiftKey || shiftKeyDown || lastPointerShift
+          );
+          lastPointerShift = false;
+          if (shiftPressed) {
+            void toggleEngineQuick();
+          } else {
+            toggleModal();
+          }
+        }
+        __name(handleStatusClick, "handleStatusClick");
         function syncStatusbarButton() {
           if (disposed) return false;
-          const api = targetWin.statusbarAddons;
-          if (!api || typeof api.register !== "function") return false;
           const meta = computeStatusbarMeta(translator.getStatus());
+          const legacyApi = targetWin.statusbarAddons;
+          const hasLegacyApi = Boolean(legacyApi && typeof legacyApi.register === "function");
+          const canUseV3StatusItem = Boolean(v3Ctx && v3Ctx.ui && typeof v3Ctx.ui.registerStatusItem === "function");
+          const preferV3StatusItem = Boolean(canUseV3StatusItem && (hasV3StatusbarService() || !hasLegacyApi));
+          if (preferV3StatusItem) {
+            unregisterLegacyStatusbar();
+            try {
+              if (v3StatusItemHandle && typeof v3StatusItemHandle.update === "function") {
+                v3StatusItemHandle.update({
+                  label: meta.label,
+                  tooltip: meta.title,
+                  priority: meta.order
+                });
+              } else {
+                v3StatusItemHandle = v3Ctx.ui.registerStatusItem({
+                  id: STATUSBAR_ADDON_ID,
+                  label: meta.label,
+                  tooltip: meta.title,
+                  align: "right",
+                  priority: meta.order,
+                  onClick: /* @__PURE__ */ __name((ev) => handleStatusClick(ev), "onClick")
+                });
+              }
+              clearPollTimer();
+              return true;
+            } catch (_err) {
+            }
+          }
+          if (!hasLegacyApi) return false;
+          if (v3StatusItemHandle && typeof v3StatusItemHandle.dispose === "function") {
+            try {
+              v3StatusItemHandle.dispose();
+            } catch (_err) {
+            }
+            v3StatusItemHandle = null;
+          }
           try {
-            api.register({
+            legacyApi.register({
               ...meta,
               onClick(ctx, ev) {
-                if (disposed) return;
-                const shiftPressed = Boolean(
-                  ev && ev.shiftKey || ctx && ctx.shiftKey || shiftKeyDown || lastPointerShift
-                );
-                lastPointerShift = false;
-                if (shiftPressed) {
-                  void toggleEngineQuick();
-                } else {
-                  toggleModal();
-                }
+                handleStatusClick(ctx, ev);
               }
             });
             statusbarRegistered = true;
@@ -7785,10 +8382,14 @@ var __agyKoTranslatorBundleExports = (() => {
           try {
             const cfg = translator.getConfigSnapshot();
             const nextProvider = cfg.provider === "local-llm" ? "google-translate" : "local-llm";
-            const res = await translator.saveSettings({
+            const patch = {
               enabled: true,
               provider: nextProvider
-            });
+            };
+            if (!cfg.translateStaticUi && !cfg.translateThinking) {
+              patch.translateStaticUi = true;
+            }
+            const res = await translator.saveSettings(patch);
             if (!res || res.ok !== true) {
               openModal({ initialError: formatErrorMessage(res && res.reason) });
             }
@@ -7884,6 +8485,9 @@ var __agyKoTranslatorBundleExports = (() => {
             } else if (!status.enabled) {
               badgeEl.textContent = "꺼짐";
               badgeEl.setAttribute("data-state", "off");
+            } else if (!isTranslationActiveStatus(status)) {
+              badgeEl.textContent = "번역 꺼짐";
+              badgeEl.setAttribute("data-state", "off");
             } else if (status.provider === "local-llm") {
               badgeEl.textContent = "활성 · 로컬 LLM";
               badgeEl.setAttribute("data-state", "on");
@@ -7912,52 +8516,31 @@ var __agyKoTranslatorBundleExports = (() => {
           return true;
         }
         __name(closeModal, "closeModal");
-        function openModal({ initialError = null } = {}) {
-          if (disposed) return null;
-          if (activePortal) {
-            if (initialError && activeModalHandles && activeModalHandles.setFeedback) {
-              activeModalHandles.setFeedback(initialError, "err");
-            }
-            return activePortal;
-          }
-          const onPortalClosed = /* @__PURE__ */ __name(() => {
-            activePortal = null;
-            activeModalHandles = null;
-          }, "onPortalClosed");
-          const portal = hostCapability && typeof hostCapability.openModal === "function" ? hostCapability.openModal(QUICK_SETTINGS_MODAL_SLOT_ID, { shadow: true, onClose: onPortalClosed }) : createFallbackPortal(onPortalClosed);
-          activePortal = portal;
-          if (portal.element && portal.element.style) {
-            const st = portal.element.style;
-            st.position = "fixed";
-            st.inset = "0";
-            st.top = "36px";
-            st.top = "max(env(titlebar-area-height, 36px), 36px)";
-            st.right = "0";
-            st.bottom = "0";
-            st.left = "0";
-            st.margin = "auto";
-            st.marginTop = "auto";
-            st.marginRight = "auto";
-            st.marginBottom = "auto";
-            st.marginLeft = "auto";
-            st.width = "fit-content";
-            st.height = "fit-content";
-            st.padding = "0";
-            st.border = "none";
-            st.background = "transparent";
-            st.maxWidth = "calc(100vw - 24px)";
-            st.maxHeight = "calc(100vh - 56px)";
-            st.overflow = "visible";
-            st.color = "inherit";
-          }
-          if (portal.element && typeof portal.element.addEventListener === "function") {
-            portal.element.addEventListener("click", (ev) => {
-              if (ev && ev.target === portal.element) {
-                closeModal();
-              }
-            });
-          }
-          const mountRoot = portal.bodyEl || portal.element;
+        function createSlideSwitchControl(testId, checked) {
+          const wrap = targetDoc.createElement("span");
+          wrap.className = "ko-qs-switch";
+          const input = targetDoc.createElement("input");
+          input.type = "checkbox";
+          input.className = "ko-qs-switch-input";
+          input.setAttribute("role", "switch");
+          input.setAttribute("data-testid", testId);
+          input.checked = Boolean(checked);
+          input.setAttribute("aria-checked", input.checked ? "true" : "false");
+          input.addEventListener("change", () => {
+            input.setAttribute("aria-checked", input.checked ? "true" : "false");
+          });
+          const track = targetDoc.createElement("span");
+          track.className = "ko-qs-switch-track";
+          track.setAttribute("aria-hidden", "true");
+          const thumb = targetDoc.createElement("span");
+          thumb.className = "ko-qs-switch-thumb";
+          track.appendChild(thumb);
+          wrap.appendChild(input);
+          wrap.appendChild(track);
+          return { wrap, input };
+        }
+        __name(createSlideSwitchControl, "createSlideSwitchControl");
+        function mountSettingsCard(mountRoot, { embedded = false, onClose = /* @__PURE__ */ __name(() => closeModal(), "onClose"), initialError = null } = {}) {
           const styleEl = targetDoc.createElement("style");
           styleEl.textContent = MODAL_CSS;
           mountRoot.appendChild(styleEl);
@@ -7968,30 +8551,46 @@ var __agyKoTranslatorBundleExports = (() => {
           const card = targetDoc.createElement("div");
           card.className = "ko-qs-card";
           card.setAttribute("data-testid", "ko-qs-card");
-          const header = targetDoc.createElement("div");
-          header.className = "ko-qs-header";
-          const titleWrap = targetDoc.createElement("div");
-          titleWrap.className = "ko-qs-title-wrap";
-          const titleEl = targetDoc.createElement("h2");
-          titleEl.className = "ko-qs-title";
-          titleEl.textContent = "한국어 번역 설정";
+          if (embedded) {
+            card.setAttribute("data-embedded", "true");
+          }
           const badgeEl = targetDoc.createElement("span");
           badgeEl.className = "ko-qs-badge";
           badgeEl.setAttribute("data-testid", "ko-qs-status-badge");
-          titleWrap.appendChild(titleEl);
-          titleWrap.appendChild(badgeEl);
-          const closeBtn = targetDoc.createElement("button");
-          closeBtn.type = "button";
-          closeBtn.className = "ko-qs-close";
-          closeBtn.setAttribute("aria-label", "닫기");
-          closeBtn.setAttribute("data-testid", "ko-qs-close");
-          closeBtn.textContent = "×";
-          closeBtn.addEventListener("click", () => closeModal());
-          header.appendChild(titleWrap);
-          header.appendChild(closeBtn);
-          card.appendChild(header);
+          let closeBtn = null;
+          if (!embedded) {
+            const header = targetDoc.createElement("div");
+            header.className = "ko-qs-header";
+            const titleWrap = targetDoc.createElement("div");
+            titleWrap.className = "ko-qs-title-wrap";
+            const titleEl = targetDoc.createElement("h2");
+            titleEl.className = "ko-qs-title";
+            titleEl.textContent = "한국어 번역 설정";
+            titleWrap.appendChild(titleEl);
+            titleWrap.appendChild(badgeEl);
+            closeBtn = targetDoc.createElement("button");
+            closeBtn.type = "button";
+            closeBtn.className = "ko-qs-close";
+            closeBtn.setAttribute("aria-label", "닫기");
+            closeBtn.setAttribute("data-testid", "ko-qs-close");
+            closeBtn.textContent = "×";
+            closeBtn.addEventListener("click", () => onClose());
+            header.appendChild(titleWrap);
+            header.appendChild(closeBtn);
+            card.appendChild(header);
+          }
           const body = targetDoc.createElement("div");
           body.className = "ko-qs-body";
+          if (embedded) {
+            const statusRow = targetDoc.createElement("div");
+            statusRow.className = "ko-qs-inline-status";
+            const metaLabel = targetDoc.createElement("span");
+            metaLabel.className = "ko-qs-inline-meta";
+            metaLabel.textContent = "현재 상태";
+            statusRow.appendChild(metaLabel);
+            statusRow.appendChild(badgeEl);
+            body.appendChild(statusRow);
+          }
           const banner = targetDoc.createElement("div");
           banner.className = "ko-qs-banner";
           banner.setAttribute("data-testid", "ko-qs-corrupt-banner");
@@ -8136,16 +8735,22 @@ var __agyKoTranslatorBundleExports = (() => {
           llmBox.appendChild(llmRow2);
           const remoteRow = targetDoc.createElement("label");
           remoteRow.className = "ko-qs-toggle-row";
-          const remoteText = targetDoc.createElement("span");
-          remoteText.className = "ko-qs-toggle-sub";
-          remoteText.textContent = "원격 HTTPS 엔드포인트 허용 (기본 꺼짐 · 127.0.0.1/localhost만 허용)";
-          const remoteChk = targetDoc.createElement("input");
-          remoteChk.type = "checkbox";
-          remoteChk.className = "ko-qs-checkbox";
-          remoteChk.setAttribute("data-testid", "ko-qs-llm-remote");
-          remoteChk.checked = Boolean(llmCfg.allowRemoteHttps);
-          remoteRow.appendChild(remoteText);
-          remoteRow.appendChild(remoteChk);
+          const remoteTxtWrap = targetDoc.createElement("div");
+          remoteTxtWrap.className = "ko-qs-toggle-text";
+          const remoteTitle = targetDoc.createElement("span");
+          remoteTitle.className = "ko-qs-toggle-title";
+          remoteTitle.textContent = "원격 HTTPS 엔드포인트 허용";
+          const remoteSub = targetDoc.createElement("span");
+          remoteSub.className = "ko-qs-toggle-sub";
+          remoteSub.textContent = "기본 꺼짐 · 기본적으로 127.0.0.1 / localhost만 허용합니다.";
+          remoteTxtWrap.appendChild(remoteTitle);
+          remoteTxtWrap.appendChild(remoteSub);
+          const { wrap: remoteSwitchWrap, input: remoteChk } = createSlideSwitchControl(
+            "ko-qs-llm-remote",
+            Boolean(llmCfg.allowRemoteHttps)
+          );
+          remoteRow.appendChild(remoteTxtWrap);
+          remoteRow.appendChild(remoteSwitchWrap);
           llmBox.appendChild(remoteRow);
           const testRow = targetDoc.createElement("div");
           testRow.className = "ko-qs-row-between";
@@ -8162,9 +8767,14 @@ var __agyKoTranslatorBundleExports = (() => {
           testRow.appendChild(testBtn);
           llmBox.appendChild(testRow);
           body.appendChild(llmBox);
+          const optionsSection = targetDoc.createElement("div");
+          const optionsLabel = targetDoc.createElement("div");
+          optionsLabel.className = "ko-qs-section-label";
+          optionsLabel.textContent = "번역 옵션";
           const togglesWrap = targetDoc.createElement("div");
           togglesWrap.className = "ko-qs-toggles";
-          function makeToggleRow(testId, title, sub, checked) {
+          togglesWrap.setAttribute("data-testid", "ko-qs-toggles");
+          function makeSwitchRow(testId, title, sub, checked) {
             const row = targetDoc.createElement("label");
             row.className = "ko-qs-toggle-row";
             const txt = targetDoc.createElement("div");
@@ -8177,42 +8787,35 @@ var __agyKoTranslatorBundleExports = (() => {
             s.textContent = sub;
             txt.appendChild(t);
             txt.appendChild(s);
-            const chk = targetDoc.createElement("input");
-            chk.type = "checkbox";
-            chk.className = "ko-qs-checkbox";
-            chk.setAttribute("data-testid", testId);
-            chk.checked = Boolean(checked);
+            const { wrap: switchWrap, input } = createSlideSwitchControl(testId, checked);
             row.appendChild(txt);
-            row.appendChild(chk);
+            row.appendChild(switchWrap);
             togglesWrap.appendChild(row);
-            return chk;
+            return input;
           }
-          __name(makeToggleRow, "makeToggleRow");
-          const enabledChk = makeToggleRow(
-            "ko-qs-opt-enabled",
-            "한국어 번역 사용",
-            "끄면 번역 오버레이를 즉시 원복하고 대기합니다.",
-            cfg.failClosed ? true : cfg.enabled
+          __name(makeSwitchRow, "makeSwitchRow");
+          const staticUiChk = makeSwitchRow(
+            "ko-qs-opt-static-ui",
+            "영문 UI 한글화",
+            "코드·diff·터미널·타 플러그인을 제외한 UI를 한글화하며, 끄면 원문으로 복구합니다.",
+            cfg.failClosed ? true : Boolean(cfg.enabled && cfg.translateStaticUi)
           );
-          const thinkingChk = makeToggleRow(
+          staticUiChk.setAttribute("data-merged-enabled", "true");
+          const thinkingChk = makeSwitchRow(
             "ko-qs-opt-thinking",
             "Thinking(추론 과정) 한국어 번역",
-            "코드·파일 경로·식별자는 원형을 보존합니다.",
-            cfg.translateThinking
+            "추론 과정을 한국어로 번역하며, 코드·파일 경로·식별자는 원형을 보존합니다.",
+            cfg.failClosed ? true : Boolean(cfg.enabled && cfg.translateThinking)
           );
-          const showThinkingChk = makeToggleRow(
+          const showThinkingChk = makeSwitchRow(
             "ko-qs-opt-show-thinking",
             "Thinking 블록 표시",
-            "끄면 작업 내역은 유지하고 추론 블록만 숨깁니다.",
-            cfg.showThinking
+            "끄면 작업 내역은 유지하고 추론 블록만 화면에서 숨깁니다.",
+            Boolean(cfg.showThinking)
           );
-          const staticUiChk = makeToggleRow(
-            "ko-qs-opt-static-ui",
-            "영문 고정 UI 한글화",
-            "코드 에디터·diff·터미널·타 플러그인 영역은 제외합니다.",
-            cfg.translateStaticUi
-          );
-          body.appendChild(togglesWrap);
+          optionsSection.appendChild(optionsLabel);
+          optionsSection.appendChild(togglesWrap);
+          body.appendChild(optionsSection);
           const actionsBar = targetDoc.createElement("div");
           actionsBar.className = "ko-qs-actions-bar";
           const cacheLabelEl = targetDoc.createElement("span");
@@ -8308,11 +8911,13 @@ var __agyKoTranslatorBundleExports = (() => {
                 setFeedback(err && err.message ? err.message : "로컬 LLM 설정이 올바르지 않습니다.", "err");
                 return;
               }
+              const derivedToggles = deriveToggleSaveState({
+                translateStaticUi: staticUiChk.checked,
+                translateThinking: thinkingChk.checked,
+                showThinking: showThinkingChk.checked
+              });
               patch = {
-                enabled: Boolean(enabledChk.checked),
-                translateThinking: Boolean(thinkingChk.checked),
-                showThinking: Boolean(showThinkingChk.checked),
-                translateStaticUi: Boolean(staticUiChk.checked),
+                ...derivedToggles,
                 provider: selectedProvider,
                 llmConfig: nextLlmConfig
               };
@@ -8329,7 +8934,7 @@ var __agyKoTranslatorBundleExports = (() => {
               }
               banner.hidden = true;
               setFeedback("저장 및 적용 완료", "ok");
-              closeModal();
+              onClose();
             } finally {
               saving = false;
               saveBtn.disabled = false;
@@ -8397,7 +9002,7 @@ var __agyKoTranslatorBundleExports = (() => {
             }
           }
           __name(handleTestConnection, "handleTestConnection");
-          cancelBtn.addEventListener("click", () => closeModal());
+          cancelBtn.addEventListener("click", () => onClose());
           saveBtn.addEventListener("click", () => {
             void handleSave({ resetToDefaults: false });
           });
@@ -8435,13 +9040,81 @@ var __agyKoTranslatorBundleExports = (() => {
           } else if (!cfg.canSaveSettings) {
             setFeedback(formatErrorMessage("ERR_HOST_SAVE_UNSUPPORTED"), "err");
           }
-          const activeEngineBtn = engineButtons.get(selectedProvider) || closeBtn;
+          const activeEngineBtn = engineButtons.get(selectedProvider) || closeBtn || saveBtn;
           if (activeEngineBtn && typeof activeEngineBtn.focus === "function") {
             try {
               activeEngineBtn.focus();
             } catch (_err) {
             }
           }
+          return activeModalHandles;
+        }
+        __name(mountSettingsCard, "mountSettingsCard");
+        function openModal({ initialError = null } = {}) {
+          if (disposed) return null;
+          if (activePortal) {
+            if (initialError && activeModalHandles && activeModalHandles.setFeedback) {
+              activeModalHandles.setFeedback(initialError, "err");
+            }
+            return activePortal;
+          }
+          const onPortalClosed = /* @__PURE__ */ __name(() => {
+            activePortal = null;
+            activeModalHandles = null;
+          }, "onPortalClosed");
+          const useV3Overlay = Boolean(isPureV3 && v3Ctx && v3Ctx.ui && typeof v3Ctx.ui.openModal === "function");
+          let portal;
+          if (useV3Overlay) {
+            portal = v3Ctx.ui.openModal({
+              title: "한국어 번역 설정",
+              placement: { zone: "surface-center", width: 516 },
+              onClose: onPortalClosed
+            });
+          } else if (hostCapability && typeof hostCapability.openModal === "function") {
+            portal = hostCapability.openModal(QUICK_SETTINGS_MODAL_SLOT_ID, { shadow: true, onClose: onPortalClosed });
+          } else {
+            portal = createFallbackPortal(onPortalClosed);
+          }
+          activePortal = portal;
+          if (!useV3Overlay) {
+            if (portal.element && portal.element.style) {
+              const st = portal.element.style;
+              st.position = "fixed";
+              st.inset = "0";
+              st.top = "36px";
+              st.top = "max(env(titlebar-area-height, 36px), 36px)";
+              st.right = "0";
+              st.bottom = "0";
+              st.left = "0";
+              st.margin = "auto";
+              st.marginTop = "auto";
+              st.marginRight = "auto";
+              st.marginBottom = "auto";
+              st.marginLeft = "auto";
+              st.width = "fit-content";
+              st.height = "fit-content";
+              st.padding = "0";
+              st.border = "none";
+              st.background = "transparent";
+              st.maxWidth = "calc(100vw - 24px)";
+              st.maxHeight = "calc(100vh - 56px)";
+              st.overflow = "visible";
+              st.color = "inherit";
+            }
+            if (portal.element && typeof portal.element.addEventListener === "function") {
+              portal.element.addEventListener("click", (ev) => {
+                if (ev && ev.target === portal.element) {
+                  closeModal();
+                }
+              });
+            }
+          }
+          const mountRoot = portal.bodyEl || portal.element;
+          mountSettingsCard(mountRoot, {
+            embedded: useV3Overlay,
+            onClose: /* @__PURE__ */ __name(() => closeModal(), "onClose"),
+            initialError
+          });
           return portal;
         }
         __name(openModal, "openModal");
@@ -8516,7 +9189,38 @@ var __agyKoTranslatorBundleExports = (() => {
               updateModalLiveHeader(st);
             });
           }
-          if (hostCapability && typeof hostCapability.registerSettingsTab === "function") {
+          if (v3Ctx && v3Ctx.ui && typeof v3Ctx.ui.registerSettingsPage === "function") {
+            try {
+              const pageReg = v3Ctx.ui.registerSettingsPage({
+                id: QUICK_SETTINGS_TAB_ID,
+                title: "한국어 번역 설정",
+                order: 20,
+                width: 516,
+                render(canvasRoot, handle) {
+                  if (activePortal && activePortal !== handle) {
+                    closeModal();
+                  }
+                  activePortal = handle;
+                  mountSettingsCard(canvasRoot, {
+                    embedded: true,
+                    onClose: /* @__PURE__ */ __name(() => {
+                      if (handle && typeof handle.close === "function") {
+                        handle.close();
+                      } else {
+                        closeModal();
+                      }
+                    }, "onClose")
+                  });
+                },
+                onClose() {
+                  activePortal = null;
+                  activeModalHandles = null;
+                }
+              });
+              if (pageReg) hostRegistrations.push(pageReg);
+            } catch (_err) {
+            }
+          } else if (hostCapability && typeof hostCapability.registerSettingsTab === "function") {
             try {
               const reg = hostCapability.registerSettingsTab(QUICK_SETTINGS_TAB_ID, {
                 label: "한국어 번역 설정",
@@ -8526,7 +9230,24 @@ var __agyKoTranslatorBundleExports = (() => {
             } catch (_err) {
             }
           }
-          if (hostCapability && typeof hostCapability.registerAction === "function") {
+          if (v3Ctx && v3Ctx.ui && typeof v3Ctx.ui.registerCommand === "function") {
+            try {
+              const openReg = v3Ctx.ui.registerCommand(HOST_ACTION_IDS.openQuickSettings, {
+                label: "한국어 번역 설정 열기",
+                run: /* @__PURE__ */ __name(() => openModal(), "run")
+              });
+              if (openReg) hostRegistrations.push(openReg);
+            } catch (_err) {
+            }
+            try {
+              const toggleReg = v3Ctx.ui.registerCommand(HOST_ACTION_IDS.toggleEngine, {
+                label: "번역 엔진 전환 (구글 ↔ 로컬 LLM)",
+                run: /* @__PURE__ */ __name(() => toggleEngineQuick(), "run")
+              });
+              if (toggleReg) hostRegistrations.push(toggleReg);
+            } catch (_err) {
+            }
+          } else if (hostCapability && typeof hostCapability.registerAction === "function") {
             try {
               const openReg = hostCapability.registerAction(HOST_ACTION_IDS.openQuickSettings, {
                 label: "한국어 번역 설정 열기",
@@ -8572,11 +9293,20 @@ var __agyKoTranslatorBundleExports = (() => {
             }
             unsubStatus = null;
           }
+          if (v3StatusItemHandle && typeof v3StatusItemHandle.dispose === "function") {
+            try {
+              v3StatusItemHandle.dispose();
+            } catch (_err) {
+            }
+            v3StatusItemHandle = null;
+          }
           while (hostRegistrations.length > 0) {
             const reg = hostRegistrations.pop();
             try {
               if (typeof reg === "function") {
                 reg();
+              } else if (reg && typeof reg.dispose === "function") {
+                reg.dispose();
               } else if (reg && typeof reg.unregister === "function") {
                 reg.unregister();
               }
@@ -8590,13 +9320,7 @@ var __agyKoTranslatorBundleExports = (() => {
             } catch (_err) {
             }
           }
-          if (statusbarRegistered && targetWin.statusbarAddons && typeof targetWin.statusbarAddons.unregister === "function") {
-            try {
-              targetWin.statusbarAddons.unregister(STATUSBAR_ADDON_ID);
-            } catch (_err) {
-            }
-          }
-          statusbarRegistered = false;
+          unregisterLegacyStatusbar();
         }
         __name(dispose, "dispose");
         return {
@@ -8617,6 +9341,8 @@ var __agyKoTranslatorBundleExports = (() => {
         QUICK_SETTINGS_MODAL_SLOT_ID,
         QUICK_SETTINGS_TAB_ID,
         HOST_ACTION_IDS,
+        isTranslationActiveStatus,
+        deriveToggleSaveState,
         computeStatusbarMeta,
         buildProbeUrl,
         createQuickSettingsUi
@@ -8640,6 +9366,12 @@ var __agyKoTranslatorBundleExports = (() => {
         HOST_ACTION_IDS,
         createQuickSettingsUi
       } = require_quick_settings_ui();
+      var {
+        isAddonContextV3,
+        extractV3Context,
+        createHostAwareFetch,
+        createHostCapabilityAdapter
+      } = require_host_capability_adapter();
       var STYLE_ID = "agy-ko-thought-localizer-style";
       var REMOTE_WEB_HOST_PROFILE_ID = "antigravity-remote-web";
       var ANTIGRAVITY_SELECTORS = Object.freeze({
@@ -8681,7 +9413,9 @@ var __agyKoTranslatorBundleExports = (() => {
       }
       __name(buildMinimalOverlayCss, "buildMinimalOverlayCss");
       function resolveUninitializedSettings(hostCapability) {
-        if (!hostCapability || hostCapability.hostProfileId !== REMOTE_WEB_HOST_PROFILE_ID) {
+        if (!hostCapability) return null;
+        const isRemoteSurface = hostCapability.surface === "remote-web" || hostCapability.v3 && hostCapability.v3.env && hostCapability.v3.env.surface === "remote-web" || hostCapability.hostProfileId === REMOTE_WEB_HOST_PROFILE_ID;
+        if (!isRemoteSurface) {
           return null;
         }
         return {
@@ -8721,7 +9455,11 @@ var __agyKoTranslatorBundleExports = (() => {
         buildMinimalOverlayCss,
         resolveUninitializedSettings,
         createAntigravityHostAdapter,
-        createQuickSettingsUi
+        createQuickSettingsUi,
+        isAddonContextV3,
+        extractV3Context,
+        createHostAwareFetch,
+        createHostCapabilityAdapter
       };
     }
   });
@@ -8887,15 +9625,22 @@ var __agyKoTranslatorBundleExports = (() => {
         HOST_ACTION_IDS,
         buildMinimalOverlayCss,
         createAntigravityHostAdapter,
-        createQuickSettingsUi
+        createQuickSettingsUi,
+        isAddonContextV3,
+        extractV3Context,
+        createHostAwareFetch,
+        createHostCapabilityAdapter
       } = require_host_adapter();
       var { createDefaultProviderBundle } = require_default_providers();
       var { createUserscriptFetch } = require_gm_fetch();
-      var PLUGIN_VERSION = "2.4.0";
+      var PLUGIN_VERSION = "3.0.0";
       function createKoTranslator(options = {}) {
-        const effectiveFetch = typeof options.fetchFn === "function" ? options.fetchFn : createUserscriptFetch();
+        const adaptedHostCap = createHostCapabilityAdapter(options.hostCapability || null);
+        const baseFetch = typeof options.fetchFn === "function" ? options.fetchFn : createUserscriptFetch();
+        const effectiveFetch = typeof options.fetchFn === "function" ? options.fetchFn : createHostAwareFetch({ hostCapability: adaptedHostCap, fallbackFetch: baseFetch });
         return createTranslatorRuntime({
           ...options,
+          hostCapability: adaptedHostCap,
           fetchFn: effectiveFetch,
           hostAdapter: options.hostAdapter || createAntigravityHostAdapter(),
           providerBundle: options.providerBundle || createDefaultProviderBundle()
@@ -8906,7 +9651,9 @@ var __agyKoTranslatorBundleExports = (() => {
         const win = globalScope || (typeof window !== "undefined" ? window : null);
         const doc = win && win.document ? win.document : typeof document !== "undefined" ? document : null;
         if (!win || !doc) return null;
-        const resolvedHostCap = hostCapabilityArg && typeof hostCapabilityArg === "object" ? hostCapabilityArg : null;
+        const resolvedHostCap = createHostCapabilityAdapter(
+          hostCapabilityArg && typeof hostCapabilityArg === "object" ? hostCapabilityArg : null
+        );
         const isHostManaged = Boolean(resolvedHostCap);
         if (win.__AGY_KO_TRANSLATOR_AUTO_MOUNT__ === false) {
           if (!isHostManaged) {
@@ -8931,7 +9678,10 @@ var __agyKoTranslatorBundleExports = (() => {
           }
         }
         const initialSettings = !isHostManaged && win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ && typeof win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ === "object" ? win.__AGY_KO_TRANSLATOR_INITIAL_SETTINGS__ : null;
-        const effectiveFetch = createUserscriptFetch();
+        const effectiveFetch = createHostAwareFetch({
+          hostCapability: resolvedHostCap,
+          fallbackFetch: createUserscriptFetch()
+        });
         const instance = createKoTranslator({
           win,
           doc,
@@ -8989,6 +9739,10 @@ var __agyKoTranslatorBundleExports = (() => {
         createTranslatorRuntime,
         createKoTranslator,
         createQuickSettingsUi,
+        isAddonContextV3,
+        extractV3Context,
+        createHostAwareFetch,
+        createHostCapabilityAdapter,
         mountIfBrowser
       };
     }

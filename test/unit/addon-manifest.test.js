@@ -14,20 +14,32 @@ const {
 } = require('../../host/addon-registry');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const SOURCE_MANIFEST_PATH = path.join(REPO_ROOT, 'addon-manifest.v2.json');
+const SOURCE_MANIFEST_PATH = path.join(REPO_ROOT, 'addon-manifest.v3.json');
 
-test('addon-manifest.v2.json satisfies AddonManifest.v2 renderer-only + settingsBridge contract invariants', () => {
+test('addon-manifest.v3.json satisfies AddonManifest.v3 API-First + permissions + settingsBridge contract invariants', () => {
   const manifest = loadSourceAddonManifest(SOURCE_MANIFEST_PATH);
-  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.schemaVersion, 3);
+  assert.equal(manifest.apiVersion, 3);
   assert.equal(manifest.pluginId, 'ko-thought-translator');
-  assert.equal(manifest.version, '2.4.0');
+  assert.equal(manifest.version, '3.0.0');
   assert.equal(manifest.trustLevel, 'trusted');
   assert.equal(manifest.compatibility.hostProfile, 'antigravity-desktop');
   assert.deepEqual(manifest.compatibility.hostProfiles, ['antigravity-desktop', 'antigravity-remote-web']);
-  assert.equal(manifest.compatibility.minHostVersion, '2.3.0');
+  assert.deepEqual(manifest.compatibility.surfaces, ['desktop', 'remote-web']);
+  assert.equal(manifest.compatibility.minHostVersion, '3.0.0');
   assert.deepEqual(manifest.capabilities, ['renderer']);
   assert.equal(manifest.entry.rendererScript, 'dist/renderer.js');
   assert.equal(manifest.entry.mainHookScript, undefined);
+  assert.deepEqual(manifest.permissions.net, {
+    httpsHosts: ['translate.googleapis.com'],
+    localLoopback: [11434],
+  });
+  assert.deepEqual(manifest.permissions.dom, { documentTransform: true });
+  assert.deepEqual(manifest.permissions.services, { consume: ['host.statusbar'] });
+  assert.equal(manifest.permissions.ui.statusItems, true);
+  assert.equal(manifest.permissions.ui.settingsPages, true);
+  assert.equal(manifest.permissions.ui.commands, true);
+  assert.equal(manifest.permissions.ui.overlays, true);
   assert.deepEqual(manifest.settingsBridge, {
     fileName: 'ko_translator_settings.json',
     maxBytes: 65536,
@@ -48,21 +60,21 @@ test('addon-manifest.v2.json satisfies AddonManifest.v2 renderer-only + settings
 
   const checkDesktop = validateAddonManifestContract(manifest, null, {
     expectedHostProfileId: 'antigravity-desktop',
-    hostVersion: '2.3.0',
+    hostVersion: '3.0.0',
     checkFilesExist: false,
   });
   assert.equal(checkDesktop.ok, true);
 
   const checkRemoteWeb = validateAddonManifestContract(manifest, null, {
     expectedHostProfileId: 'antigravity-remote-web',
-    hostVersion: '2.3.0',
+    hostVersion: '3.0.0',
     checkFilesExist: false,
   });
   assert.equal(checkRemoteWeb.ok, true);
 
   const checkUnlistedProfile = validateAddonManifestContract(manifest, null, {
     expectedHostProfileId: 'unknown-host-profile',
-    hostVersion: '2.3.0',
+    hostVersion: '3.0.0',
     checkFilesExist: false,
   });
   assert.equal(checkUnlistedProfile.ok, false);
@@ -174,16 +186,16 @@ test('addon-registry enforces v2 path confinement, rejects mainHook, restricted 
       assert.equal(badDos.reason, 'ERR_INVALID_SETTINGS_BRIDGE');
     }
 
-    // 8. I7 & v2.3.0: compatibility.minHostVersion SemVer comparison and hostProfiles/excludeHostProfiles
+    // 8. I7 & v3.0.0: compatibility.minHostVersion SemVer comparison and hostProfiles/excludeHostProfiles
     const tooOldHost = validateAddonManifestContract(baseManifest, pluginsRoot, {
-      hostVersion: '2.2.0',
+      hostVersion: '2.9.0',
       checkFilesExist: false,
     });
     assert.equal(tooOldHost.ok, false);
     assert.equal(tooOldHost.reason, 'ERR_HOST_VERSION_TOO_OLD');
 
     const okHost = validateAddonManifestContract(baseManifest, pluginsRoot, {
-      hostVersion: '2.3.0',
+      hostVersion: '3.0.0',
       checkFilesExist: false,
     });
     assert.equal(okHost.ok, true);
@@ -197,7 +209,7 @@ test('addon-registry enforces v2 path confinement, rejects mainHook, restricted 
         },
       },
       pluginsRoot,
-      { expectedHostProfileId: 'antigravity-remote-web', hostVersion: '2.3.0', checkFilesExist: false }
+      { expectedHostProfileId: 'antigravity-remote-web', hostVersion: '3.0.0', checkFilesExist: false }
     );
     assert.equal(excludedProfile.ok, false);
     assert.equal(excludedProfile.reason, 'ERR_INCOMPATIBLE_HOST_PROFILE');
@@ -211,10 +223,25 @@ test('addon-registry enforces v2 path confinement, rejects mainHook, restricted 
         },
       },
       pluginsRoot,
-      { expectedHostProfileId: 'antigravity-desktop', hostVersion: '2.3.0', checkFilesExist: false }
+      { expectedHostProfileId: 'antigravity-desktop', hostVersion: '3.0.0', checkFilesExist: false }
     );
     assert.equal(invalidHostProfiles.ok, false);
     assert.equal(invalidHostProfiles.reason, 'ERR_INVALID_HOST_PROFILES');
+
+    // 9. v3 restricted localLoopback MUST fail closed
+    const badRestrictedLoopback = validateAddonManifestContract(
+      {
+        ...baseManifest,
+        trustLevel: 'restricted',
+        settingsBridge: undefined,
+        uiSlots: [],
+        permissions: { ...baseManifest.permissions, dom: undefined },
+      },
+      pluginsRoot,
+      { checkFilesExist: false }
+    );
+    assert.equal(badRestrictedLoopback.ok, false);
+    assert.equal(badRestrictedLoopback.reason, 'ERR_RESTRICTED_LOCAL_LOOPBACK_FORBIDDEN');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -84,7 +84,7 @@ function createTranslatorRuntime({
   providerBundle = null,
   hostCapability = null,
   settings = null,
-  version = '2.4.0',
+  version = '3.0.0',
   fetchFn = null,
   onStatus = null,
 } = {}) {
@@ -712,6 +712,7 @@ function createTranslatorRuntime({
       version,
       hostId:
         (hostCapability && typeof hostCapability.hostProfileId === 'string' && hostCapability.hostProfileId) ||
+        (hostCapability && typeof hostCapability.surface === 'string' && hostCapability.surface) ||
         hostAdapter.id ||
         'unknown',
       started,

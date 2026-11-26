@@ -1,14 +1,24 @@
-# Antigravity 2.0 한국어 번역기 (`v2.4.0` · Desktop & Remote Web)
+# Antigravity 2.0 한국어 번역기 (`v3.0.0` · Desktop & Remote Web)
 
-[English README](./README.md) | [릴리스 노트 (`v2.4.0` 영문/국문)](./RELEASE_NOTES_v2.4.0.md)
+[English README](./README.md) | [릴리스 노트 (`v3.0.0` 영문/국문)](./RELEASE_NOTES_v3.0.0.md)
 
-공용 네이티브 애드온 호스트([antigravity-addons](https://github.com/jaeseongs95/antigravity-addons) `>= v2.3.0`, 원격 다중 Userscript 공존 `>= v2.8.0`, `AddonManifest.v2`) 위에서 **Antigravity 2.0 데스크톱 네이티브 앱 및 원격 웹(`antigravity.google.com/r/...`)** 양쪽을 지원하는 렌더러 전용 한국어 번역 플러그인입니다.
+공용 네이티브 애드온 호스트([antigravity-addons](https://github.com/jaeseongs95/antigravity-addons) `>= v3.0.0`, `AddonManifest.v3` API-First) 위에서 **Antigravity 2.0 데스크톱 네이티브 앱 및 원격 웹(`antigravity.google.com/r/...`)** 양쪽을 지원하는 렌더러 전용 한국어 번역 플러그인입니다.
 
 ### 원격 웹 1클릭 공개 HTTPS Userscript 설치 (사설 IP·개인 PC 불필요)
 1. 브라우저(PC Chrome/Edge/Firefox 또는 모바일 Safari Userscripts / Firefox / Edge Canary)에 **Tampermonkey**, **Violentmonkey**, 또는 **Userscripts(iOS Safari)** 를 설치합니다.
 2. 아래 공개 HTTPS 링크를 클릭해 1클릭 설치합니다(공용 호스트 라이브러리 `@require` 및 자동 업데이트 포함):
    - 👉 **[ko-thought-translator.user.js 설치하기](https://github.com/jaeseongs95/antigravity-ko-translator/releases/latest/download/ko-thought-translator.user.js)**
 3. `https://antigravity.google.com`을 열면 우하단 통합 Addons 드로어에 자동 합류하며, `antigravity-statusbar.user.js` 등 다른 공개 HTTPS 애드온 Userscript와 단일 드로어에서 충돌 없이 공존합니다.
+
+### v3.0.0 주요 업데이트
+- **`AddonManifest.v3` API-First 공식 전환 (`schemaVersion: 3`, `apiVersion: 3`, `minHostVersion: "3.0.0"`)**:
+  - [`addon-manifest.v3.json`](./addon-manifest.v3.json) 정본을 추가하고 `permissions.ui`(`statusItems`, `settingsPages`, `commands`, `overlays`, `toasts`, `canvas`), `permissions.storage`, `permissions.services.consume: ["host.statusbar"]`, `permissions.net`(`httpsHosts: ["translate.googleapis.com"]`, `localLoopback: [11434]`), `permissions.dom.documentTransform: true`, `compatibility.surfaces: ["desktop", "remote-web"]`를 선언했습니다.
+  - `src/adapters/antigravity/host-capability-adapter.js`를 추가해 `AddonContextV3`(`ui.registerStatusItem`, `ui.registerSettingsPage`, `ui.registerCommand`, `ui.openModal`, `net.fetch` 듀얼 키 라우팅, `dom.isElementInsideIgnored`, `settingsBridge`/`storage`, `lifecycle.onDispose`)를 주 경로로 사용하면서 기존 v2 `addonHost` 및 단독 실행 호환성도 보존했습니다.
+- **빠른 설정 팝업 UI/UX 개선**:
+  - 의미가 겹치던 기존 1번(`한국어 번역 사용`)과 4번(`영문 고정 UI 한글화`) 체크박스를 **단일 `영문 UI 한글화` 슬라이드 ON/OFF 스위치**로 통합했습니다.
+  - 모든 토글 옵션(`영문 UI 한글화`, `Thinking(추론 과정) 한국어 번역`, `Thinking 블록 표시`, 로컬 LLM `원격 HTTPS 엔드포인트 허용`)을 접근성(`role="switch"`, 포커스 링, `prefers-reduced-motion`)과 호스트 테마 토큰(`--ag-*`)을 지원하는 **슬라이드 ON/OFF 스위치**로 통일했습니다.
+- **`@antigravity-addons/sdk` Desktop/Remote Web 패리티 및 Chromium 시각 검증**:
+  - 실제 `antigravity-addons v3.0.0` 매니페스트 검증기와 `@antigravity-addons/sdk` `createTestHost`(`desktop` / `remote-web`) 및 실제 Headless Chromium Blink CSS·Shadow DOM 모달 E2E 시험을 모두 통과했습니다.
 
 ### v2.4.0 주요 업데이트
 - **공개 HTTPS 모듈형 Userscript 공식 배포 (`ko-thought-translator.user.js` + `.meta.js`)**:
@@ -41,27 +51,27 @@
 
 ## 아키텍처
 
-- `addon-manifest.v2.json` — `AddonManifest.v2` 다중 프로필 선언 정본 (`antigravity-desktop` + `antigravity-remote-web`, `minHostVersion: "2.3.0"`)
+- `addon-manifest.v3.json` — `AddonManifest.v3` API-First 다중 표면 선언 정본 (`desktop` + `remote-web`, `minHostVersion: "3.0.0"`)
 - `src/core/` — 벤더·DOM 비종속 핵심 도메인 (`disposable-registry`, `dictionary-port`, `text-tokenizer`, `provider-registry`, `translation-service`)
-- `src/adapters/translators/` — 번역기 어댑터 (`google-translate`, `local-llm`, `custom-provider`, `endpoint-validator`)
-- `src/adapters/antigravity/` — 순수 읽기 전용 DOM 어댑터 (`dictionaries/`, `dom-tokenizer`, `thinking-translator`, `trigger-controller`, `ui-localizer`, `quick-settings-ui`, 캐시 전용 `storage-port`)
+- `src/adapters/translators/` — 번역기 어댑터 (`google-translate`, `local-llm`, `custom-provider`, `endpoint-validator`, `gm-fetch`)
+- `src/adapters/antigravity/` — 순수 읽기 전용 DOM 어댑터 (`dictionaries/`, `dom-tokenizer`, `thinking-translator`, `trigger-controller`, `ui-localizer`, `host-capability-adapter`, 슬라이드 스위치 `quick-settings-ui`, 캐시 전용 `storage-port`)
 - `src/runtime/` — 벤더 중립 `createTranslatorRuntime` 및 `observer-scheduler`
-- `host/` — 다중 프로필 검증 `addon-registry.js`, `config-store.js`, `paths.js`, `profiles/antigravity.js`, CLI (`--status`/`--install`/`--uninstall`/`--rollback`)
+- `host/` — `AddonManifest.v3/v2` 검증 `addon-registry.js`, `config-store.js`, `paths.js`, `profiles/antigravity.js`, CLI (`--status`/`--install`/`--uninstall`/`--rollback`)
 - `dist/renderer.js` — 결정적 단일 렌더러 번들 (`scripts/build.js`)
 
 ## 설치 및 명령어
 
-심볼릭 링크 없이 실제 파일을 `~/.gemini/config/plugins/ko-thought-translator/`에 복사한 뒤, 호스트 `v2.3.0+`에서 매니페스트 등록과 신뢰 승인을 진행합니다.
+심볼릭 링크 없이 실제 파일을 `~/.gemini/config/plugins/ko-thought-translator/`에 복사한 뒤, 호스트 `v3.0.0+`에서 v3 매니페스트 등록과 신뢰 승인을 진행합니다.
 
 ```bash
 npm run build            # dist/renderer.js 단일 번들 빌드
-npm test                 # 번들 무결성 확인 및 전체 단위·Chromium E2E 시험 실행
-npm run status           # AddonManifest.v2·설정 상태 읽기 전용 조회
+npm test                 # 번들 무결성 확인 및 전체 단위·SDK v3 패리티·Chromium E2E 시험 실행
+npm run status           # AddonManifest.v3·설정 상태 읽기 전용 조회
 npm run install:addon    # addons.d/ko-thought-translator.json 등록 및 누락 설정 초기화
 npm run uninstall:addon  # 매니페스트 및 전용 설정 파일 제거
 
-# antigravity-native-addon-host (>= v2.3.0)에서 실행:
-addon-host --register ~/.gemini/config/plugins/ko-thought-translator/addon-manifest.v2.json
+# antigravity-addons (>= v3.0.0)에서 실행:
+addon-host --register ~/.gemini/config/plugins/ko-thought-translator/addon-manifest.v3.json
 addon-host trust approve ko-thought-translator
 addon-host --doctor
 addon-host --profile remote-web --doctor
