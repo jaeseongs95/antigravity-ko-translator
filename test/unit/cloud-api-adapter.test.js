@@ -76,7 +76,7 @@ test('cloud-api builds protocol-accurate requests and parses responses for OpenA
   };
 
   // 1. OpenAI
-  let currentCfg = { ...DEFAULT_CLOUD_API_CONFIG };
+  let currentCfg = { ...DEFAULT_CLOUD_API_CONFIG, model: 'gpt-6-luna' };
   const openaiAdapter = createCloudApiAdapter({
     cloudApiConfigPort: { getCloudApiConfig: () => currentCfg },
     fetchFn: makeFetch(() => ({
@@ -311,13 +311,25 @@ test('Quick Settings UI renders 3rd 외부 API card, saves secret via ctx.secret
     const cloudSection = card.querySelector('[data-testid="ko-qs-cloud-section"]');
     assert.equal(cloudSection.hidden, false);
 
-    // Switch preset to anthropic -> auto-fills Anthropic defaults
+    // Switch preset to anthropic -> fills baseUrl ONLY, ZERO hardcoded model names before API fetch
     const presetSel = card.querySelector('[data-testid="ko-qs-cloud-preset"]');
     presetSel.value = 'anthropic';
     presetSel.dispatchEvent(new win.Event('change'));
     await new Promise((r) => setTimeout(r, 15));
     assert.equal(card.querySelector('[data-testid="ko-qs-cloud-url"]').value, CLOUD_API_PRESETS.anthropic.baseUrl);
-    assert.equal(card.querySelector('[data-testid="ko-qs-cloud-model"]').value, CLOUD_API_PRESETS.anthropic.defaultModel);
+    assert.equal(card.querySelector('[data-testid="ko-qs-cloud-model"]').value, '');
+    const anthPreFetchOpts = Array.from(
+      card.querySelectorAll('[data-testid="ko-qs-cloud-model-select"] option')
+    ).map((o) => o.value);
+    assert.deepEqual(anthPreFetchOpts, ['', '__custom__']);
+
+    // Select custom model input and enter an active Anthropic model ID
+    const modelSel = card.querySelector('[data-testid="ko-qs-cloud-model-select"]');
+    const modelInp = card.querySelector('[data-testid="ko-qs-cloud-model"]');
+    modelSel.value = '__custom__';
+    modelSel.dispatchEvent(new win.Event('change'));
+    assert.equal(modelInp.hidden, false);
+    modelInp.value = 'claude-sonnet-5-5';
 
     // Enter API key & click Connection Test -> saves secret into ctx.secrets, clears input, probes via secretHeaders
     const keyInp = card.querySelector('[data-testid="ko-qs-cloud-apikey"]');
@@ -396,8 +408,9 @@ test(
 
         const adapted = createHostCapabilityAdapter(v3Ctx);
         const hostFetch = createHostAwareFetch({ hostCapability: adapted });
+        const sdkCloudCfg = { ...DEFAULT_CLOUD_API_CONFIG, model: 'gpt-6-luna' };
         const probe = await probeCloudApiConnection({
-          config: DEFAULT_CLOUD_API_CONFIG,
+          config: sdkCloudCfg,
           fetchFn: hostFetch,
         });
         assert.equal(probe.ok, true);
@@ -420,7 +433,7 @@ test(
         });
         translator.start();
         ui.start();
-        await translator.saveSettings({ provider: 'cloud-api', cloudApiConfig: DEFAULT_CLOUD_API_CONFIG });
+        await translator.saveSettings({ provider: 'cloud-api', cloudApiConfig: sdkCloudCfg });
       });
 
       assert.ok(ctx);
@@ -494,9 +507,9 @@ test('cloud-api uses max_completion_tokens and omits temperature:0 for modern Op
 });
 
 test('fetchCloudApiModels parses live model lists from OpenAI, Anthropic, Gemini, and OpenAI-compat and Quick Settings UI populates model select box with custom fallback', async () => {
-  // 1. OpenAI: filters out non-chat models & sorts newest first
+  // 1. OpenAI: filters out voice/live, healthcare, pro, dated snapshots, non-chat, and deprecated models; sorts newest first
   const openaiRes = await fetchCloudApiModels({
-    config: { preset: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-6-luna' },
+    config: { preset: 'openai', baseUrl: 'https://api.openai.com/v1', model: '' },
     fetchFn: async (url, init) => {
       assert.equal(url, 'https://api.openai.com/v1/models');
       assert.equal(init.method, 'GET');
@@ -510,8 +523,17 @@ test('fetchCloudApiModels parses live model lists from OpenAI, Anthropic, Gemini
           data: [
             { id: 'text-embedding-3-small', created: 200 },
             { id: 'whisper-1', created: 100 },
-            { id: 'gpt-4o-mini', created: 1700000000 },
-            { id: 'gpt-6-luna', created: 1790000000 },
+            { id: 'gpt-live-1.1', created: 1795000010 },
+            { id: 'gpt-6.2-sol', created: 1795000009 },
+            { id: 'gpt-6.2-sol-healthcare', created: 1795000008 },
+            { id: 'gpt-6-luna', created: 1795000007 },
+            { id: 'gpt-live-1', created: 1795000006 },
+            { id: 'chat-latest', created: 1795000005 },
+            { id: 'gpt-5.5-pro-2026-04-23', created: 1795000004 },
+            { id: 'gpt-5.5-pro', created: 1795000003 },
+            { id: 'gpt-5.5-2026-04-23', created: 1795000002 },
+            { id: 'gpt-5.5', created: 1795000001 },
+            { id: 'gpt-deprecated-test', created: 1795000000, deprecated: true },
           ],
         }),
       };
@@ -520,14 +542,14 @@ test('fetchCloudApiModels parses live model lists from OpenAI, Anthropic, Gemini
   assert.equal(openaiRes.ok, true);
   assert.deepEqual(
     openaiRes.models.map((m) => m.id),
-    ['gpt-6-luna', 'gpt-4o-mini']
+    ['gpt-6.2-sol', 'gpt-6-luna', 'gpt-5.5']
   );
 
-  // 2. Anthropic: sends anthropic-version + x-api-key to /v1/models
+  // 2. Anthropic: queries lifecycle=active and excludes deprecated/retired/legacy entries client-side too
   const anthRes = await fetchCloudApiModels({
-    config: { preset: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-haiku-4-5-20251001' },
+    config: { preset: 'anthropic', baseUrl: 'https://api.anthropic.com', model: '' },
     fetchFn: async (url, init) => {
-      assert.equal(url, 'https://api.anthropic.com/v1/models?limit=100');
+      assert.equal(url, 'https://api.anthropic.com/v1/models?limit=100&lifecycle=active');
       assert.equal(init.headers['anthropic-version'], '2023-06-01');
       assert.deepEqual(init.secretHeaders, {
         'x-api-key': { secretKey: 'cloud_api_key_anthropic' },
@@ -537,8 +559,10 @@ test('fetchCloudApiModels parses live model lists from OpenAI, Anthropic, Gemini
         status: 200,
         json: async () => ({
           data: [
-            { id: 'claude-sonnet-4-5-20250929', display_name: 'Claude Sonnet 4.5', created_at: '2025-09-29T00:00:00Z' },
-            { id: 'claude-haiku-4-5-20251001', display_name: 'Claude Haiku 4.5', created_at: '2025-10-01T00:00:00Z' },
+            { id: 'claude-sonnet-5-5', display_name: 'Claude Sonnet 5.5', lifecycle: 'active', deprecated_at: null, created_at: '2026-09-01T00:00:00Z' },
+            { id: 'claude-haiku-5-5', display_name: 'Claude Haiku 5.5', lifecycle: 'active', deprecated_at: null, created_at: '2026-10-01T00:00:00Z' },
+            { id: 'claude-sonnet-4-5-20250929', display_name: 'Claude Sonnet 4.5', lifecycle: 'deprecated', deprecated_at: '2026-09-30T00:00:00Z', created_at: '2025-09-29T00:00:00Z' },
+            { id: 'claude-sonnet-4-20250514', display_name: 'Claude Sonnet 4', lifecycle: 'retired', deprecated_at: '2026-01-01T00:00:00Z', created_at: '2025-05-14T00:00:00Z' },
           ],
         }),
       };
@@ -547,12 +571,12 @@ test('fetchCloudApiModels parses live model lists from OpenAI, Anthropic, Gemini
   assert.equal(anthRes.ok, true);
   assert.deepEqual(
     anthRes.models.map((m) => m.id),
-    ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929']
+    ['claude-haiku-5-5', 'claude-sonnet-5-5']
   );
 
-  // 3. Gemini: filters generateContent & strips models/ prefix
+  // 3. Gemini: filters generateContent, drops deprecated/non-text/numbered revision duplicates & strips models/ prefix
   const gemRes = await fetchCloudApiModels({
-    config: { preset: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-2.5-flash' },
+    config: { preset: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', model: '' },
     fetchFn: async (url, init) => {
       assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=100');
       assert.deepEqual(init.secretHeaders, {
@@ -564,7 +588,10 @@ test('fetchCloudApiModels parses live model lists from OpenAI, Anthropic, Gemini
         json: async () => ({
           models: [
             { name: 'models/embedding-001', supportedGenerationMethods: ['embedContent'] },
-            { name: 'models/gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/imagen-4.0', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-2.5-flash', description: 'Deprecated legacy model', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-3.8-flash-001', displayName: 'Gemini 3.8 Flash 001', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', supportedGenerationMethods: ['generateContent'] },
           ],
         }),
       };
@@ -573,7 +600,7 @@ test('fetchCloudApiModels parses live model lists from OpenAI, Anthropic, Gemini
   assert.equal(gemRes.ok, true);
   assert.deepEqual(
     gemRes.models.map((m) => m.id),
-    ['gemini-2.5-flash']
+    ['gemini-3.8-flash']
   );
 
   // 4. OpenAI-compat URL normalization

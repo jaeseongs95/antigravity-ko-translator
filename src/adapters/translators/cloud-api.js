@@ -42,14 +42,7 @@ const CLOUD_API_PRESETS = Object.freeze({
     label: 'OpenAI',
     protocol: 'openai',
     baseUrl: 'https://api.openai.com/v1',
-    defaultModel: 'gpt-4o-mini',
-    recommendedModels: Object.freeze([
-      'gpt-6-luna',
-      'gpt-6-sol',
-      'gpt-5-mini',
-      'gpt-4.1-mini',
-      'gpt-4o-mini',
-    ]),
+    defaultModel: '',
     secretKey: 'cloud_api_key_openai',
     headerName: 'Authorization',
     headerPrefix: 'Bearer ',
@@ -60,12 +53,7 @@ const CLOUD_API_PRESETS = Object.freeze({
     label: 'Anthropic (Claude)',
     protocol: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
-    defaultModel: 'claude-haiku-4-5-20251001',
-    recommendedModels: Object.freeze([
-      'claude-haiku-4-5-20251001',
-      'claude-sonnet-4-5-20250929',
-      'claude-opus-4-5-20251101',
-    ]),
+    defaultModel: '',
     secretKey: 'cloud_api_key_anthropic',
     headerName: 'x-api-key',
     headerPrefix: '',
@@ -76,12 +64,7 @@ const CLOUD_API_PRESETS = Object.freeze({
     label: 'Google Gemini',
     protocol: 'gemini',
     baseUrl: 'https://generativelanguage.googleapis.com',
-    defaultModel: 'gemini-2.5-flash',
-    recommendedModels: Object.freeze([
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-      'gemini-2.5-pro',
-    ]),
+    defaultModel: '',
     secretKey: 'cloud_api_key_gemini',
     headerName: 'x-goog-api-key',
     headerPrefix: '',
@@ -92,14 +75,7 @@ const CLOUD_API_PRESETS = Object.freeze({
     label: 'OpenAI 호환 (OpenRouter · DeepSeek · Groq 등)',
     protocol: 'openai',
     baseUrl: 'https://openrouter.ai/api/v1',
-    defaultModel: 'openai/gpt-4o-mini',
-    recommendedModels: Object.freeze([
-      'openai/gpt-4o-mini',
-      'openai/gpt-6-luna',
-      'anthropic/claude-haiku-4.5',
-      'google/gemini-2.5-flash',
-      'deepseek/deepseek-chat',
-    ]),
+    defaultModel: '',
     secretKey: 'cloud_api_key_openai_compat',
     headerName: 'Authorization',
     headerPrefix: 'Bearer ',
@@ -148,7 +124,7 @@ function getCloudSecretKeyForPreset(rawPreset) {
   return getCloudPreset(rawPreset).secretKey;
 }
 
-function validateCloudApiConfig(rawCfg = {}) {
+function validateCloudApiConfig(rawCfg = {}, { requireModel = false } = {}) {
   const src = rawCfg && typeof rawCfg === 'object' && !Array.isArray(rawCfg) ? rawCfg : {};
   const presetId = normalizeCloudPresetId(src.preset);
   const preset = CLOUD_API_PRESETS[presetId];
@@ -163,9 +139,12 @@ function validateCloudApiConfig(rawCfg = {}) {
     throw new Error('ERR_CLOUD_API_HTTPS_REQUIRED');
   }
 
-  const rawModel =
-    typeof src.model === 'string' && src.model.trim() ? src.model.trim() : preset.defaultModel;
-  if (!SAFE_MODEL_RE.test(rawModel)) {
+  const rawModel = typeof src.model === 'string' ? src.model.trim() : '';
+  if (!rawModel) {
+    if (requireModel) {
+      throw new Error('ERR_CLOUD_API_MODEL_REQUIRED');
+    }
+  } else if (!SAFE_MODEL_RE.test(rawModel)) {
     throw new Error('ERR_CLOUD_API_INVALID_MODEL');
   }
 
@@ -205,6 +184,9 @@ function buildCloudApiUrl(validated) {
 }
 
 function buildCloudApiRequest(validated, userPrompt, { maxTokens = 1024 } = {}) {
+  if (!validated || !validated.model) {
+    throw new Error('ERR_CLOUD_API_MODEL_REQUIRED');
+  }
   const url = buildCloudApiUrl(validated);
   const headers = { 'Content-Type': 'application/json' };
   const secretHeaders = {
@@ -344,6 +326,9 @@ function formatCloudApiError(errOrStatus, detail = '') {
     return `외부 API HTTP 오류 (${errOrStatus})${suffix}`;
   }
   const msg = String(errOrStatus && errOrStatus.message ? errOrStatus.message : errOrStatus || '');
+  if (msg === 'ERR_CLOUD_API_MODEL_REQUIRED') {
+    return '모델이 선택되지 않았습니다. API 키 입력 후 [불러오기]로 모델을 선택하거나 직접 입력해 주세요.';
+  }
   if (msg.startsWith('ERR_SECRET_NOT_FOUND:')) {
     return 'API 키가 등록되지 않았습니다. 설정에서 API 키를 입력하고 저장해 주세요.';
   }
@@ -360,7 +345,7 @@ function buildCloudModelsUrl(validated) {
   const cleanBase = String(validated.baseUrl || '').replace(/\/+$/, '');
   if (validated.protocol === 'anthropic') {
     const stripped = cleanBase.replace(/\/v1\/messages$/i, '').replace(/\/v1$/i, '');
-    return `${stripped}/v1/models?limit=100`;
+    return `${stripped}/v1/models?limit=100&lifecycle=active`;
   }
   if (validated.protocol === 'gemini') {
     const stripped = cleanBase
@@ -375,18 +360,45 @@ function buildCloudModelsUrl(validated) {
   return `${stripped}/v1/models`;
 }
 
-const OPENAI_NON_CHAT_MODEL_RE =
-  /(?:embedding|whisper|tts-|dall-e|moderation|realtime|transcribe|sora|babbage|davinci|audio-preview|image-|codex-mini-latest-internal)/i;
+const OPENAI_NON_CHAT_OR_RETIRED_MODEL_RE =
+  /(?:^gpt-live(?:$|-|\.)|^ft:|embedding|whisper|tts(?:$|-)|dall-e|moderation|realtime|transcribe|diarize|sora|audio|image|video|search(?:-preview|-api)?(?:$|-)|deep-research|computer-use|-healthcare(?:$|-)|-pro(?:$|-)|-codex(?:$|-)|^codex(?:$|-|\.)|-instruct(?:$|-)|^chat-latest$|^chatgpt-|^babbage|^davinci|^curie|^ada(?:$|-)|^gpt-3\.5(?:$|-|\.)|^gpt-4(?:$|-(?:0|1|3|turbo|vision|preview))|^o1(?:$|-))/i;
+const OPENAI_DATED_SNAPSHOT_RE = /-(?:\d{4}-\d{2}-\d{2}|\d{4})$/;
+const GEMINI_NON_TEXT_MODEL_RE =
+  /(?:^|-)(?:imagen|veo|embedding|aqa|tts|image|audio|live|robotics|computer-use|deep-research|bisociative)(?:$|-)/i;
+const GEMINI_DEPRECATED_DESC_RE = /(?:deprecated|discontinued|retired|shut\s*down|legacy\s+model)/i;
+const GEMINI_NUMBERED_REV_RE = /-\d{3}$/;
+const INACTIVE_STATUS_SET = new Set(['deprecated', 'retired', 'inactive', 'shutdown', 'discontinued', 'legacy']);
 const MAX_RETURNED_CLOUD_MODELS = 200;
 
-function parseCloudApiModelsResponse(protocol, data, { preset = null } = {}) {
+function isInactiveModelMetadata(item, nowMs = Date.now()) {
+  if (!item || typeof item !== 'object') return true;
+  if (item.deprecated === true || item.retired === true || item.is_deprecated === true) return true;
+  if (item.active === false || item.enabled === false) return true;
+  if (typeof item.lifecycle === 'string' && item.lifecycle.trim()) {
+    if (item.lifecycle.trim().toLowerCase() !== 'active') return true;
+  }
+  if (typeof item.status === 'string' && item.status.trim()) {
+    if (INACTIVE_STATUS_SET.has(item.status.trim().toLowerCase())) return true;
+  }
+  if (typeof item.deprecated_at === 'string' && item.deprecated_at.trim()) return true;
+  if (typeof item.deprecatedAt === 'string' && item.deprecatedAt.trim()) return true;
+  for (const field of ['retires_at', 'retired_at', 'shutdown_date', 'sunset_date']) {
+    if (typeof item[field] === 'string' && item[field].trim()) {
+      const ts = Date.parse(item[field]);
+      if (Number.isFinite(ts) && ts <= nowMs) return true;
+    }
+  }
+  return false;
+}
+
+function parseCloudApiModelsResponse(protocol, data, { preset = null, nowMs = Date.now() } = {}) {
   const seen = new Set();
   const rawItems = [];
 
   if (protocol === 'gemini') {
     const list = data && Array.isArray(data.models) ? data.models : [];
     for (const item of list) {
-      if (!item || typeof item !== 'object') continue;
+      if (isInactiveModelMetadata(item, nowMs)) continue;
       if (
         Array.isArray(item.supportedGenerationMethods) &&
         item.supportedGenerationMethods.length > 0 &&
@@ -394,8 +406,12 @@ function parseCloudApiModelsResponse(protocol, data, { preset = null } = {}) {
       ) {
         continue;
       }
+      if (typeof item.description === 'string' && GEMINI_DEPRECATED_DESC_RE.test(item.description)) {
+        continue;
+      }
       const id = String(item.name || '').replace(/^models\//i, '').trim();
       if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
+      if (GEMINI_NON_TEXT_MODEL_RE.test(id)) continue;
       seen.add(id);
       const displayName = typeof item.displayName === 'string' && item.displayName.trim() ? item.displayName.trim() : '';
       rawItems.push({
@@ -407,7 +423,7 @@ function parseCloudApiModelsResponse(protocol, data, { preset = null } = {}) {
   } else if (protocol === 'anthropic') {
     const list = data && Array.isArray(data.data) ? data.data : [];
     for (const item of list) {
-      if (!item || typeof item !== 'object') continue;
+      if (isInactiveModelMetadata(item, nowMs)) continue;
       const id = String(item.id || '').trim();
       if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
       seen.add(id);
@@ -422,7 +438,7 @@ function parseCloudApiModelsResponse(protocol, data, { preset = null } = {}) {
     const list =
       data && Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : [];
     for (const item of list) {
-      if (!item || typeof item !== 'object') continue;
+      if (isInactiveModelMetadata(item, nowMs)) continue;
       const id = String(item.id || '').trim();
       if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
       seen.add(id);
@@ -437,8 +453,14 @@ function parseCloudApiModelsResponse(protocol, data, { preset = null } = {}) {
 
   let filtered = rawItems;
   if (preset === 'openai') {
-    const chatOnly = rawItems.filter((m) => !OPENAI_NON_CHAT_MODEL_RE.test(m.id));
-    if (chatOnly.length > 0) filtered = chatOnly;
+    const chatOnly = rawItems.filter((m) => !OPENAI_NON_CHAT_OR_RETIRED_MODEL_RE.test(m.id));
+    const undated = chatOnly.filter((m) => !OPENAI_DATED_SNAPSHOT_RE.test(m.id));
+    filtered = undated.length > 0 ? undated : chatOnly;
+  } else if (protocol === 'gemini') {
+    const idSet = new Set(rawItems.map((m) => m.id));
+    filtered = rawItems.filter(
+      (m) => !(GEMINI_NUMBERED_REV_RE.test(m.id) && idSet.has(m.id.replace(GEMINI_NUMBERED_REV_RE, '')))
+    );
   }
 
   filtered.sort((a, b) => {
@@ -453,7 +475,7 @@ async function fetchCloudApiModels({ config, fetchFn, signal = undefined } = {})
   if (typeof fetchFn !== 'function') {
     return { ok: false, status: 0, models: [], reason: 'ERR_FETCH_UNAVAILABLE' };
   }
-  const validated = validateCloudApiConfig(config);
+  const validated = validateCloudApiConfig(config, { requireModel: false });
   const url = buildCloudModelsUrl(validated);
   const headers = { Accept: 'application/json' };
   if (validated.protocol === 'anthropic') {
@@ -503,7 +525,12 @@ async function probeCloudApiConnection({ config, fetchFn, signal = undefined } =
   if (typeof fetchFn !== 'function') {
     return { ok: false, status: 0, sample: '', reason: 'ERR_FETCH_UNAVAILABLE' };
   }
-  const validated = validateCloudApiConfig(config);
+  let validated;
+  try {
+    validated = validateCloudApiConfig(config, { requireModel: true });
+  } catch (err) {
+    return { ok: false, status: 0, sample: '', reason: formatCloudApiError(err) };
+  }
   const probeMaxTokens =
     validated.protocol === 'openai' && !supportsOpenAiZeroTemperature(validated) ? 512 : 64;
   const req = buildCloudApiRequest(validated, 'Translate to Korean:\nReady.', { maxTokens: probeMaxTokens });
@@ -557,7 +584,7 @@ function createCloudApiAdapter({
     get label() {
       try {
         const cfg = validateCloudApiConfig(cloudApiConfigPort.getCloudApiConfig());
-        return `외부 API (${cfg.label} · ${cfg.model})`;
+        return cfg.model ? `외부 API (${cfg.label} · ${cfg.model})` : `외부 API (${cfg.label})`;
       } catch (_err) {
         return '외부 API (OpenAI · Claude · Gemini)';
       }
@@ -569,7 +596,7 @@ function createCloudApiAdapter({
       const signal = ctx && ctx.signal ? ctx.signal : undefined;
       if (signal && signal.aborted) return '';
 
-      const validated = validateCloudApiConfig(cloudApiConfigPort.getCloudApiConfig());
+      const validated = validateCloudApiConfig(cloudApiConfigPort.getCloudApiConfig(), { requireModel: true });
 
       const normalizedInput = String(text || '')
         .replace(/\(\s*using\s+(⟦[CT]\d+⟧)\s*\)/gi, 'using $1')
