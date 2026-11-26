@@ -1,8 +1,12 @@
-# Antigravity 2.0 Korean Thought & UI Translator (`v3.1.0`)
+# Antigravity 2.0 Korean Thought & UI Translator (`v3.2.0`)
 
-[한국어 README](./README.ko.md) | [Release Notes (`v3.1.0` EN/KO)](./RELEASE_NOTES_v3.1.0.md)
+[한국어 README](./README.ko.md) | [Release Notes (`v3.2.0` EN/KO)](./RELEASE_NOTES_v3.2.0.md)
 
 Clean-slate, renderer-only Korean localization plugin for **Antigravity 2.0 Desktop Native App & Remote Web (`antigravity.google.com/r/...`)**, built for **[Extenra](https://github.com/jaeseongs95/extenra) `v3.3.0+`** under **`AddonManifest.v3`** API-First architecture (zero `mainHook`, zero Sidecar `AUX_PANE`, Desktop & Remote Web parity via `AddonContextV3`).
+
+### Highlights in v3.2.0
+- **Live Vendor Model `<select>` Box**: Fetches available models directly from **OpenAI**, **Anthropic**, **Google Gemini**, and **OpenAI-compatible** `/models` endpoints (via `ctx.secrets` + `secretHeaders`) into a clean dropdown with a `직접 입력...` custom option.
+- **OpenAI `gpt-6-luna` / `gpt-5*` / `o1`–`o4` Compatibility & Diagnostics**: Uses `max_completion_tokens`, omits `temperature: 0` on reasoning-capable OpenAI models, surfaces sanitized HTTP 4xx/5xx server error details, and fixes button text wrapping.
 
 ### Highlights in v3.1.0
 - **External Cloud API Translator (`cloud-api`)**: Supports **OpenAI**, **Anthropic (Claude)**, **Google Gemini**, and **OpenAI-compatible** HTTPS endpoints directly from the Quick Settings modal (`외부 API`).

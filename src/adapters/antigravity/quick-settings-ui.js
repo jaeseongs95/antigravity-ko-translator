@@ -31,6 +31,7 @@ const {
 } = require('../translators/default-providers');
 const {
   validateCloudApiConfig,
+  fetchCloudApiModels,
   probeCloudApiConnection,
 } = require('../translators/cloud-api');
 const { extractV3Context } = require('./host-capability-adapter');
@@ -275,6 +276,21 @@ const MODAL_CSS = `
   flex: 1 1 auto;
   min-width: 0;
 }
+.ko-qs-model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ko-qs-model-row .ko-qs-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ko-qs-model-custom {
+  margin-top: 6px;
+}
+.ko-qs-model-custom[hidden] {
+  display: none;
+}
 .ko-qs-secret-meta {
   display: flex;
   align-items: center;
@@ -479,6 +495,8 @@ const MODAL_CSS = `
   font-size: 12px;
   font-weight: 600;
   font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
 }
 .ko-qs-btn:hover:not(:disabled) {
@@ -1057,6 +1075,9 @@ function createQuickSettingsUi({
       btn.addEventListener('click', () => {
         selectedProvider = opt.id;
         syncSelectedEngineUi();
+        if (opt.id === 'cloud-api') {
+          void refreshCloudKeyStatus({ autoLoadModels: true });
+        }
       });
       engineButtons.set(opt.id, btn);
       engineGrid.appendChild(btn);
@@ -1249,15 +1270,103 @@ function createQuickSettingsUi({
     const cloudModelField = targetDoc.createElement('div');
     cloudModelField.className = 'ko-qs-field';
     const cloudModelLbl = targetDoc.createElement('label');
-    cloudModelLbl.textContent = '모델명';
+    cloudModelLbl.textContent = '모델';
+    const cloudModelRow = targetDoc.createElement('div');
+    cloudModelRow.className = 'ko-qs-model-row';
+    const cloudModelSelect = targetDoc.createElement('select');
+    cloudModelSelect.className = 'ko-qs-select';
+    cloudModelSelect.setAttribute('aria-label', '외부 API 모델 선택');
+    cloudModelSelect.setAttribute('data-testid', 'ko-qs-cloud-model-select');
+    const cloudModelRefreshBtn = targetDoc.createElement('button');
+    cloudModelRefreshBtn.type = 'button';
+    cloudModelRefreshBtn.className = 'ko-qs-btn';
+    cloudModelRefreshBtn.setAttribute('data-testid', 'ko-qs-cloud-models-refresh');
+    cloudModelRefreshBtn.setAttribute('title', '선택한 API 제공자에서 사용 가능한 모델 목록을 불러옵니다');
+    cloudModelRefreshBtn.textContent = '불러오기';
+    cloudModelRefreshBtn.disabled = !secretsFacade.available;
+    cloudModelRow.appendChild(cloudModelSelect);
+    cloudModelRow.appendChild(cloudModelRefreshBtn);
+
     const cloudModelInput = targetDoc.createElement('input');
     cloudModelInput.type = 'text';
-    cloudModelInput.className = 'ko-qs-input';
+    cloudModelInput.className = 'ko-qs-input ko-qs-model-custom';
     cloudModelInput.setAttribute('data-testid', 'ko-qs-cloud-model');
     cloudModelInput.value = String(cloudCfg.model || initPreset.defaultModel);
     cloudModelInput.placeholder = initPreset.defaultModel;
+    cloudModelInput.hidden = true;
+
     cloudModelField.appendChild(cloudModelLbl);
+    cloudModelField.appendChild(cloudModelRow);
     cloudModelField.appendChild(cloudModelInput);
+
+    const CLOUD_CUSTOM_MODEL_VALUE = '__custom__';
+    const fetchedModelsCache = new Map();
+    let modelFetchSeq = 0;
+
+    function getPresetFallbackModels(presetId) {
+      const p = getCloudPreset(presetId);
+      const list = Array.isArray(p.recommendedModels) && p.recommendedModels.length > 0
+        ? p.recommendedModels
+        : [p.defaultModel];
+      return list.map((id) => ({ id, label: id }));
+    }
+
+    function populateCloudModelSelect(models, desiredModel, { preserveCustomMode = false } = {}) {
+      const list = Array.isArray(models) && models.length > 0 ? models : getPresetFallbackModels(presetSelect.value);
+      const seen = new Set();
+      const normalized = [];
+      for (const item of list) {
+        const id = typeof item === 'string' ? item : item && item.id ? String(item.id) : '';
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        normalized.push({ id, label: typeof item === 'object' && item && item.label ? String(item.label) : id });
+      }
+      const targetModel = String(desiredModel || '').trim();
+      if (targetModel && !preserveCustomMode && !seen.has(targetModel)) {
+        normalized.unshift({ id: targetModel, label: targetModel });
+        seen.add(targetModel);
+      }
+
+      while (cloudModelSelect.firstChild) {
+        cloudModelSelect.removeChild(cloudModelSelect.firstChild);
+      }
+      for (const item of normalized) {
+        const opt = targetDoc.createElement('option');
+        opt.value = item.id;
+        opt.textContent = item.label;
+        cloudModelSelect.appendChild(opt);
+      }
+      const customOpt = targetDoc.createElement('option');
+      customOpt.value = CLOUD_CUSTOM_MODEL_VALUE;
+      customOpt.textContent = '직접 입력...';
+      cloudModelSelect.appendChild(customOpt);
+
+      if (preserveCustomMode) {
+        cloudModelSelect.value = CLOUD_CUSTOM_MODEL_VALUE;
+        cloudModelInput.hidden = false;
+      } else {
+        const activeId = targetModel && seen.has(targetModel) ? targetModel : normalized[0].id;
+        cloudModelSelect.value = activeId;
+        cloudModelInput.value = activeId;
+        cloudModelInput.hidden = true;
+      }
+    }
+
+    populateCloudModelSelect(getPresetFallbackModels(initPreset.id), cloudCfg.model || initPreset.defaultModel);
+
+    cloudModelSelect.addEventListener('change', () => {
+      if (cloudModelSelect.value === CLOUD_CUSTOM_MODEL_VALUE) {
+        cloudModelInput.hidden = false;
+        if (typeof cloudModelInput.focus === 'function') {
+          try {
+            cloudModelInput.focus();
+          } catch (_e) {}
+        }
+      } else {
+        cloudModelInput.value = cloudModelSelect.value;
+        cloudModelInput.hidden = true;
+      }
+    });
 
     cloudRow1.appendChild(presetField);
     cloudRow1.appendChild(cloudModelField);
@@ -1361,8 +1470,102 @@ function createQuickSettingsUi({
       return '미지원';
     }
 
+    async function loadVendorCloudModels({ silent = false } = {}) {
+      const seq = ++modelFetchSeq;
+      if (!secretsFacade.available) {
+        if (!silent) {
+          cloudTestResultEl.textContent = 'Extenra v3.3.0 이상 호스트의 시크릿 저장소가 필요합니다.';
+          cloudTestResultEl.setAttribute('data-kind', 'err');
+        }
+        return false;
+      }
+      if (!effectiveFetch) {
+        if (!silent) {
+          cloudTestResultEl.textContent = 'fetch API를 사용할 수 없습니다.';
+          cloudTestResultEl.setAttribute('data-kind', 'err');
+        }
+        return false;
+      }
+      const activePresetId = presetSelect.value;
+      const activeBaseUrl = String(cloudUrlInput.value || '').trim() || getCloudPreset(activePresetId).baseUrl;
+      const cacheKey = `${activePresetId}|${activeBaseUrl}`;
+      if (!silent) {
+        const secretSave = await persistPendingCloudSecretIfEntered();
+        if (seq !== modelFetchSeq) return false;
+        if (!secretSave.ok) {
+          cloudTestResultEl.textContent = formatErrorMessage(secretSave.reason);
+          cloudTestResultEl.setAttribute('data-kind', 'err');
+          return false;
+        }
+      }
+      const hasKey = await secretsFacade.has(getCloudSecretKeyForPreset(activePresetId));
+      if (seq !== modelFetchSeq) return false;
+      if (!hasKey) {
+        if (!silent) {
+          cloudTestResultEl.textContent = 'API 키를 입력한 뒤 [불러오기]를 눌러 주세요.';
+          cloudTestResultEl.setAttribute('data-kind', 'err');
+        }
+        return false;
+      }
+
+      cloudModelRefreshBtn.disabled = true;
+      if (!silent) {
+        cloudModelRefreshBtn.textContent = '불러오는 중...';
+        cloudTestResultEl.textContent = 'API 제공자에서 모델 목록을 불러오는 중...';
+        cloudTestResultEl.setAttribute('data-kind', 'info');
+      }
+      const ac = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = ac
+        ? (targetWin.setTimeout || setTimeout)(() => {
+            try {
+              ac.abort();
+            } catch (_e) {}
+          }, 10000)
+        : null;
+      try {
+        const res = await fetchCloudApiModels({
+          config: {
+            preset: activePresetId,
+            baseUrl: activeBaseUrl,
+            model: String(cloudModelInput.value || '').trim() || getCloudPreset(activePresetId).defaultModel,
+            timeoutMs: Number(cloudTimeoutInput.value) || 20000,
+          },
+          fetchFn: effectiveFetch,
+          signal: ac ? ac.signal : undefined,
+        });
+        if (seq !== modelFetchSeq || presetSelect.value !== activePresetId) return false;
+        if (res.ok && Array.isArray(res.models) && res.models.length > 0) {
+          fetchedModelsCache.set(cacheKey, res.models);
+          const preserveCustom = cloudModelSelect.value === CLOUD_CUSTOM_MODEL_VALUE;
+          populateCloudModelSelect(res.models, cloudModelInput.value, { preserveCustomMode: preserveCustom });
+          if (!silent) {
+            cloudTestResultEl.textContent = `모델 목록 ${res.models.length}개를 불러왔습니다.`;
+            cloudTestResultEl.setAttribute('data-kind', 'ok');
+          }
+          return true;
+        }
+        if (!silent) {
+          cloudTestResultEl.textContent = `모델 목록 불러오기 실패 (${res.reason || `HTTP ${res.status}`})`;
+          cloudTestResultEl.setAttribute('data-kind', 'err');
+        }
+        return false;
+      } finally {
+        if (timer !== null) {
+          try {
+            (targetWin.clearTimeout || clearTimeout)(timer);
+          } catch (_e) {}
+        }
+        cloudModelRefreshBtn.textContent = '불러오기';
+        cloudModelRefreshBtn.disabled = !secretsFacade.available;
+      }
+    }
+
+    cloudModelRefreshBtn.addEventListener('click', () => {
+      void loadVendorCloudModels({ silent: false });
+    });
+
     let keyStatusSeq = 0;
-    async function refreshCloudKeyStatus() {
+    async function refreshCloudKeyStatus({ autoLoadModels = true } = {}) {
       const seq = ++keyStatusSeq;
       if (!secretsFacade.available) {
         apiKeyStatusPill.textContent = 'Extenra v3.3.0+ 필요';
@@ -1370,7 +1573,8 @@ function createQuickSettingsUi({
         apiKeyDelBtn.disabled = true;
         return false;
       }
-      const secretKey = getCloudSecretKeyForPreset(presetSelect.value);
+      const activePresetId = presetSelect.value;
+      const secretKey = getCloudSecretKeyForPreset(activePresetId);
       try {
         const exists = await secretsFacade.has(secretKey);
         if (seq !== keyStatusSeq) return exists;
@@ -1379,6 +1583,11 @@ function createQuickSettingsUi({
           apiKeyStatusPill.textContent = `저장됨 · ${formatPersistenceLabel(mode)}`;
           apiKeyStatusPill.setAttribute('data-state', mode === 'session-memory' ? 'warn' : 'saved');
           apiKeyDelBtn.disabled = false;
+          const activeBaseUrl = String(cloudUrlInput.value || '').trim() || getCloudPreset(activePresetId).baseUrl;
+          const cacheKey = `${activePresetId}|${activeBaseUrl}`;
+          if (autoLoadModels && selectedProvider === 'cloud-api' && !fetchedModelsCache.has(cacheKey)) {
+            void loadVendorCloudModels({ silent: true });
+          }
         } else {
           apiKeyStatusPill.textContent = `미등록 · ${formatPersistenceLabel(mode)}`;
           apiKeyStatusPill.setAttribute('data-state', 'none');
@@ -1396,6 +1605,7 @@ function createQuickSettingsUi({
     }
 
     presetSelect.addEventListener('change', () => {
+      modelFetchSeq += 1;
       const prevPreset = getCloudPreset(lastPresetId);
       const nextPreset = getCloudPreset(presetSelect.value);
       lastPresetId = nextPreset.id;
@@ -1404,11 +1614,17 @@ function createQuickSettingsUi({
       if (!curUrl || curUrl === prevPreset.baseUrl) {
         cloudUrlInput.value = nextPreset.baseUrl;
       }
-      if (!curModel || curModel === prevPreset.defaultModel) {
-        cloudModelInput.value = nextPreset.defaultModel;
-      }
+      const nextDesiredModel = !curModel || curModel === prevPreset.defaultModel ||
+        (Array.isArray(prevPreset.recommendedModels) && prevPreset.recommendedModels.includes(curModel))
+        ? nextPreset.defaultModel
+        : curModel;
       cloudUrlInput.placeholder = nextPreset.baseUrl;
       cloudModelInput.placeholder = nextPreset.defaultModel;
+      const cacheKey = `${nextPreset.id}|${String(cloudUrlInput.value || '').trim()}`;
+      populateCloudModelSelect(
+        fetchedModelsCache.get(cacheKey) || getPresetFallbackModels(nextPreset.id),
+        nextDesiredModel
+      );
       apiKeyInput.placeholder = `${nextPreset.keyPlaceholder} (새 키 입력 시에만 갱신)`;
       apiKeyInput.value = '';
       void refreshCloudKeyStatus();
@@ -1593,7 +1809,7 @@ function createQuickSettingsUi({
         return { saved: false, ok: false, reason: (res && res.reason) || 'ERR_SECRETS_SAVE_FAILED' };
       }
       apiKeyInput.value = '';
-      await refreshCloudKeyStatus();
+      await refreshCloudKeyStatus({ autoLoadModels: false });
       return { saved: true, ok: true };
     }
 

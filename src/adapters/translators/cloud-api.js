@@ -24,6 +24,17 @@ const { LLM_SYSTEM_PROMPT, sanitizeLlmOutput } = require('./local-llm');
 
 const SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
 const SAFE_MODEL_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{0,127}$/;
+const LEGACY_OPENAI_TEMP_MODEL_RE = /^(?:gpt-3\.5|gpt-4(?:$|o$|o-|[-.])|chatgpt-4o)/i;
+const REASONING_OR_MODERN_OPENAI_MODEL_RE = /^(?:o[1-9](?:$|-|\.)|gpt-(?:[5-9]|\d{2,})(?:$|-|\.)|codex(?:$|-|\.))/i;
+const REDACT_SECRET_RE = /\b(?:sk-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9._-]{8,})\b/g;
+
+function supportsOpenAiZeroTemperature(validated) {
+  const baseModel = String((validated && validated.model) || '').trim().split('/').pop() || '';
+  if (validated && validated.preset === 'openai') {
+    return LEGACY_OPENAI_TEMP_MODEL_RE.test(baseModel);
+  }
+  return !REASONING_OR_MODERN_OPENAI_MODEL_RE.test(baseModel);
+}
 
 const CLOUD_API_PRESETS = Object.freeze({
   openai: Object.freeze({
@@ -32,6 +43,13 @@ const CLOUD_API_PRESETS = Object.freeze({
     protocol: 'openai',
     baseUrl: 'https://api.openai.com/v1',
     defaultModel: 'gpt-4o-mini',
+    recommendedModels: Object.freeze([
+      'gpt-6-luna',
+      'gpt-6-sol',
+      'gpt-5-mini',
+      'gpt-4.1-mini',
+      'gpt-4o-mini',
+    ]),
     secretKey: 'cloud_api_key_openai',
     headerName: 'Authorization',
     headerPrefix: 'Bearer ',
@@ -43,6 +61,11 @@ const CLOUD_API_PRESETS = Object.freeze({
     protocol: 'anthropic',
     baseUrl: 'https://api.anthropic.com',
     defaultModel: 'claude-haiku-4-5-20251001',
+    recommendedModels: Object.freeze([
+      'claude-haiku-4-5-20251001',
+      'claude-sonnet-4-5-20250929',
+      'claude-opus-4-5-20251101',
+    ]),
     secretKey: 'cloud_api_key_anthropic',
     headerName: 'x-api-key',
     headerPrefix: '',
@@ -54,6 +77,11 @@ const CLOUD_API_PRESETS = Object.freeze({
     protocol: 'gemini',
     baseUrl: 'https://generativelanguage.googleapis.com',
     defaultModel: 'gemini-2.5-flash',
+    recommendedModels: Object.freeze([
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-2.5-pro',
+    ]),
     secretKey: 'cloud_api_key_gemini',
     headerName: 'x-goog-api-key',
     headerPrefix: '',
@@ -65,6 +93,13 @@ const CLOUD_API_PRESETS = Object.freeze({
     protocol: 'openai',
     baseUrl: 'https://openrouter.ai/api/v1',
     defaultModel: 'openai/gpt-4o-mini',
+    recommendedModels: Object.freeze([
+      'openai/gpt-4o-mini',
+      'openai/gpt-6-luna',
+      'anthropic/claude-haiku-4.5',
+      'google/gemini-2.5-flash',
+      'deepseek/deepseek-chat',
+    ]),
     secretKey: 'cloud_api_key_openai_compat',
     headerName: 'Authorization',
     headerPrefix: 'Bearer ',
@@ -205,15 +240,22 @@ function buildCloudApiRequest(validated, userPrompt, { maxTokens = 1024 } = {}) 
       },
     };
   } else {
+    const allowZeroTemp = supportsOpenAiZeroTemperature(validated);
     bodyObj = {
       model: validated.model,
-      temperature: 0,
-      max_tokens: maxTokens,
       messages: [
         { role: 'system', content: LLM_SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
     };
+    if (allowZeroTemp) {
+      bodyObj.temperature = 0;
+    }
+    if (validated.preset === 'openai') {
+      bodyObj.max_completion_tokens = maxTokens;
+    } else {
+      bodyObj.max_tokens = maxTokens;
+    }
   }
 
   return {
@@ -257,15 +299,49 @@ function extractCloudApiResponseText(protocol, data) {
   return '';
 }
 
-function formatCloudApiError(errOrStatus) {
+async function extractCloudApiErrorDetail(res) {
+  if (!res || typeof res.text !== 'function') return '';
+  let rawText = '';
+  try {
+    rawText = String((await res.text()) || '').trim();
+  } catch (_err) {
+    return '';
+  }
+  if (!rawText) return '';
+  let detail = '';
+  try {
+    const parsed = JSON.parse(rawText);
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.error && typeof parsed.error === 'object' && typeof parsed.error.message === 'string') {
+        detail = parsed.error.message;
+      } else if (typeof parsed.error === 'string') {
+        detail = parsed.error;
+      } else if (typeof parsed.message === 'string') {
+        detail = parsed.message;
+      }
+    }
+  } catch (_jsonErr) {
+    detail = rawText;
+  }
+  const cleaned = String(detail || '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(REDACT_SECRET_RE, '[REDACTED]')
+    .trim();
+  if (!cleaned) return '';
+  return cleaned.length > 160 ? `${cleaned.slice(0, 157)}...` : cleaned;
+}
+
+function formatCloudApiError(errOrStatus, detail = '') {
+  const suffix = typeof detail === 'string' && detail.trim() ? `: ${detail.trim()}` : '';
   if (typeof errOrStatus === 'number') {
     if (errOrStatus === 401 || errOrStatus === 403) {
-      return `API 인증 실패 (HTTP ${errOrStatus}) — API 키와 권한을 확인해 주세요.`;
+      return `API 인증 실패 (HTTP ${errOrStatus}) — API 키와 권한을 확인해 주세요${suffix}`;
     }
     if (errOrStatus === 429) {
-      return 'API 호출 한도 초과 (HTTP 429) — 잠시 후 다시 시도해 주세요.';
+      return `API 호출 한도 초과 (HTTP 429) — 잠시 후 다시 시도해 주세요${suffix}`;
     }
-    return `외부 API HTTP 오류 (${errOrStatus})`;
+    return `외부 API HTTP 오류 (${errOrStatus})${suffix}`;
   }
   const msg = String(errOrStatus && errOrStatus.message ? errOrStatus.message : errOrStatus || '');
   if (msg.startsWith('ERR_SECRET_NOT_FOUND:')) {
@@ -280,12 +356,157 @@ function formatCloudApiError(errOrStatus) {
   return msg || '외부 API 요청에 실패했습니다.';
 }
 
+function buildCloudModelsUrl(validated) {
+  const cleanBase = String(validated.baseUrl || '').replace(/\/+$/, '');
+  if (validated.protocol === 'anthropic') {
+    const stripped = cleanBase.replace(/\/v1\/messages$/i, '').replace(/\/v1$/i, '');
+    return `${stripped}/v1/models?limit=100`;
+  }
+  if (validated.protocol === 'gemini') {
+    const stripped = cleanBase
+      .replace(/\/v1beta\/models\/[^/]+(?::[A-Za-z]+)?$/i, '')
+      .replace(/\/v1beta\/models$/i, '')
+      .replace(/\/v1beta$/i, '');
+    return `${stripped}/v1beta/models?pageSize=100`;
+  }
+  const stripped = cleanBase.replace(/\/chat\/completions$/i, '');
+  if (/\/models$/i.test(stripped)) return stripped;
+  if (/\/v1$/i.test(stripped)) return `${stripped}/models`;
+  return `${stripped}/v1/models`;
+}
+
+const OPENAI_NON_CHAT_MODEL_RE =
+  /(?:embedding|whisper|tts-|dall-e|moderation|realtime|transcribe|sora|babbage|davinci|audio-preview|image-|codex-mini-latest-internal)/i;
+const MAX_RETURNED_CLOUD_MODELS = 200;
+
+function parseCloudApiModelsResponse(protocol, data, { preset = null } = {}) {
+  const seen = new Set();
+  const rawItems = [];
+
+  if (protocol === 'gemini') {
+    const list = data && Array.isArray(data.models) ? data.models : [];
+    for (const item of list) {
+      if (!item || typeof item !== 'object') continue;
+      if (
+        Array.isArray(item.supportedGenerationMethods) &&
+        item.supportedGenerationMethods.length > 0 &&
+        !item.supportedGenerationMethods.includes('generateContent')
+      ) {
+        continue;
+      }
+      const id = String(item.name || '').replace(/^models\//i, '').trim();
+      if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
+      seen.add(id);
+      const displayName = typeof item.displayName === 'string' && item.displayName.trim() ? item.displayName.trim() : '';
+      rawItems.push({
+        id,
+        label: displayName && displayName !== id ? `${id} (${displayName})` : id,
+        created: 0,
+      });
+    }
+  } else if (protocol === 'anthropic') {
+    const list = data && Array.isArray(data.data) ? data.data : [];
+    for (const item of list) {
+      if (!item || typeof item !== 'object') continue;
+      const id = String(item.id || '').trim();
+      if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
+      seen.add(id);
+      const displayName = typeof item.display_name === 'string' && item.display_name.trim() ? item.display_name.trim() : '';
+      rawItems.push({
+        id,
+        label: displayName && displayName !== id ? `${id} (${displayName})` : id,
+        created: item.created_at ? Date.parse(item.created_at) || 0 : 0,
+      });
+    }
+  } else {
+    const list =
+      data && Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : [];
+    for (const item of list) {
+      if (!item || typeof item !== 'object') continue;
+      const id = String(item.id || '').trim();
+      if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
+      seen.add(id);
+      const displayName = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : '';
+      rawItems.push({
+        id,
+        label: displayName && displayName !== id ? `${id} (${displayName})` : id,
+        created: Number(item.created) || 0,
+      });
+    }
+  }
+
+  let filtered = rawItems;
+  if (preset === 'openai') {
+    const chatOnly = rawItems.filter((m) => !OPENAI_NON_CHAT_MODEL_RE.test(m.id));
+    if (chatOnly.length > 0) filtered = chatOnly;
+  }
+
+  filtered.sort((a, b) => {
+    if (b.created !== a.created) return b.created - a.created;
+    return a.id.localeCompare(b.id);
+  });
+
+  return filtered.slice(0, MAX_RETURNED_CLOUD_MODELS).map(({ id, label }) => ({ id, label }));
+}
+
+async function fetchCloudApiModels({ config, fetchFn, signal = undefined } = {}) {
+  if (typeof fetchFn !== 'function') {
+    return { ok: false, status: 0, models: [], reason: 'ERR_FETCH_UNAVAILABLE' };
+  }
+  const validated = validateCloudApiConfig(config);
+  const url = buildCloudModelsUrl(validated);
+  const headers = { Accept: 'application/json' };
+  if (validated.protocol === 'anthropic') {
+    headers['anthropic-version'] = '2023-06-01';
+  }
+  const secretHeaders = {
+    [validated.headerName]: validated.headerPrefix
+      ? { secretKey: validated.secretKey, prefix: validated.headerPrefix }
+      : { secretKey: validated.secretKey },
+  };
+  try {
+    const res = await fetchFn(url, {
+      method: 'GET',
+      headers,
+      secretHeaders,
+      timeoutMs: Math.min(validated.timeoutMs, 15000),
+      credentials: 'omit',
+      redirect: 'error',
+      signal,
+    });
+    if (!res || !res.ok) {
+      const detail = await extractCloudApiErrorDetail(res);
+      return {
+        ok: false,
+        status: res ? Number(res.status) || 0 : 0,
+        models: [],
+        reason: formatCloudApiError(res ? Number(res.status) || 0 : 'ERR_NO_RESPONSE', detail),
+      };
+    }
+    const data = await res.json();
+    const models = parseCloudApiModelsResponse(validated.protocol, data, { preset: validated.preset });
+    if (models.length === 0) {
+      return {
+        ok: false,
+        status: Number(res.status) || 200,
+        models: [],
+        reason: '사용 가능한 모델 목록이 비어 있습니다.',
+      };
+    }
+    return { ok: true, status: Number(res.status) || 200, models, reason: null };
+  } catch (err) {
+    return { ok: false, status: 0, models: [], reason: formatCloudApiError(err) };
+  }
+}
+
 async function probeCloudApiConnection({ config, fetchFn, signal = undefined } = {}) {
   if (typeof fetchFn !== 'function') {
     return { ok: false, status: 0, sample: '', reason: 'ERR_FETCH_UNAVAILABLE' };
   }
   const validated = validateCloudApiConfig(config);
-  const req = buildCloudApiRequest(validated, 'Translate to Korean:\nReady.', { maxTokens: 48 });
+  const probeMaxTokens =
+    validated.protocol === 'openai' && !supportsOpenAiZeroTemperature(validated) ? 512 : 64;
+  const req = buildCloudApiRequest(validated, 'Translate to Korean:\nReady.', { maxTokens: probeMaxTokens });
   try {
     const res = await fetchFn(req.url, {
       method: req.method,
@@ -298,11 +519,12 @@ async function probeCloudApiConnection({ config, fetchFn, signal = undefined } =
       signal,
     });
     if (!res || !res.ok) {
+      const detail = await extractCloudApiErrorDetail(res);
       return {
         ok: false,
         status: res ? Number(res.status) || 0 : 0,
         sample: '',
-        reason: formatCloudApiError(res ? Number(res.status) || 0 : 'ERR_NO_RESPONSE'),
+        reason: formatCloudApiError(res ? Number(res.status) || 0 : 'ERR_NO_RESPONSE', detail),
       };
     }
     const data = await res.json();
@@ -355,11 +577,15 @@ function createCloudApiAdapter({
       const allPlaceholders = normalizedInput.match(/⟦[CT]\d+⟧/g) || [];
       const tokenHint = allPlaceholders.length > 0 ? ` (필수 포함 토큰: ${allPlaceholders.join(', ')})` : '';
 
+      const translateMaxTokens =
+        validated.protocol === 'openai' && !supportsOpenAiZeroTemperature(validated) ? 2048 : 1024;
       const requestOnce = async (prefixPrompt) => {
         if (signal && signal.aborted) return '';
         const linked = createLinkedAbort(signal, validated.timeoutMs, setTimer, clearTimer);
         try {
-          const req = buildCloudApiRequest(validated, `${prefixPrompt}\n${normalizedInput}`, { maxTokens: 1024 });
+          const req = buildCloudApiRequest(validated, `${prefixPrompt}\n${normalizedInput}`, {
+            maxTokens: translateMaxTokens,
+          });
           const res = await fetchFn(req.url, {
             method: req.method,
             headers: req.headers,
@@ -371,7 +597,8 @@ function createCloudApiAdapter({
             signal: linked.signal,
           });
           if (!res || !res.ok) {
-            throw new Error(formatCloudApiError(res ? Number(res.status) || 0 : 'ERR_NO_RESPONSE'));
+            const detail = await extractCloudApiErrorDetail(res);
+            throw new Error(formatCloudApiError(res ? Number(res.status) || 0 : 'ERR_NO_RESPONSE', detail));
           }
           const data = await res.json();
           const rawOut = extractCloudApiResponseText(validated.protocol, data);
@@ -420,9 +647,13 @@ module.exports = {
   getCloudSecretKeyForPreset,
   validateCloudApiConfig,
   buildCloudApiUrl,
+  buildCloudModelsUrl,
   buildCloudApiRequest,
+  parseCloudApiModelsResponse,
   extractCloudApiResponseText,
+  extractCloudApiErrorDetail,
   formatCloudApiError,
+  fetchCloudApiModels,
   probeCloudApiConnection,
   createCloudApiAdapter,
 };

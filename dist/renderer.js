@@ -1,4 +1,4 @@
-// === Antigravity Korean Thought & UI Translator v3.1.0 (AddonManifest.v3 API-First Desktop & Remote Web — Generated Bundle) ===
+// === Antigravity Korean Thought & UI Translator v3.2.0 (AddonManifest.v3 API-First Desktop & Remote Web — Generated Bundle) ===
 "use strict";
 var __agyKoTranslatorBundleExports = (() => {
   var __defProp = Object.defineProperty;
@@ -7052,6 +7052,17 @@ var __agyKoTranslatorBundleExports = (() => {
       var { LLM_SYSTEM_PROMPT, sanitizeLlmOutput } = require_local_llm();
       var SECRET_QUERY_RE = /[?&](?:key|api_key|apikey|token|access_token|secret|auth)=/i;
       var SAFE_MODEL_RE = /^[a-zA-Z0-9][a-zA-Z0-9._:/@-]{0,127}$/;
+      var LEGACY_OPENAI_TEMP_MODEL_RE = /^(?:gpt-3\.5|gpt-4(?:$|o$|o-|[-.])|chatgpt-4o)/i;
+      var REASONING_OR_MODERN_OPENAI_MODEL_RE = /^(?:o[1-9](?:$|-|\.)|gpt-(?:[5-9]|\d{2,})(?:$|-|\.)|codex(?:$|-|\.))/i;
+      var REDACT_SECRET_RE = /\b(?:sk-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9._-]{8,})\b/g;
+      function supportsOpenAiZeroTemperature(validated) {
+        const baseModel = String(validated && validated.model || "").trim().split("/").pop() || "";
+        if (validated && validated.preset === "openai") {
+          return LEGACY_OPENAI_TEMP_MODEL_RE.test(baseModel);
+        }
+        return !REASONING_OR_MODERN_OPENAI_MODEL_RE.test(baseModel);
+      }
+      __name(supportsOpenAiZeroTemperature, "supportsOpenAiZeroTemperature");
       var CLOUD_API_PRESETS = Object.freeze({
         openai: Object.freeze({
           id: "openai",
@@ -7059,6 +7070,13 @@ var __agyKoTranslatorBundleExports = (() => {
           protocol: "openai",
           baseUrl: "https://api.openai.com/v1",
           defaultModel: "gpt-4o-mini",
+          recommendedModels: Object.freeze([
+            "gpt-6-luna",
+            "gpt-6-sol",
+            "gpt-5-mini",
+            "gpt-4.1-mini",
+            "gpt-4o-mini"
+          ]),
           secretKey: "cloud_api_key_openai",
           headerName: "Authorization",
           headerPrefix: "Bearer ",
@@ -7070,6 +7088,11 @@ var __agyKoTranslatorBundleExports = (() => {
           protocol: "anthropic",
           baseUrl: "https://api.anthropic.com",
           defaultModel: "claude-haiku-4-5-20251001",
+          recommendedModels: Object.freeze([
+            "claude-haiku-4-5-20251001",
+            "claude-sonnet-4-5-20250929",
+            "claude-opus-4-5-20251101"
+          ]),
           secretKey: "cloud_api_key_anthropic",
           headerName: "x-api-key",
           headerPrefix: "",
@@ -7081,6 +7104,11 @@ var __agyKoTranslatorBundleExports = (() => {
           protocol: "gemini",
           baseUrl: "https://generativelanguage.googleapis.com",
           defaultModel: "gemini-2.5-flash",
+          recommendedModels: Object.freeze([
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-pro"
+          ]),
           secretKey: "cloud_api_key_gemini",
           headerName: "x-goog-api-key",
           headerPrefix: "",
@@ -7092,6 +7120,13 @@ var __agyKoTranslatorBundleExports = (() => {
           protocol: "openai",
           baseUrl: "https://openrouter.ai/api/v1",
           defaultModel: "openai/gpt-4o-mini",
+          recommendedModels: Object.freeze([
+            "openai/gpt-4o-mini",
+            "openai/gpt-6-luna",
+            "anthropic/claude-haiku-4.5",
+            "google/gemini-2.5-flash",
+            "deepseek/deepseek-chat"
+          ]),
           secretKey: "cloud_api_key_openai_compat",
           headerName: "Authorization",
           headerPrefix: "Bearer ",
@@ -7218,15 +7253,22 @@ var __agyKoTranslatorBundleExports = (() => {
             }
           };
         } else {
+          const allowZeroTemp = supportsOpenAiZeroTemperature(validated);
           bodyObj = {
             model: validated.model,
-            temperature: 0,
-            max_tokens: maxTokens,
             messages: [
               { role: "system", content: LLM_SYSTEM_PROMPT },
               { role: "user", content: userPrompt }
             ]
           };
+          if (allowZeroTemp) {
+            bodyObj.temperature = 0;
+          }
+          if (validated.preset === "openai") {
+            bodyObj.max_completion_tokens = maxTokens;
+          } else {
+            bodyObj.max_tokens = maxTokens;
+          }
         }
         return {
           url,
@@ -7257,15 +7299,45 @@ var __agyKoTranslatorBundleExports = (() => {
         return "";
       }
       __name(extractCloudApiResponseText, "extractCloudApiResponseText");
-      function formatCloudApiError(errOrStatus) {
+      async function extractCloudApiErrorDetail(res) {
+        if (!res || typeof res.text !== "function") return "";
+        let rawText = "";
+        try {
+          rawText = String(await res.text() || "").trim();
+        } catch (_err) {
+          return "";
+        }
+        if (!rawText) return "";
+        let detail = "";
+        try {
+          const parsed = JSON.parse(rawText);
+          if (parsed && typeof parsed === "object") {
+            if (parsed.error && typeof parsed.error === "object" && typeof parsed.error.message === "string") {
+              detail = parsed.error.message;
+            } else if (typeof parsed.error === "string") {
+              detail = parsed.error;
+            } else if (typeof parsed.message === "string") {
+              detail = parsed.message;
+            }
+          }
+        } catch (_jsonErr) {
+          detail = rawText;
+        }
+        const cleaned = String(detail || "").replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").replace(REDACT_SECRET_RE, "[REDACTED]").trim();
+        if (!cleaned) return "";
+        return cleaned.length > 160 ? `${cleaned.slice(0, 157)}...` : cleaned;
+      }
+      __name(extractCloudApiErrorDetail, "extractCloudApiErrorDetail");
+      function formatCloudApiError(errOrStatus, detail = "") {
+        const suffix = typeof detail === "string" && detail.trim() ? `: ${detail.trim()}` : "";
         if (typeof errOrStatus === "number") {
           if (errOrStatus === 401 || errOrStatus === 403) {
-            return `API 인증 실패 (HTTP ${errOrStatus}) — API 키와 권한을 확인해 주세요.`;
+            return `API 인증 실패 (HTTP ${errOrStatus}) — API 키와 권한을 확인해 주세요${suffix}`;
           }
           if (errOrStatus === 429) {
-            return "API 호출 한도 초과 (HTTP 429) — 잠시 후 다시 시도해 주세요.";
+            return `API 호출 한도 초과 (HTTP 429) — 잠시 후 다시 시도해 주세요${suffix}`;
           }
-          return `외부 API HTTP 오류 (${errOrStatus})`;
+          return `외부 API HTTP 오류 (${errOrStatus})${suffix}`;
         }
         const msg = String(errOrStatus && errOrStatus.message ? errOrStatus.message : errOrStatus || "");
         if (msg.startsWith("ERR_SECRET_NOT_FOUND:")) {
@@ -7280,12 +7352,140 @@ var __agyKoTranslatorBundleExports = (() => {
         return msg || "외부 API 요청에 실패했습니다.";
       }
       __name(formatCloudApiError, "formatCloudApiError");
+      function buildCloudModelsUrl(validated) {
+        const cleanBase = String(validated.baseUrl || "").replace(/\/+$/, "");
+        if (validated.protocol === "anthropic") {
+          const stripped2 = cleanBase.replace(/\/v1\/messages$/i, "").replace(/\/v1$/i, "");
+          return `${stripped2}/v1/models?limit=100`;
+        }
+        if (validated.protocol === "gemini") {
+          const stripped2 = cleanBase.replace(/\/v1beta\/models\/[^/]+(?::[A-Za-z]+)?$/i, "").replace(/\/v1beta\/models$/i, "").replace(/\/v1beta$/i, "");
+          return `${stripped2}/v1beta/models?pageSize=100`;
+        }
+        const stripped = cleanBase.replace(/\/chat\/completions$/i, "");
+        if (/\/models$/i.test(stripped)) return stripped;
+        if (/\/v1$/i.test(stripped)) return `${stripped}/models`;
+        return `${stripped}/v1/models`;
+      }
+      __name(buildCloudModelsUrl, "buildCloudModelsUrl");
+      var OPENAI_NON_CHAT_MODEL_RE = /(?:embedding|whisper|tts-|dall-e|moderation|realtime|transcribe|sora|babbage|davinci|audio-preview|image-|codex-mini-latest-internal)/i;
+      var MAX_RETURNED_CLOUD_MODELS = 200;
+      function parseCloudApiModelsResponse(protocol, data, { preset = null } = {}) {
+        const seen = /* @__PURE__ */ new Set();
+        const rawItems = [];
+        if (protocol === "gemini") {
+          const list = data && Array.isArray(data.models) ? data.models : [];
+          for (const item of list) {
+            if (!item || typeof item !== "object") continue;
+            if (Array.isArray(item.supportedGenerationMethods) && item.supportedGenerationMethods.length > 0 && !item.supportedGenerationMethods.includes("generateContent")) {
+              continue;
+            }
+            const id = String(item.name || "").replace(/^models\//i, "").trim();
+            if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
+            seen.add(id);
+            const displayName = typeof item.displayName === "string" && item.displayName.trim() ? item.displayName.trim() : "";
+            rawItems.push({
+              id,
+              label: displayName && displayName !== id ? `${id} (${displayName})` : id,
+              created: 0
+            });
+          }
+        } else if (protocol === "anthropic") {
+          const list = data && Array.isArray(data.data) ? data.data : [];
+          for (const item of list) {
+            if (!item || typeof item !== "object") continue;
+            const id = String(item.id || "").trim();
+            if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
+            seen.add(id);
+            const displayName = typeof item.display_name === "string" && item.display_name.trim() ? item.display_name.trim() : "";
+            rawItems.push({
+              id,
+              label: displayName && displayName !== id ? `${id} (${displayName})` : id,
+              created: item.created_at ? Date.parse(item.created_at) || 0 : 0
+            });
+          }
+        } else {
+          const list = data && Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : [];
+          for (const item of list) {
+            if (!item || typeof item !== "object") continue;
+            const id = String(item.id || "").trim();
+            if (!id || !SAFE_MODEL_RE.test(id) || seen.has(id)) continue;
+            seen.add(id);
+            const displayName = typeof item.name === "string" && item.name.trim() ? item.name.trim() : "";
+            rawItems.push({
+              id,
+              label: displayName && displayName !== id ? `${id} (${displayName})` : id,
+              created: Number(item.created) || 0
+            });
+          }
+        }
+        let filtered = rawItems;
+        if (preset === "openai") {
+          const chatOnly = rawItems.filter((m) => !OPENAI_NON_CHAT_MODEL_RE.test(m.id));
+          if (chatOnly.length > 0) filtered = chatOnly;
+        }
+        filtered.sort((a, b) => {
+          if (b.created !== a.created) return b.created - a.created;
+          return a.id.localeCompare(b.id);
+        });
+        return filtered.slice(0, MAX_RETURNED_CLOUD_MODELS).map(({ id, label }) => ({ id, label }));
+      }
+      __name(parseCloudApiModelsResponse, "parseCloudApiModelsResponse");
+      async function fetchCloudApiModels({ config, fetchFn, signal = void 0 } = {}) {
+        if (typeof fetchFn !== "function") {
+          return { ok: false, status: 0, models: [], reason: "ERR_FETCH_UNAVAILABLE" };
+        }
+        const validated = validateCloudApiConfig(config);
+        const url = buildCloudModelsUrl(validated);
+        const headers = { Accept: "application/json" };
+        if (validated.protocol === "anthropic") {
+          headers["anthropic-version"] = "2023-06-01";
+        }
+        const secretHeaders = {
+          [validated.headerName]: validated.headerPrefix ? { secretKey: validated.secretKey, prefix: validated.headerPrefix } : { secretKey: validated.secretKey }
+        };
+        try {
+          const res = await fetchFn(url, {
+            method: "GET",
+            headers,
+            secretHeaders,
+            timeoutMs: Math.min(validated.timeoutMs, 15e3),
+            credentials: "omit",
+            redirect: "error",
+            signal
+          });
+          if (!res || !res.ok) {
+            const detail = await extractCloudApiErrorDetail(res);
+            return {
+              ok: false,
+              status: res ? Number(res.status) || 0 : 0,
+              models: [],
+              reason: formatCloudApiError(res ? Number(res.status) || 0 : "ERR_NO_RESPONSE", detail)
+            };
+          }
+          const data = await res.json();
+          const models = parseCloudApiModelsResponse(validated.protocol, data, { preset: validated.preset });
+          if (models.length === 0) {
+            return {
+              ok: false,
+              status: Number(res.status) || 200,
+              models: [],
+              reason: "사용 가능한 모델 목록이 비어 있습니다."
+            };
+          }
+          return { ok: true, status: Number(res.status) || 200, models, reason: null };
+        } catch (err) {
+          return { ok: false, status: 0, models: [], reason: formatCloudApiError(err) };
+        }
+      }
+      __name(fetchCloudApiModels, "fetchCloudApiModels");
       async function probeCloudApiConnection({ config, fetchFn, signal = void 0 } = {}) {
         if (typeof fetchFn !== "function") {
           return { ok: false, status: 0, sample: "", reason: "ERR_FETCH_UNAVAILABLE" };
         }
         const validated = validateCloudApiConfig(config);
-        const req = buildCloudApiRequest(validated, "Translate to Korean:\nReady.", { maxTokens: 48 });
+        const probeMaxTokens = validated.protocol === "openai" && !supportsOpenAiZeroTemperature(validated) ? 512 : 64;
+        const req = buildCloudApiRequest(validated, "Translate to Korean:\nReady.", { maxTokens: probeMaxTokens });
         try {
           const res = await fetchFn(req.url, {
             method: req.method,
@@ -7298,11 +7498,12 @@ var __agyKoTranslatorBundleExports = (() => {
             signal
           });
           if (!res || !res.ok) {
+            const detail = await extractCloudApiErrorDetail(res);
             return {
               ok: false,
               status: res ? Number(res.status) || 0 : 0,
               sample: "",
-              reason: formatCloudApiError(res ? Number(res.status) || 0 : "ERR_NO_RESPONSE")
+              reason: formatCloudApiError(res ? Number(res.status) || 0 : "ERR_NO_RESPONSE", detail)
             };
           }
           const data = await res.json();
@@ -7349,12 +7550,15 @@ var __agyKoTranslatorBundleExports = (() => {
             const normalizedInput = String(text || "").replace(/\(\s*using\s+(⟦[CT]\d+⟧)\s*\)/gi, "using $1").replace(/\bper\s+(⟦[CT]\d+⟧)/gi, "according to $1");
             const allPlaceholders = normalizedInput.match(/⟦[CT]\d+⟧/g) || [];
             const tokenHint = allPlaceholders.length > 0 ? ` (필수 포함 토큰: ${allPlaceholders.join(", ")})` : "";
+            const translateMaxTokens = validated.protocol === "openai" && !supportsOpenAiZeroTemperature(validated) ? 2048 : 1024;
             const requestOnce = /* @__PURE__ */ __name(async (prefixPrompt) => {
               if (signal && signal.aborted) return "";
               const linked = createLinkedAbort(signal, validated.timeoutMs, setTimer, clearTimer);
               try {
                 const req = buildCloudApiRequest(validated, `${prefixPrompt}
-${normalizedInput}`, { maxTokens: 1024 });
+${normalizedInput}`, {
+                  maxTokens: translateMaxTokens
+                });
                 const res = await fetchFn(req.url, {
                   method: req.method,
                   headers: req.headers,
@@ -7366,7 +7570,8 @@ ${normalizedInput}`, { maxTokens: 1024 });
                   signal: linked.signal
                 });
                 if (!res || !res.ok) {
-                  throw new Error(formatCloudApiError(res ? Number(res.status) || 0 : "ERR_NO_RESPONSE"));
+                  const detail = await extractCloudApiErrorDetail(res);
+                  throw new Error(formatCloudApiError(res ? Number(res.status) || 0 : "ERR_NO_RESPONSE", detail));
                 }
                 const data = await res.json();
                 const rawOut = extractCloudApiResponseText(validated.protocol, data);
@@ -7411,9 +7616,13 @@ ${normalizedInput}`, { maxTokens: 1024 });
         getCloudSecretKeyForPreset,
         validateCloudApiConfig,
         buildCloudApiUrl,
+        buildCloudModelsUrl,
         buildCloudApiRequest,
+        parseCloudApiModelsResponse,
         extractCloudApiResponseText,
+        extractCloudApiErrorDetail,
         formatCloudApiError,
+        fetchCloudApiModels,
         probeCloudApiConnection,
         createCloudApiAdapter
       };
@@ -8203,7 +8412,7 @@ ${normalizedInput}`, { maxTokens: 1024 });
           surface,
           pluginId: rawHostCapability.meta && rawHostCapability.meta.pluginId || "ko-thought-translator",
           displayName: rawHostCapability.meta && rawHostCapability.meta.displayName || "ko-thought-translator",
-          version: rawHostCapability.meta && rawHostCapability.meta.version || "3.1.0",
+          version: rawHostCapability.meta && rawHostCapability.meta.version || "3.2.0",
           trustLevel: rawHostCapability.meta && rawHostCapability.meta.trustLevel || "trusted",
           hasSettingsBridge: true,
           secrets: secretsFacade,
@@ -8267,6 +8476,7 @@ ${normalizedInput}`, { maxTokens: 1024 });
       } = require_default_providers();
       var {
         validateCloudApiConfig,
+        fetchCloudApiModels,
         probeCloudApiConnection
       } = require_cloud_api();
       var { extractV3Context } = require_host_capability_adapter();
@@ -8509,6 +8719,21 @@ ${normalizedInput}`, { maxTokens: 1024 });
   flex: 1 1 auto;
   min-width: 0;
 }
+.ko-qs-model-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ko-qs-model-row .ko-qs-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ko-qs-model-custom {
+  margin-top: 6px;
+}
+.ko-qs-model-custom[hidden] {
+  display: none;
+}
 .ko-qs-secret-meta {
   display: flex;
   align-items: center;
@@ -8713,6 +8938,8 @@ ${normalizedInput}`, { maxTokens: 1024 });
   font-size: 12px;
   font-weight: 600;
   font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
 }
 .ko-qs-btn:hover:not(:disabled) {
@@ -9262,6 +9489,9 @@ ${normalizedInput}`, { maxTokens: 1024 });
             btn.addEventListener("click", () => {
               selectedProvider = opt.id;
               syncSelectedEngineUi();
+              if (opt.id === "cloud-api") {
+                void refreshCloudKeyStatus({ autoLoadModels: true });
+              }
             });
             engineButtons.set(opt.id, btn);
             engineGrid.appendChild(btn);
@@ -9425,15 +9655,95 @@ ${normalizedInput}`, { maxTokens: 1024 });
           const cloudModelField = targetDoc.createElement("div");
           cloudModelField.className = "ko-qs-field";
           const cloudModelLbl = targetDoc.createElement("label");
-          cloudModelLbl.textContent = "모델명";
+          cloudModelLbl.textContent = "모델";
+          const cloudModelRow = targetDoc.createElement("div");
+          cloudModelRow.className = "ko-qs-model-row";
+          const cloudModelSelect = targetDoc.createElement("select");
+          cloudModelSelect.className = "ko-qs-select";
+          cloudModelSelect.setAttribute("aria-label", "외부 API 모델 선택");
+          cloudModelSelect.setAttribute("data-testid", "ko-qs-cloud-model-select");
+          const cloudModelRefreshBtn = targetDoc.createElement("button");
+          cloudModelRefreshBtn.type = "button";
+          cloudModelRefreshBtn.className = "ko-qs-btn";
+          cloudModelRefreshBtn.setAttribute("data-testid", "ko-qs-cloud-models-refresh");
+          cloudModelRefreshBtn.setAttribute("title", "선택한 API 제공자에서 사용 가능한 모델 목록을 불러옵니다");
+          cloudModelRefreshBtn.textContent = "불러오기";
+          cloudModelRefreshBtn.disabled = !secretsFacade.available;
+          cloudModelRow.appendChild(cloudModelSelect);
+          cloudModelRow.appendChild(cloudModelRefreshBtn);
           const cloudModelInput = targetDoc.createElement("input");
           cloudModelInput.type = "text";
-          cloudModelInput.className = "ko-qs-input";
+          cloudModelInput.className = "ko-qs-input ko-qs-model-custom";
           cloudModelInput.setAttribute("data-testid", "ko-qs-cloud-model");
           cloudModelInput.value = String(cloudCfg.model || initPreset.defaultModel);
           cloudModelInput.placeholder = initPreset.defaultModel;
+          cloudModelInput.hidden = true;
           cloudModelField.appendChild(cloudModelLbl);
+          cloudModelField.appendChild(cloudModelRow);
           cloudModelField.appendChild(cloudModelInput);
+          const CLOUD_CUSTOM_MODEL_VALUE = "__custom__";
+          const fetchedModelsCache = /* @__PURE__ */ new Map();
+          let modelFetchSeq = 0;
+          function getPresetFallbackModels(presetId) {
+            const p = getCloudPreset(presetId);
+            const list = Array.isArray(p.recommendedModels) && p.recommendedModels.length > 0 ? p.recommendedModels : [p.defaultModel];
+            return list.map((id) => ({ id, label: id }));
+          }
+          __name(getPresetFallbackModels, "getPresetFallbackModels");
+          function populateCloudModelSelect(models, desiredModel, { preserveCustomMode = false } = {}) {
+            const list = Array.isArray(models) && models.length > 0 ? models : getPresetFallbackModels(presetSelect.value);
+            const seen = /* @__PURE__ */ new Set();
+            const normalized = [];
+            for (const item of list) {
+              const id = typeof item === "string" ? item : item && item.id ? String(item.id) : "";
+              if (!id || seen.has(id)) continue;
+              seen.add(id);
+              normalized.push({ id, label: typeof item === "object" && item && item.label ? String(item.label) : id });
+            }
+            const targetModel = String(desiredModel || "").trim();
+            if (targetModel && !preserveCustomMode && !seen.has(targetModel)) {
+              normalized.unshift({ id: targetModel, label: targetModel });
+              seen.add(targetModel);
+            }
+            while (cloudModelSelect.firstChild) {
+              cloudModelSelect.removeChild(cloudModelSelect.firstChild);
+            }
+            for (const item of normalized) {
+              const opt = targetDoc.createElement("option");
+              opt.value = item.id;
+              opt.textContent = item.label;
+              cloudModelSelect.appendChild(opt);
+            }
+            const customOpt = targetDoc.createElement("option");
+            customOpt.value = CLOUD_CUSTOM_MODEL_VALUE;
+            customOpt.textContent = "직접 입력...";
+            cloudModelSelect.appendChild(customOpt);
+            if (preserveCustomMode) {
+              cloudModelSelect.value = CLOUD_CUSTOM_MODEL_VALUE;
+              cloudModelInput.hidden = false;
+            } else {
+              const activeId = targetModel && seen.has(targetModel) ? targetModel : normalized[0].id;
+              cloudModelSelect.value = activeId;
+              cloudModelInput.value = activeId;
+              cloudModelInput.hidden = true;
+            }
+          }
+          __name(populateCloudModelSelect, "populateCloudModelSelect");
+          populateCloudModelSelect(getPresetFallbackModels(initPreset.id), cloudCfg.model || initPreset.defaultModel);
+          cloudModelSelect.addEventListener("change", () => {
+            if (cloudModelSelect.value === CLOUD_CUSTOM_MODEL_VALUE) {
+              cloudModelInput.hidden = false;
+              if (typeof cloudModelInput.focus === "function") {
+                try {
+                  cloudModelInput.focus();
+                } catch (_e) {
+                }
+              }
+            } else {
+              cloudModelInput.value = cloudModelSelect.value;
+              cloudModelInput.hidden = true;
+            }
+          });
           cloudRow1.appendChild(presetField);
           cloudRow1.appendChild(cloudModelField);
           cloudBox.appendChild(cloudRow1);
@@ -9523,8 +9833,100 @@ ${normalizedInput}`, { maxTokens: 1024 });
             return "미지원";
           }
           __name(formatPersistenceLabel, "formatPersistenceLabel");
+          async function loadVendorCloudModels({ silent = false } = {}) {
+            const seq = ++modelFetchSeq;
+            if (!secretsFacade.available) {
+              if (!silent) {
+                cloudTestResultEl.textContent = "Extenra v3.3.0 이상 호스트의 시크릿 저장소가 필요합니다.";
+                cloudTestResultEl.setAttribute("data-kind", "err");
+              }
+              return false;
+            }
+            if (!effectiveFetch) {
+              if (!silent) {
+                cloudTestResultEl.textContent = "fetch API를 사용할 수 없습니다.";
+                cloudTestResultEl.setAttribute("data-kind", "err");
+              }
+              return false;
+            }
+            const activePresetId = presetSelect.value;
+            const activeBaseUrl = String(cloudUrlInput.value || "").trim() || getCloudPreset(activePresetId).baseUrl;
+            const cacheKey = `${activePresetId}|${activeBaseUrl}`;
+            if (!silent) {
+              const secretSave = await persistPendingCloudSecretIfEntered();
+              if (seq !== modelFetchSeq) return false;
+              if (!secretSave.ok) {
+                cloudTestResultEl.textContent = formatErrorMessage(secretSave.reason);
+                cloudTestResultEl.setAttribute("data-kind", "err");
+                return false;
+              }
+            }
+            const hasKey = await secretsFacade.has(getCloudSecretKeyForPreset(activePresetId));
+            if (seq !== modelFetchSeq) return false;
+            if (!hasKey) {
+              if (!silent) {
+                cloudTestResultEl.textContent = "API 키를 입력한 뒤 [불러오기]를 눌러 주세요.";
+                cloudTestResultEl.setAttribute("data-kind", "err");
+              }
+              return false;
+            }
+            cloudModelRefreshBtn.disabled = true;
+            if (!silent) {
+              cloudModelRefreshBtn.textContent = "불러오는 중...";
+              cloudTestResultEl.textContent = "API 제공자에서 모델 목록을 불러오는 중...";
+              cloudTestResultEl.setAttribute("data-kind", "info");
+            }
+            const ac = typeof AbortController === "function" ? new AbortController() : null;
+            const timer = ac ? (targetWin.setTimeout || setTimeout)(() => {
+              try {
+                ac.abort();
+              } catch (_e) {
+              }
+            }, 1e4) : null;
+            try {
+              const res = await fetchCloudApiModels({
+                config: {
+                  preset: activePresetId,
+                  baseUrl: activeBaseUrl,
+                  model: String(cloudModelInput.value || "").trim() || getCloudPreset(activePresetId).defaultModel,
+                  timeoutMs: Number(cloudTimeoutInput.value) || 2e4
+                },
+                fetchFn: effectiveFetch,
+                signal: ac ? ac.signal : void 0
+              });
+              if (seq !== modelFetchSeq || presetSelect.value !== activePresetId) return false;
+              if (res.ok && Array.isArray(res.models) && res.models.length > 0) {
+                fetchedModelsCache.set(cacheKey, res.models);
+                const preserveCustom = cloudModelSelect.value === CLOUD_CUSTOM_MODEL_VALUE;
+                populateCloudModelSelect(res.models, cloudModelInput.value, { preserveCustomMode: preserveCustom });
+                if (!silent) {
+                  cloudTestResultEl.textContent = `모델 목록 ${res.models.length}개를 불러왔습니다.`;
+                  cloudTestResultEl.setAttribute("data-kind", "ok");
+                }
+                return true;
+              }
+              if (!silent) {
+                cloudTestResultEl.textContent = `모델 목록 불러오기 실패 (${res.reason || `HTTP ${res.status}`})`;
+                cloudTestResultEl.setAttribute("data-kind", "err");
+              }
+              return false;
+            } finally {
+              if (timer !== null) {
+                try {
+                  (targetWin.clearTimeout || clearTimeout)(timer);
+                } catch (_e) {
+                }
+              }
+              cloudModelRefreshBtn.textContent = "불러오기";
+              cloudModelRefreshBtn.disabled = !secretsFacade.available;
+            }
+          }
+          __name(loadVendorCloudModels, "loadVendorCloudModels");
+          cloudModelRefreshBtn.addEventListener("click", () => {
+            void loadVendorCloudModels({ silent: false });
+          });
           let keyStatusSeq = 0;
-          async function refreshCloudKeyStatus() {
+          async function refreshCloudKeyStatus({ autoLoadModels = true } = {}) {
             const seq = ++keyStatusSeq;
             if (!secretsFacade.available) {
               apiKeyStatusPill.textContent = "Extenra v3.3.0+ 필요";
@@ -9532,7 +9934,8 @@ ${normalizedInput}`, { maxTokens: 1024 });
               apiKeyDelBtn.disabled = true;
               return false;
             }
-            const secretKey = getCloudSecretKeyForPreset(presetSelect.value);
+            const activePresetId = presetSelect.value;
+            const secretKey = getCloudSecretKeyForPreset(activePresetId);
             try {
               const exists = await secretsFacade.has(secretKey);
               if (seq !== keyStatusSeq) return exists;
@@ -9541,6 +9944,11 @@ ${normalizedInput}`, { maxTokens: 1024 });
                 apiKeyStatusPill.textContent = `저장됨 · ${formatPersistenceLabel(mode)}`;
                 apiKeyStatusPill.setAttribute("data-state", mode === "session-memory" ? "warn" : "saved");
                 apiKeyDelBtn.disabled = false;
+                const activeBaseUrl = String(cloudUrlInput.value || "").trim() || getCloudPreset(activePresetId).baseUrl;
+                const cacheKey = `${activePresetId}|${activeBaseUrl}`;
+                if (autoLoadModels && selectedProvider === "cloud-api" && !fetchedModelsCache.has(cacheKey)) {
+                  void loadVendorCloudModels({ silent: true });
+                }
               } else {
                 apiKeyStatusPill.textContent = `미등록 · ${formatPersistenceLabel(mode)}`;
                 apiKeyStatusPill.setAttribute("data-state", "none");
@@ -9558,6 +9966,7 @@ ${normalizedInput}`, { maxTokens: 1024 });
           }
           __name(refreshCloudKeyStatus, "refreshCloudKeyStatus");
           presetSelect.addEventListener("change", () => {
+            modelFetchSeq += 1;
             const prevPreset = getCloudPreset(lastPresetId);
             const nextPreset = getCloudPreset(presetSelect.value);
             lastPresetId = nextPreset.id;
@@ -9566,11 +9975,14 @@ ${normalizedInput}`, { maxTokens: 1024 });
             if (!curUrl || curUrl === prevPreset.baseUrl) {
               cloudUrlInput.value = nextPreset.baseUrl;
             }
-            if (!curModel || curModel === prevPreset.defaultModel) {
-              cloudModelInput.value = nextPreset.defaultModel;
-            }
+            const nextDesiredModel = !curModel || curModel === prevPreset.defaultModel || Array.isArray(prevPreset.recommendedModels) && prevPreset.recommendedModels.includes(curModel) ? nextPreset.defaultModel : curModel;
             cloudUrlInput.placeholder = nextPreset.baseUrl;
             cloudModelInput.placeholder = nextPreset.defaultModel;
+            const cacheKey = `${nextPreset.id}|${String(cloudUrlInput.value || "").trim()}`;
+            populateCloudModelSelect(
+              fetchedModelsCache.get(cacheKey) || getPresetFallbackModels(nextPreset.id),
+              nextDesiredModel
+            );
             apiKeyInput.placeholder = `${nextPreset.keyPlaceholder} (새 키 입력 시에만 갱신)`;
             apiKeyInput.value = "";
             void refreshCloudKeyStatus();
@@ -9739,7 +10151,7 @@ ${normalizedInput}`, { maxTokens: 1024 });
               return { saved: false, ok: false, reason: res && res.reason || "ERR_SECRETS_SAVE_FAILED" };
             }
             apiKeyInput.value = "";
-            await refreshCloudKeyStatus();
+            await refreshCloudKeyStatus({ autoLoadModels: false });
             return { saved: true, ok: true };
           }
           __name(persistPendingCloudSecretIfEntered, "persistPendingCloudSecretIfEntered");
@@ -10573,7 +10985,7 @@ ${normalizedInput}`, { maxTokens: 1024 });
       } = require_host_adapter();
       var { createDefaultProviderBundle } = require_default_providers();
       var { createUserscriptFetch } = require_gm_fetch();
-      var PLUGIN_VERSION = "3.1.0";
+      var PLUGIN_VERSION = "3.2.0";
       function createKoTranslator(options = {}) {
         const adaptedHostCap = createHostCapabilityAdapter(options.hostCapability || null);
         const baseFetch = typeof options.fetchFn === "function" ? options.fetchFn : createUserscriptFetch();

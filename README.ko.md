@@ -1,8 +1,12 @@
-# Antigravity 2.0 한국어 번역기 (`v3.1.0` · Desktop & Remote Web)
+# Antigravity 2.0 한국어 번역기 (`v3.2.0` · Desktop & Remote Web)
 
-[English README](./README.md) | [릴리스 노트 (`v3.1.0` 영문/국문)](./RELEASE_NOTES_v3.1.0.md)
+[English README](./README.md) | [릴리스 노트 (`v3.2.0` 영문/국문)](./RELEASE_NOTES_v3.2.0.md)
 
 공용 네이티브 애드온 호스트([Extenra](https://github.com/jaeseongs95/extenra) `>= v3.3.0`, `AddonManifest.v3` API-First) 위에서 **Antigravity 2.0 데스크톱 네이티브 앱 및 원격 웹(`antigravity.google.com/r/...`)** 양쪽을 지원하는 렌더러 전용 한국어 번역 플러그인입니다.
+
+### v3.2.0 주요 업데이트
+- **벤더 API 모델 목록 `<select>` 선택 박스 & 실시간 불러오기**: OpenAI, Anthropic, Google Gemini, OpenAI 호환 `/models` API에서 사용 가능한 모델 목록을 직접 불러와 드롭다운으로 선택할 수 있으며, `직접 입력...` 옵션도 함께 제공합니다.
+- **OpenAI 최신·추론 모델(`gpt-6-luna`, `gpt-5*`, `o1`/`o3`/`o4`) 호환 및 오류 상세 표시**: `max_completion_tokens` 적용, 추론 모델 `temperature: 0` 생략, HTTP 4xx/5xx 서버 오류 사유 마스킹 표시, `키 삭제` 버튼 줄바꿈 수정.
 
 ### v3.1.0 주요 업데이트
 - **외부 API 번역 어댑터 (`cloud-api`) 추가**: 빠른 설정 모달의 3번째 엔진 카드(**외부 API**)에서 **OpenAI**, **Anthropic (Claude)**, **Google Gemini**, **OpenAI 호환** HTTPS API 키를 연결해 바로 번역할 수 있습니다.
