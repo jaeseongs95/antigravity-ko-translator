@@ -431,3 +431,107 @@ test('Host v2.3.0 Remote Web integration: registers host settings tab & actions 
     win.happyDOM.close();
   }
 });
+
+test('v3.0.0 UX redesign: merges checkbox #1 & #4 into 1 clear slide ON/OFF switch, converts all toggles to role=switch sliders, and derives enabled accurately', async () => {
+  const win = new Window({ url: 'http://127.0.0.1:4242/' });
+  const doc = win.document;
+  globalThis.__testDoc = doc;
+
+  const sb = createMockStatusbarApi();
+  win.statusbarAddons = sb.api;
+
+  // Start with the user's real live settings: UI localization ON, Thinking translation OFF, Thinking block hidden
+  const mockHost = createMockHostCapability({
+    status: 'ok',
+    revision: 1,
+    data: {
+      schemaVersion: 1,
+      enabled: true,
+      translateThinking: false,
+      showThinking: false,
+      translateStaticUi: true,
+      provider: 'google-translate',
+      llmConfig: { baseUrl: 'http://127.0.0.1:11434', model: 'gemma3:4b', apiFormat: 'ollama', timeoutMs: 15000 },
+    },
+  });
+
+  const translator = createKoTranslator({
+    win,
+    doc,
+    hostCapability: mockHost.hostCapability,
+    fetchFn: async () => ({ ok: true, json: async () => [[['번역']]] }),
+  });
+  const ui = createQuickSettingsUi({
+    win,
+    doc,
+    translator,
+    hostCapability: mockHost.hostCapability,
+  });
+
+  try {
+    translator.start();
+    ui.start();
+    ui.openModal();
+
+    const root = ui.getOpenModalRoot();
+    assert.ok(root);
+
+    // 1. Old duplicate #1 checkbox ('ko-qs-opt-enabled') MUST NOT exist; legacy .ko-qs-checkbox MUST be 0
+    assert.equal(root.querySelector('[data-testid="ko-qs-opt-enabled"]'), null);
+    assert.equal(root.querySelectorAll('.ko-qs-checkbox').length, 0, 'Zero legacy checkboxes allowed');
+
+    // 2. Exactly 3 main option switches + 1 LLM remote switch, ALL using role="switch" + slide track/thumb
+    const mainToggles = root.querySelector('[data-testid="ko-qs-toggles"]');
+    const mainSwitches = mainToggles.querySelectorAll('input[role="switch"]');
+    assert.equal(mainSwitches.length, 3, 'Main options must have exactly 3 merged slide ON/OFF switches');
+    assert.equal(root.querySelectorAll('input[role="switch"]').length, 4, 'All 4 toggles (3 main + 1 LLM remote) must be slide switches');
+    assert.equal(root.querySelectorAll('.ko-qs-switch-track .ko-qs-switch-thumb').length, 4);
+
+    const staticSwitch = root.querySelector('[data-testid="ko-qs-opt-static-ui"]');
+    const thinkingSwitch = root.querySelector('[data-testid="ko-qs-opt-thinking"]');
+    const showThinkingSwitch = root.querySelector('[data-testid="ko-qs-opt-show-thinking"]');
+
+    assert.equal(staticSwitch.getAttribute('data-merged-enabled'), 'true');
+    assert.equal(staticSwitch.checked, true);
+    assert.equal(staticSwitch.getAttribute('aria-checked'), 'true');
+    assert.equal(thinkingSwitch.checked, false);
+    assert.equal(thinkingSwitch.getAttribute('aria-checked'), 'false');
+    assert.equal(showThinkingSwitch.checked, false);
+    assert.equal(showThinkingSwitch.getAttribute('aria-checked'), 'false');
+
+    // 3. Turn OFF merged UI localization switch while Thinking block stays hidden ->
+    //    saves translateStaticUi:false, translateThinking:false, showThinking:false, enabled:true (so hiding still works!)
+    //    AND statusbar truthfully shows 번역:꺼짐!
+    staticSwitch.checked = false;
+    staticSwitch.dispatchEvent(new win.Event('change'));
+    assert.equal(staticSwitch.getAttribute('aria-checked'), 'false');
+    root.querySelector('[data-testid="ko-qs-save"]').click();
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.equal(mockHost.savedPayloads.length, 1);
+    assert.equal(mockHost.savedPayloads[0].translateStaticUi, false);
+    assert.equal(mockHost.savedPayloads[0].translateThinking, false);
+    assert.equal(mockHost.savedPayloads[0].showThinking, false);
+    assert.equal(mockHost.savedPayloads[0].enabled, true, 'Keep runtime active to honor showThinking:false');
+    assert.equal(sb.registered.get(STATUSBAR_ADDON_ID).label, '번역:꺼짐', 'Statusbar must show 번역:꺼짐 when both translation switches are OFF');
+
+    // 4. Reopen modal -> badge shows 번역 꺼짐 -> turn showThinking ON -> now ALL features are idle -> enabled becomes false!
+    ui.openModal();
+    const root2 = ui.getOpenModalRoot();
+    assert.equal(root2.querySelector('[data-testid="ko-qs-status-badge"]').textContent, '번역 꺼짐');
+    const showSwitch2 = root2.querySelector('[data-testid="ko-qs-opt-show-thinking"]');
+    showSwitch2.checked = true;
+    showSwitch2.dispatchEvent(new win.Event('change'));
+    root2.querySelector('[data-testid="ko-qs-save"]').click();
+    await new Promise((r) => setTimeout(r, 20));
+
+    assert.equal(mockHost.savedPayloads.length, 2);
+    assert.equal(mockHost.savedPayloads[1].enabled, false, 'Runtime must idle (enabled:false) when all localization is OFF and Thinking is shown');
+    assert.equal(sb.registered.get(STATUSBAR_ADDON_ID).label, '번역:꺼짐');
+  } finally {
+    ui.dispose();
+    translator.dispose();
+    delete globalThis.__testDoc;
+    win.happyDOM.close();
+  }
+});

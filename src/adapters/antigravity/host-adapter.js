@@ -20,6 +20,12 @@ const {
   HOST_ACTION_IDS,
   createQuickSettingsUi,
 } = require('./quick-settings-ui');
+const {
+  isAddonContextV3,
+  extractV3Context,
+  createHostAwareFetch,
+  createHostCapabilityAdapter,
+} = require('./host-capability-adapter');
 
 const STYLE_ID = 'agy-ko-thought-localizer-style';
 const REMOTE_WEB_HOST_PROFILE_ID = 'antigravity-remote-web';
@@ -68,7 +74,12 @@ function buildMinimalOverlayCss() {
 }
 
 function resolveUninitializedSettings(hostCapability) {
-  if (!hostCapability || hostCapability.hostProfileId !== REMOTE_WEB_HOST_PROFILE_ID) {
+  if (!hostCapability) return null;
+  const isRemoteSurface =
+    hostCapability.surface === 'remote-web' ||
+    (hostCapability.v3 && hostCapability.v3.env && hostCapability.v3.env.surface === 'remote-web') ||
+    hostCapability.hostProfileId === REMOTE_WEB_HOST_PROFILE_ID;
+  if (!isRemoteSurface) {
     return null;
   }
   return {
@@ -109,4 +120,8 @@ module.exports = {
   resolveUninitializedSettings,
   createAntigravityHostAdapter,
   createQuickSettingsUi,
+  isAddonContextV3,
+  extractV3Context,
+  createHostAwareFetch,
+  createHostCapabilityAdapter,
 };

@@ -134,8 +134,11 @@ function validateAddonManifestContract(
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     return { ok: false, reason: 'INVALID_MANIFEST_OBJECT' };
   }
-  if (manifest.schemaVersion !== 2) {
+  if (manifest.schemaVersion !== 2 && manifest.schemaVersion !== 3) {
     return { ok: false, reason: 'UNSUPPORTED_SCHEMA_VERSION' };
+  }
+  if (manifest.schemaVersion === 3 && manifest.apiVersion !== undefined && manifest.apiVersion !== 3) {
+    return { ok: false, reason: 'ERR_INVALID_API_VERSION' };
   }
   if (typeof manifest.pluginId !== 'string' || !PLUGIN_ID_RE.test(manifest.pluginId) || FORBIDDEN_IDS.has(manifest.pluginId)) {
     return { ok: false, reason: 'ERR_INVALID_PLUGIN_ID' };
@@ -267,6 +270,26 @@ function validateAddonManifestContract(
       }
       if (manifest.trustLevel !== 'trusted') {
         return { ok: false, reason: 'ERR_RESTRICTED_DOCUMENT_TRANSFORM_FORBIDDEN' };
+      }
+    }
+  }
+
+  if (manifest.schemaVersion === 3 && manifest.permissions !== undefined) {
+    const perms = manifest.permissions;
+    if (!perms || typeof perms !== 'object' || Array.isArray(perms)) {
+      return { ok: false, reason: 'ERR_INVALID_PERMISSIONS' };
+    }
+    if (perms.dom && perms.dom.documentTransform === true) {
+      if (manifest.isolation && manifest.isolation.respectsNoTranslate === false) {
+        return { ok: false, reason: 'ERR_DOCUMENT_TRANSFORM_MUST_RESPECT_NO_TRANSLATE' };
+      }
+      if (manifest.trustLevel !== 'trusted') {
+        return { ok: false, reason: 'ERR_RESTRICTED_DOCUMENT_TRANSFORM_FORBIDDEN' };
+      }
+    }
+    if (perms.net && typeof perms.net === 'object') {
+      if (Array.isArray(perms.net.localLoopback) && perms.net.localLoopback.length > 0 && manifest.trustLevel !== 'trusted') {
+        return { ok: false, reason: 'ERR_RESTRICTED_LOCAL_LOOPBACK_FORBIDDEN' };
       }
     }
   }

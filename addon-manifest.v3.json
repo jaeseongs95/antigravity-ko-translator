@@ -1,0 +1,87 @@
+{
+  "$schema": "https://github.com/jaeseongs95/antigravity-addons/schemas/addon-manifest.v3.schema.json",
+  "schemaVersion": 3,
+  "apiVersion": 3,
+  "pluginId": "ko-thought-translator",
+  "displayName": "Antigravity Korean Thought & UI Translator",
+  "description": "Read-only Korean localization overlay for Antigravity Desktop & Remote Web with slide-switch quick settings and dual-key net.fetch.",
+  "version": "3.0.0",
+  "trustLevel": "trusted",
+  "compatibility": {
+    "hostProfile": "antigravity-desktop",
+    "hostProfiles": [
+      "antigravity-desktop",
+      "antigravity-remote-web"
+    ],
+    "surfaces": [
+      "desktop",
+      "remote-web"
+    ],
+    "minHostVersion": "3.0.0"
+  },
+  "capabilities": [
+    "renderer"
+  ],
+  "entry": {
+    "rendererScript": "dist/renderer.js"
+  },
+  "permissions": {
+    "ui": {
+      "toasts": true,
+      "dialogs": false,
+      "overlays": true,
+      "commands": true,
+      "statusItems": true,
+      "settingsPages": true,
+      "canvas": true
+    },
+    "storage": {
+      "maxBytes": 65536,
+      "namespace": "ko-thought-translator"
+    },
+    "services": {
+      "consume": [
+        "host.statusbar"
+      ]
+    },
+    "net": {
+      "httpsHosts": [
+        "translate.googleapis.com"
+      ],
+      "localLoopback": [
+        11434
+      ]
+    },
+    "dom": {
+      "documentTransform": true
+    }
+  },
+  "settingsBridge": {
+    "fileName": "ko_translator_settings.json",
+    "maxBytes": 65536
+  },
+  "uiSlots": [
+    {
+      "slot": "document-transform",
+      "slotId": "ko-translator.native-app",
+      "exclusive": false,
+      "scope": "native-host-only",
+      "shadow": false
+    },
+    {
+      "slot": "modal",
+      "slotId": "ko-translator.quick-settings-modal",
+      "exclusive": false,
+      "scope": "addon-owned-slot",
+      "shadow": true
+    }
+  ],
+  "isolation": {
+    "noTranslate": false,
+    "i18nSelfManaged": true,
+    "respectsNoTranslate": true,
+    "storageNamespace": "ko-thought-translator",
+    "ipcChannelPrefix": "ko-translator:"
+  },
+  "loadOrder": 200
+}

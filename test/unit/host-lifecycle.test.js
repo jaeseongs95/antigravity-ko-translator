@@ -32,7 +32,7 @@ function makeTempEnv() {
     pluginDir,
     paths: {
       PLUGIN_ID: 'ko-thought-translator',
-      SOURCE_MANIFEST_PATH: path.join(REPO_ROOT, 'addon-manifest.v2.json'),
+      SOURCE_MANIFEST_PATH: path.join(REPO_ROOT, 'addon-manifest.v3.json'),
       RENDERER_BUNDLE_PATH: path.join(pluginDir, 'dist', 'renderer.js'),
       ADDONS_DIR: path.join(agyDir, 'addons.d'),
       MANIFEST_PATH: path.join(agyDir, 'addons.d', 'ko-thought-translator.json'),
@@ -144,29 +144,29 @@ test('isPluginEnabled reads config.json read-only without mutating it', () => {
   }
 });
 
-test('host CLI --status is 100% read-only and --install/--uninstall/--rollback manage AddonManifest.v2 cleanly without touching app.asar', async () => {
+test('host CLI --status is 100% read-only and --install/--uninstall/--rollback manage AddonManifest.v3 cleanly without touching app.asar', async () => {
   const { dir, pluginDir, paths } = makeTempEnv();
   try {
     const before = buildStatusReport(paths);
-    assert.equal(before.version, '2.4.0');
-    assert.equal(before.manifestSchema, 'AddonManifest.v2');
+    assert.equal(before.version, '3.0.0');
+    assert.equal(before.manifestSchema, 'AddonManifest.v3');
     assert.equal(before.manifestRegistered, false);
     assert.equal(before.addonHostInstalled, false);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), false);
 
-    // Simulate installed shared host loader with older vs compatible hostVersion (I7 + v2.3.0)
-    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\nconst HOST_CFG = {"hostVersion":"2.2.0"};\n', 'utf8');
+    // Simulate installed shared host loader with older vs compatible hostVersion (I7 + v3.0.0)
+    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\nconst HOST_CFG = {"hostVersion":"2.9.0"};\n', 'utf8');
     const oldStatus = buildStatusReport(paths);
     assert.equal(oldStatus.addonHostInstalled, true);
-    assert.equal(oldStatus.addonHostVersion, '2.2.0');
+    assert.equal(oldStatus.addonHostVersion, '2.9.0');
     assert.equal(oldStatus.addonHostCompatible, false);
 
-    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\nconst HOST_CFG = {"hostVersion":"2.3.0"};\n', 'utf8');
+    fs.writeFileSync(paths.LOADER_SCRIPT_PATH, '// ADDON_HOST_LOADER_V2\nconst HOST_CFG = {"hostVersion":"3.0.0"};\n', 'utf8');
 
     const inst = await runCli(['--install'], paths);
     assert.equal(inst.status, 'INSTALLED');
     assert.equal(inst.addonHostInstalled, true);
-    assert.equal(inst.addonHostVersion, '2.3.0');
+    assert.equal(inst.addonHostVersion, '3.0.0');
     assert.equal(inst.addonHostCompatible, true);
     assert.equal(inst.settingsInitialized, true);
     assert.equal(fs.existsSync(paths.MANIFEST_PATH), true);
